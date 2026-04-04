@@ -9,49 +9,68 @@
 ```
 compro-env/                         ← リポジトリルート
   config.toml                       ← プロジェクトローカル設定 (optional, global を上書き)
-  templates/                        ← ce init で使うテンプレート
+  templates/
     rust/
       src/main.rs
-      Cargo.toml
+      Cargo.toml                    ← {problem_code} プレースホルダあり
     cpp/
       main.cpp
   solutions/
-    {contest_id}/                   例: abc334, aoj0000, cf1234a
+    {contest_id}/
+      .ce.toml                      ← OJ 情報を保存 (ce init 時に生成)
       testcases/
-        {problem_code}/             例: a, b, ex, practice_2 (1文字固定でない)
-          1.in
-          1.out
-      {lang}/                       例: rust, cpp
-        Cargo.toml                  ← Rust の場合: contest レベルの workspace
+        {problem_code}/             1文字固定でない (ex, practice_2 等あり)
+          1.in  1.out  2.in  2.out
+      {lang}/                       rust / cpp / ...
+        Cargo.toml                  ← Rust: contest レベル workspace
         Cargo.lock
         {problem_code}/
           {solution_name}/          デフォルト: main
-            src/main.rs             ← Rust
-            Cargo.toml              ← package name = "{problem_code}"
+            Cargo.toml              ← name = "{problem_code}-{solution_name}"  ★注意
+            src/main.rs
 ```
 
-- `testcases/` は言語共通。`ce test a --lang cpp` も同じ `testcases/a/` を参照
-- テンプレートは `templates/{lang}/` に置き、`ce init` 時にコピー + 文字列置換 (Cargo.toml の `name` 等)。Tera は将来拡張
+### .ce.toml の内容
+
+```toml
+online_judge = "atcoder"
+contest_id = "abc334"
+```
+
+`ce test` / `ce sub` 時に OJ を特定するために必須。プレフィックス判定だけでは `xyz999` 等に対応不可。
+
+### Cargo package name 規則
+
+同一 workspace 内で package name が衝突するため、常に `{problem_code}-{solution_name}` を使う。
+
+| ディレクトリ | package name |
+|-------------|-------------|
+| `a/main/`   | `a-main`    |
+| `a/sol2/`   | `a-sol2`    |
+| `ex/main/`  | `ex-main`   |
+
+`ce test a` → 内部で `cargo test -p a-main`
 
 ---
 
 ## Cargo 構成 (Rust)
 
-コンテストレベルで Cargo workspace を作る。
-
 ```
 solutions/abc334/rust/
   Cargo.toml    ← [workspace] members = ["a/main", "a/sol2", "b/main", ...]
   Cargo.lock
-  a/main/
-    Cargo.toml  ← [package] name = "a"
-    src/main.rs
+  a/
+    main/
+      Cargo.toml  ← [package] name = "a-main"
+      src/main.rs
+    sol2/
+      Cargo.toml  ← [package] name = "a-sol2"
+      src/main.rs
+  b/
+    main/
+      Cargo.toml  ← [package] name = "b-main"
+      src/main.rs
 ```
-
-- `ce test a` → `cargo test -p a`
-- `ce run a` → `cargo run -p a`
-- `ce sub a` → `a/main/src/main.rs` を提出
-- `SolutionRepository::create()` が `members` を自動更新 (後述)
 
 ---
 
@@ -62,23 +81,30 @@ solutions/abc334/rust/
 ```toml
 [default]
 online_judge = "atcoder"
+language = "rust"
 
 [language.rust]
 solution_file = "src/main.rs"
-test = "cargo test -p {problem}"
-run = "cargo run -p {problem}"
+test = "cargo test -p {problem}-{solution}"
+run = "cargo run -p {problem}-{solution}"
 submit_file = "src/main.rs"
 submit_preprocess = ""
+
+[language.rust.atcoder]
+lang_id = "5054"
 
 [language.cpp]
 solution_file = "main.cpp"
 test = "g++ {file} -o /tmp/ce_bin && echo '{input}' | /tmp/ce_bin"
 submit_file = "main.cpp"
+
+[language.cpp.atcoder]
+lang_id = "5001"
 ```
 
-### プロジェクトローカル: `compro-env/config.toml`
+### プロジェクトローカル: `compro-env/config.toml` (任意)
 
-グローバルの同キーを上書き。存在しなくてもよい。
+グローバルの同キーを上書き。
 
 ### セッション: `~/.config/ce/session.toml` (グローバル固定)
 
@@ -92,39 +118,26 @@ revel_session = "xxxxxxxx"
 ## コマンド一覧 (MVP)
 
 ### `ce login [oj]`
+詳細: `docs/commands/login.md`
 
-- `oj` 省略時はデフォルト OJ
-- ブラウザ DevTools での `REVEL_SESSION` 取得手順を表示
-- stdin でクッキー値を受け取り `~/.config/ce/session.toml` に保存
+### `ce whoami [oj]`
+- セッションを読み `OnlineJudge::whoami(&session)` を呼ぶ
+- ユーザー名を表示 or "not logged in"
 
 ### `ce init <contest_id_or_url>`
-
-- OJ 判定 (D + C 方式、後述)
-- 問題一覧・サンプルを取得
-- `testcases/{problem_code}/` にサンプルを保存
-- デフォルト言語で全問題に `{lang}/{problem_code}/main/` をテンプレートから生成
-- Rust なら contest レベルの workspace `Cargo.toml` を生成
-- コンテスト未開始なら開始を待つ
+詳細: `docs/commands/init.md`
 
 ### `ce new <contest_id> <problem_code> [solution_name] [--lang <lang>]`
-
-- 解法フォルダを追加 (`SolutionRepository::create()`)
-- `solution_name` 省略時は `main`、`--lang` 省略時はデフォルト言語
-- Rust なら workspace `Cargo.toml` の `members` を更新
+詳細: `docs/commands/new.md`
 
 ### `ce test <contest_id> <problem_code> [solution_name] [--lang <lang>]`
-
-- コンフィグのテストコマンドを実行
-- `testcases/{problem_code}/` の全サンプルで実行・比較
+詳細: `docs/commands/test.md`
 
 ### `ce sub <contest_id> <problem_code> [solution_name] [--lang <lang>]`
-
-- 提出前処理コマンドを実行
-- OJ へ提出
+詳細: `docs/commands/submit.md`
 
 ### (将来) リアルタイムコンテストモード
-
-- カレントディレクトリが `solutions/{contest_id}/` 以下なら `contest_id` を自動検出 (A 方式)
+- cwd が `solutions/{contest_id}/` 以下なら `contest_id` を自動検出
 - `ce sub a` などの短コマンドが動く
 
 ---
@@ -132,11 +145,13 @@ revel_session = "xxxxxxxx"
 ## OJ 判定ロジック
 
 ```
-入力: "abc334"       → プレフィックス "abc"/"arc"/"ahc" → AtCoder
-入力: "aoj0000"      → プレフィックス "aoj" → AOJ
-入力: "https://atcoder.jp/contests/abc334" → URL パース → AtCoder, id = "abc334"
-入力: "xyz999"       → 判定不能 → stdin: "OJ を選んでください [atcoder/...]: "
+"abc334"     → "abc"/"arc"/"ahc" プレフィックス → AtCoder
+"aoj0000"    → "aoj" プレフィックス → AOJ (将来)
+"https://atcoder.jp/contests/abc334" → URL パース → AtCoder, id="abc334"
+"xyz999"     → 不明 → stdin: "OJ を選んでください [atcoder]: "
 ```
+
+`ce init` 後は `.ce.toml` に保存するため、以降の判定は不要。
 
 ---
 
@@ -144,13 +159,13 @@ revel_session = "xxxxxxxx"
 
 ```
 Contest                             ← Aggregate Root
-  id: String                        例: "abc334"
+  id: String                        "abc334"
   online_judge: OJKind
   problems: Vec<Problem>
 
 Problem                             ← Entity (Contest 配下)
-  id: String                        例: "abc334_a"
-  code: String                      例: "a", "ex", "practice_2"
+  id: String                        OJ 固有 ID ("abc334_a" 等)。AtCoder は構築可能だが他 OJ では異なる
+  code: String                      ディレクトリ名に使用 ("a", "ex", "practice_2")
   title: String
   samples: Vec<Sample>
 
@@ -161,16 +176,22 @@ Sample                              ← Value Object
 Solution                            ← Entity (独立 Aggregate)
   contest_id: String
   problem_code: String
-  name: String                      例: "main", "sol2"
+  name: String                      "main", "sol2"
   language: Language
-  path: PathBuf
 
 Session                             ← Value Object
   online_judge: OJKind
-  cookie: String
+  cookie: String                    REVEL_SESSION 等
+
+OJKind                              ← Value Object (enum)
+  AtCoder | AOJ | ...
+
+Language                            ← Value Object (enum)
+  Rust | Cpp | ...
 ```
 
-`IOSpec` は MVP スコープ外 (将来の入力自動生成機能で追加)。
+`Solution.path` は `SolutionRepository` がプロジェクトルートを保持し、そこからの相対で導出。
+`IOSpec` は MVP スコープ外。
 
 ---
 
@@ -181,80 +202,116 @@ trait ContestRepository {
     fn exists(&self, contest_id: &str) -> Result<bool>;
     fn exists_unstarted(&self, contest_id: &str) -> Result<bool>;
     fn create_unstarted(&self, contest_id: &str) -> Result<()>;
-    fn create(&self, contest: &Contest) -> Result<()>;   // テストケース保存含む
-    fn get(&self, contest_id: &str) -> Result<Contest>;
+    fn create(&self, contest: &Contest) -> Result<()>;
+    // ↑ .ce.toml 生成 + testcase ファイル保存を含む
+    fn get_oj_kind(&self, contest_id: &str) -> Result<OJKind>;
+    fn get_samples(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Sample>>;
+    fn list_problem_codes(&self, contest_id: &str) -> Result<Vec<String>>;
 }
 
 trait SolutionRepository {
     fn list(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Solution>>;
-    fn exists(&self, contest_id: &str, problem_code: &str, name: &str, lang: &Language) -> Result<bool>;
+    fn exists(&self, contest_id: &str, problem_code: &str, name: &str, lang: Language) -> Result<bool>;
     fn create(&self, solution: &Solution) -> Result<()>;
-    // Rust の場合は Cargo.toml members の更新も担う (infrastructure 側で実装)
-    fn get_source(&self, solution: &Solution) -> Result<String>;  // submit 用
+    // ↑ ディレクトリ + テンプレート展開 + Cargo.toml members 更新を含む
+    fn get_source(&self, solution: &Solution) -> Result<String>;
+}
+
+trait SessionRepository {
+    fn get(&self, oj: OJKind) -> Result<Option<Session>>;
+    fn save(&self, session: &Session) -> Result<()>;
 }
 ```
 
-**ソースオブトゥルース:** ファイルシステムのディレクトリ構造。
-`SolutionRepository::list()` はディレクトリをスキャンして `Solution` を返す。
-別途マニフェストファイルは持たない。
+責務の境界:
+- `ContestRepository`: コンテストディレクトリ・`.ce.toml`・testcase ファイルを管理
+- `SolutionRepository`: 解法ディレクトリ・ソースファイル・Rust workspace を管理
+- `SessionRepository`: `~/.config/ce/session.toml` を管理
+
+---
+
+## OnlineJudge インターフェース (usecases 層)
+
+```rust
+trait OnlineJudge {
+    fn name(&self) -> &str;
+    fn whoami(&self, session: &Session) -> Result<String>;
+    fn get_problems_detail(&self, contest_id: &str, session: Option<&Session>) -> Result<Vec<Problem>>;
+    fn submit(
+        &self,
+        contest_id: &str,
+        problem_code: &str,
+        lang_id: &str,
+        source: &str,
+        session: &Session,
+    ) -> Result<SubmitResult>;
+    fn wait_for_start(&self, contest_id: &str) -> Result<()>;
+}
+```
+
+`login(username, password)` は不要 (手動クッキー方式のため削除)。
+`get_problems_detail` は公開コンテストなら session 不要 (`Option<&Session>`)。
 
 ---
 
 ## アーキテクチャ層構成
 
-giming の 4 層を引き継ぎ、エラー設計を改善。
-
 ```
 domain/
-  entity.rs        Contest, Problem, Sample, Solution, Session, Language, OJKind
-  error.rs         (シンプルな trait のみ)
+  entity.rs   Contest, Problem, Sample, Solution, Session, OJKind, Language, SubmitResult
 
 usecases/
   repository/
     contest_repository.rs
     solution_repository.rs
-  online_judge.rs  OnlineJudge trait (port)
-  config.rs        Config trait (port)
+    session_repository.rs
+  online_judge.rs
+  config.rs
   service/
-    login.rs
-    init.rs
-    new_solution.rs
-    test.rs
-    submit.rs
+    login.rs      SessionRepository::save()
+    whoami.rs     OnlineJudge::whoami()
+    init.rs       OnlineJudge::get_problems_detail() + ContestRepository::create() + SolutionRepository::create()
+    new.rs        SolutionRepository::create()
+    test.rs       ContestRepository::get_samples() + Config (test command)
+    submit.rs     SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::submit()
 
 interfaces/
   controller/
-    input.rs       各コマンドの Input trait
+    input.rs   各コマンドの Input trait
 
 infrastructure/
   repository_impl/
     contest_repository_impl.rs
-    solution_repository_impl.rs   ← Cargo.toml members 更新もここ
+    solution_repository_impl.rs   ← Cargo.toml members 更新含む
+    session_repository_impl.rs
   online_judge_impl/
     atcoder/
-      login.rs, get_problems.rs, submit.rs, ...
+      get_problems.rs, submit.rs, whoami.rs
   config_impl.rs
-  shell/           ← clap + エントリポイント
+  shell/   ← clap エントリポイント
 ```
 
-**エラー設計:** giming の `E: Error + 'static` 型パラメータを廃止し `anyhow::Error` に統一。
-ドメインエラーは enum で定義し `thiserror` を使用。
+**エラー設計**: `anyhow::Error` をデフォルトとし、matchable なドメインエラーは `thiserror` で定義。`E: Error + 'static` 型パラメータは使わない。
 
 ---
 
 ## 未決 Q リスト
 
-### Q11. `Solution` の `path` フィールド
+### Q11. `Solution.path` の導出
 
-`Solution.path` は絶対パスか相対パスか?
-
-- 相対パス (プロジェクトルートからの相対) の方が移植性が高い
-- でも `SolutionRepository` がルートパスを知っている必要がある
+`SolutionRepository` がプロジェクトルートパスを持ち、`solution.contest_id / lang / problem_code / name` から導出する設計で OK?
 
 ### Q12. `ce test` の出力形式
 
-テスト失敗時にどの程度の情報を出すか?
+- MVP: シンプルな AC/WA + expected/actual 表示
+- 将来: カラー表示、TLE 判定
 
-- `diff` 形式で expected/actual を表示?
-- AC/WA/TLE のカラー表示?
-- giming の ac ツールには `colors.py` があったが、どの程度 giming の出力に寄せる?
+### Q13. contest_id 省略 (cwd から自動検出)
+
+`ce sub a` などの短コマンドの際に contest_id を省略できるようにするか。
+将来のリアルタイムモードで対応予定だが、MVP から入れるか?
+
+### Q14. `ce whoami` のエラーハンドリング
+
+- session 未設定の場合: "not logged in" か `ce login` を促すか
+- AtCoder への接続失敗の場合: どう扱うか
