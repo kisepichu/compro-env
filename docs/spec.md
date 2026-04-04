@@ -31,7 +31,7 @@ compro-env/                         ← リポジトリルート
 ```
 
 - `testcases/` は言語共通。`ce test a --lang cpp` も同じ `testcases/a/` を参照
-- テンプレートは `templates/{lang}/` に置き、`ce init` 時にコピー + 文字列置換 (Cargo.toml の `name` 等)。Tera は将来拡張で不要
+- テンプレートは `templates/{lang}/` に置き、`ce init` 時にコピー + 文字列置換 (Cargo.toml の `name` 等)。Tera は将来拡張
 
 ---
 
@@ -92,11 +92,13 @@ revel_session = "xxxxxxxx"
 ## コマンド一覧 (MVP)
 
 ### `ce login [oj]`
+
 - `oj` 省略時はデフォルト OJ
 - ブラウザ DevTools での `REVEL_SESSION` 取得手順を表示
 - stdin でクッキー値を受け取り `~/.config/ce/session.toml` に保存
 
 ### `ce init <contest_id_or_url>`
+
 - OJ 判定 (D + C 方式、後述)
 - 問題一覧・サンプルを取得
 - `testcases/{problem_code}/` にサンプルを保存
@@ -105,19 +107,23 @@ revel_session = "xxxxxxxx"
 - コンテスト未開始なら開始を待つ
 
 ### `ce new <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+
 - 解法フォルダを追加 (`SolutionRepository::create()`)
 - `solution_name` 省略時は `main`、`--lang` 省略時はデフォルト言語
 - Rust なら workspace `Cargo.toml` の `members` を更新
 
 ### `ce test <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+
 - コンフィグのテストコマンドを実行
 - `testcases/{problem_code}/` の全サンプルで実行・比較
 
 ### `ce sub <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+
 - 提出前処理コマンドを実行
 - OJ へ提出
 
 ### (将来) リアルタイムコンテストモード
+
 - カレントディレクトリが `solutions/{contest_id}/` 以下なら `contest_id` を自動検出 (A 方式)
 - `ce sub a` などの短コマンドが動く
 
@@ -241,12 +247,14 @@ infrastructure/
 ### Q11. `Solution` の `path` フィールド
 
 `Solution.path` は絶対パスか相対パスか?
+
 - 相対パス (プロジェクトルートからの相対) の方が移植性が高い
 - でも `SolutionRepository` がルートパスを知っている必要がある
 
 ### Q12. `ce test` の出力形式
 
 テスト失敗時にどの程度の情報を出すか?
+
 - `diff` 形式で expected/actual を表示?
 - AC/WA/TLE のカラー表示?
 - giming の ac ツールには `colors.py` があったが、どの程度 giming の出力に寄せる?

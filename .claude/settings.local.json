@@ -4,7 +4,8 @@
       "Read(//home/kise/repos/ac/**)",
       "Read(//home/kise/repos/giming/**)",
       "WebSearch",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:zenn.dev)"
     ]
   }
 }
