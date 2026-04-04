@@ -18,16 +18,18 @@ use usecases::service::Service;
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
-    let _controller = build_controller()?;
 
     match cli.command {
+        // These commands only touch ~/.config/ce/... and do not need a project root.
         commands::Commands::Login { oj: _ } => {
             todo!()
         }
         commands::Commands::Whoami { oj: _ } => {
             todo!()
         }
+        // These commands require a project root.
         commands::Commands::Init { contest: _ } => {
+            let _controller = build_controller()?;
             todo!()
         }
         commands::Commands::New {
@@ -36,6 +38,7 @@ pub fn run() -> Result<()> {
             solution: _,
             lang: _,
         } => {
+            let _controller = build_controller()?;
             todo!()
         }
         commands::Commands::Test {
@@ -44,6 +47,7 @@ pub fn run() -> Result<()> {
             solution: _,
             lang: _,
         } => {
+            let _controller = build_controller()?;
             todo!()
         }
         commands::Commands::Submit {
@@ -52,6 +56,7 @@ pub fn run() -> Result<()> {
             solution: _,
             lang: _,
         } => {
+            let _controller = build_controller()?;
             todo!()
         }
     }
@@ -71,15 +76,19 @@ fn build_controller() -> Result<Controller> {
     Ok(Controller::new(service))
 }
 
-/// Locates the project root by searching upward for CLAUDE.md or Cargo.toml.
+/// Locates the project root by searching upward for the `templates/` directory.
+///
+/// `Cargo.toml` is not used as a sentinel because every Rust contest workspace and
+/// solution package under `solutions/{contest_id}/rust/...` also contains a `Cargo.toml`,
+/// which would resolve to the wrong root when running from a contest subdirectory.
 fn find_project_root() -> Result<std::path::PathBuf> {
     let mut dir = std::env::current_dir()?;
     loop {
-        if dir.join("CLAUDE.md").exists() || dir.join("Cargo.toml").exists() {
+        if dir.join("templates").is_dir() {
             return Ok(dir);
         }
         if !dir.pop() {
-            anyhow::bail!("could not find project root (no CLAUDE.md or Cargo.toml found)");
+            anyhow::bail!("could not find project root (no templates/ directory found)");
         }
     }
 }

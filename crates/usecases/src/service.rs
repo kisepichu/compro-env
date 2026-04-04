@@ -15,11 +15,11 @@ pub mod test;
 pub mod whoami;
 
 pub struct Service {
-    pub online_judge: Box<dyn OnlineJudge>,
-    pub contest_repo: Box<dyn ContestRepository>,
-    pub solution_repo: Box<dyn SolutionRepository>,
-    pub session_repo: Box<dyn SessionRepository>,
-    pub config: Box<dyn Config>,
+    pub(crate) online_judge: Box<dyn OnlineJudge>,
+    pub(crate) contest_repo: Box<dyn ContestRepository>,
+    pub(crate) solution_repo: Box<dyn SolutionRepository>,
+    pub(crate) session_repo: Box<dyn SessionRepository>,
+    pub(crate) config: Box<dyn Config>,
 }
 
 impl Service {
