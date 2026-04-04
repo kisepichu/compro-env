@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/kise/repos/ac/**)",
+      "Read(//home/kise/repos/giming/**)",
+      "WebSearch",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}
