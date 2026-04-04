@@ -1,0 +1,9 @@
+[package]
+name = "interfaces"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+domain = { workspace = true }
+usecases = { workspace = true }
+anyhow = { workspace = true }
