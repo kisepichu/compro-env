@@ -44,10 +44,10 @@ contest_id = "abc334"
 同一 workspace 内で package name が衝突するため、常に `{problem_code}-{solution_name}` を使う。
 
 | ディレクトリ | package name |
-|-------------|-------------|
-| `a/main/`   | `a-main`    |
-| `a/sol2/`   | `a-sol2`    |
-| `ex/main/`  | `ex-main`   |
+| ------------ | ------------ |
+| `a/main/`    | `a-main`     |
+| `a/sol2/`    | `a-sol2`     |
+| `ex/main/`   | `ex-main`    |
 
 `ce test a` → 内部で `cargo test -p a-main`
 
@@ -118,25 +118,32 @@ revel_session = "xxxxxxxx"
 ## コマンド一覧 (MVP)
 
 ### `ce login [oj]`
+
 詳細: `docs/commands/login.md`
 
 ### `ce whoami [oj]`
+
 - セッションを読み `OnlineJudge::whoami(&session)` を呼ぶ
 - ユーザー名を表示 or "not logged in"
 
 ### `ce init <contest_id_or_url>`
+
 詳細: `docs/commands/init.md`
 
 ### `ce new <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+
 詳細: `docs/commands/new.md`
 
 ### `ce test <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+
 詳細: `docs/commands/test.md`
 
 ### `ce sub <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+
 詳細: `docs/commands/submit.md`
 
 ### (将来) リアルタイムコンテストモード
+
 - cwd が `solutions/{contest_id}/` 以下なら `contest_id` を自動検出
 - `ce sub a` などの短コマンドが動く
 
@@ -224,6 +231,7 @@ trait SessionRepository {
 ```
 
 責務の境界:
+
 - `ContestRepository`: コンテストディレクトリ・`.ce.toml`・testcase ファイルを管理
 - `SolutionRepository`: 解法ディレクトリ・ソースファイル・Rust workspace を管理
 - `SessionRepository`: `~/.config/ce/session.toml` を管理
@@ -312,5 +320,5 @@ MVP には含めない。将来のリアルタイムモードで対応。
 
 ### Q14. `ce whoami` のエラーハンドリング → 確定
 
-- session 未設定: "not logged in。ce login を今実行しますか? [y/N]: " と聞く
+- session 未設定: "not logged in. Do you want to execute `ce login` now? [y/N]: " と聞く
 - AtCoder 接続失敗: エラー内容を表示して終了
