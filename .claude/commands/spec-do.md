@@ -9,7 +9,21 @@
 4. 実装を DDD レイヤーごとに分解してタスクを洗い出す
 5. タスクファイルを `tasks/doing/TASK-NNN-{command}.md` に作成する
    - NNN は既存タスクの連番 (todo/ doing/ done/ を合わせて最大番号 + 1)
-6. タスクファイルを作成したら、 TDD を厳守して実装を開始する。各部分について、テストを書き、テストが失敗することを確認してから実装を行う
+6. タスクファイルを作成したら、チェックリスト項目ごとに以下の TDD サイクルを回す:
+
+   **RED フェーズ** — `.claude/agents/test-writer-prompt.md` のテンプレートを使い、
+   test-writer subagent を Agent ツールで起動する。
+   - subagent がテストを書き、`cargo test` で失敗を確認してレポートを返す
+   - テストが期待通りに失敗していることを確認してから次へ進む
+
+   **GREEN フェーズ** — `.claude/agents/implementer-prompt.md` のテンプレートを使い、
+   implementer subagent を Agent ツールで起動する。
+   - test-writer のレポート（失敗したテスト名・ファイルパス）をプロンプトに含める
+   - subagent が最小限の実装を書き、`cargo test` で全テスト通過を確認してレポートを返す
+
+   **REFACTOR フェーズ** — 全テストが通る状態を維持しながらリファクタリングする
+
+   次のチェックリスト項目へ進む前に、必ず GREEN まで完了させること
 
 ## タスクファイル形式
 
