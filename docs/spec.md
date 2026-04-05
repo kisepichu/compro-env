@@ -44,10 +44,10 @@ contest_id = "abc334"
 同一 workspace 内で package name が衝突するため、常に `{problem_code}-{solution_name}` を使う。
 
 | ディレクトリ | package name |
-|-------------|-------------|
-| `a/main/`   | `a-main`    |
-| `a/sol2/`   | `a-sol2`    |
-| `ex/main/`  | `ex-main`   |
+| ------------ | ------------ |
+| `a/main/`    | `a-main`     |
+| `a/sol2/`    | `a-sol2`     |
+| `ex/main/`   | `ex-main`    |
 
 `ce test a` → 内部で `cargo test -p a-main`
 
@@ -118,25 +118,32 @@ revel_session = "xxxxxxxx"
 ## コマンド一覧 (MVP)
 
 ### `ce login [oj]`
+
 詳細: `docs/commands/login.md`
 
 ### `ce whoami [oj]`
+
 - セッションを読み `OnlineJudge::whoami(&session)` を呼ぶ
 - ユーザー名を表示 or "not logged in"
 
 ### `ce init <contest_id_or_url>`
+
 詳細: `docs/commands/init.md`
 
 ### `ce new <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+
 詳細: `docs/commands/new.md`
 
 ### `ce test <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+
 詳細: `docs/commands/test.md`
 
 ### `ce sub <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+
 詳細: `docs/commands/submit.md`
 
 ### (将来) リアルタイムコンテストモード
+
 - cwd が `solutions/{contest_id}/` 以下なら `contest_id` を自動検出
 - `ce sub a` などの短コマンドが動く
 
@@ -211,7 +218,7 @@ trait ContestRepository {
 
 trait SolutionRepository {
     fn list(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Solution>>;
-    fn exists(&self, contest_id: &str, problem_code: &str, name: &str, lang: Language) -> Result<bool>;
+    fn exists(&self, contest_id: &str, problem_code: &str, name: &str, lang: &Language) -> Result<bool>;
     fn create(&self, solution: &Solution) -> Result<()>;
     // ↑ ディレクトリ + テンプレート展開 + Cargo.toml members 更新を含む
     fn get_source(&self, solution: &Solution) -> Result<String>;
@@ -224,6 +231,7 @@ trait SessionRepository {
 ```
 
 責務の境界:
+
 - `ContestRepository`: コンテストディレクトリ・`.ce.toml`・testcase ファイルを管理
 - `SolutionRepository`: 解法ディレクトリ・ソースファイル・Rust workspace を管理
 - `SessionRepository`: `~/.config/ce/session.toml` を管理
@@ -240,7 +248,7 @@ trait OnlineJudge {
     fn submit(
         &self,
         contest_id: &str,
-        problem_code: &str,
+        problem_id: &str,
         lang_id: &str,
         source: &str,
         session: &Session,
@@ -306,12 +314,11 @@ infrastructure/
 - MVP: シンプルな AC/WA + expected/actual 表示
 - 将来: カラー表示、TLE 判定
 
-### Q13. contest_id 省略 (cwd から自動検出)
+### Q13. contest_id 省略 (cwd から自動検出) → 将来対応
 
-`ce sub a` などの短コマンドの際に contest_id を省略できるようにするか。
-将来のリアルタイムモードで対応予定だが、MVP から入れるか?
+MVP には含めない。将来のリアルタイムモードで対応。
 
-### Q14. `ce whoami` のエラーハンドリング
+### Q14. `ce whoami` のエラーハンドリング → 確定
 
-- session 未設定の場合: "not logged in" か `ce login` を促すか
-- AtCoder への接続失敗の場合: どう扱うか
+- session 未設定: "not logged in. Do you want to execute `ce login` now? [y/N]: " と聞く
+- AtCoder 接続失敗: エラー内容を表示して終了

@@ -1,0 +1,11 @@
+[package]
+name = "usecases"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+domain = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+mockall = "0.13"
