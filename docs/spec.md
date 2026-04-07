@@ -125,6 +125,10 @@ revel_session = "xxxxxxxx"
 
 詳細: `docs/commands/whoami.md`
 
+### `ce logout [oj]`
+
+詳細: `docs/commands/logout.md`
+
 - セッションを読み `OnlineJudge::whoami(&session)` を呼ぶ
 - ユーザー名を表示、セッションなしなら `(not logged in)` を表示して exit 0
 
@@ -229,6 +233,8 @@ trait SolutionRepository {
 trait SessionRepository {
     fn get(&self, oj: OJKind) -> Result<Option<Session>>;
     fn save(&self, session: &Session) -> Result<()>;
+    fn delete(&self, oj: &OJKind) -> Result<bool>;
+    // bool: true = deleted, false = was not present
 }
 ```
 
