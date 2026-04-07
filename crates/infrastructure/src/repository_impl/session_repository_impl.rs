@@ -13,7 +13,8 @@ impl SessionRepositoryImpl {
         if let Ok(dir) = std::env::var("CE_CONFIG_DIR") {
             PathBuf::from(dir)
         } else {
-            let home = std::env::var("HOME").unwrap_or_else(|_| String::from("/root"));
+            let home = std::env::var("HOME")
+                .expect("HOME environment variable is not set; cannot determine config directory");
             PathBuf::from(home).join(".config").join("ce")
         }
     }

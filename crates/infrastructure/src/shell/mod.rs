@@ -45,10 +45,6 @@ pub fn run() -> Result<()> {
                     line.trim().to_string()
                 }
             };
-            if cookie.is_empty() {
-                anyhow::bail!("cookie must not be empty");
-            }
-
             match login_with_io(oj_kind, &cookie) {
                 Ok(()) => println!("Saved. Run `ce whoami` to verify."),
                 Err(e) => {
@@ -135,9 +131,12 @@ pub fn run() -> Result<()> {
 
 /// Saves the login session for the given OJ using the provided cookie string.
 ///
-/// This is the testable core of the Login command: the caller is responsible
-/// for reading the cookie from stdin and validating that it is non-empty.
+/// This is the testable core of the Login command. Returns an error if `cookie`
+/// is empty or whitespace-only.
 pub fn login_with_io(oj: domain::entity::OJKind, cookie: &str) -> Result<()> {
+    if cookie.trim().is_empty() {
+        anyhow::bail!("cookie must not be empty");
+    }
     let service = Service::new(
         Box::new(AtCoder),
         Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
