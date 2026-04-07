@@ -9,7 +9,7 @@ impl Config for ConfigImpl {
     }
 
     fn default_online_judge(&self) -> OJKind {
-        todo!()
+        OJKind::AtCoder
     }
 
     fn test_command(&self, _lang: &Language) -> String {
@@ -30,5 +30,17 @@ impl Config for ConfigImpl {
 
     fn lang_id(&self, _lang: &Language, _oj: &OJKind) -> Option<String> {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use domain::entity::OJKind;
+
+    #[test]
+    fn default_online_judge_returns_atcoder() {
+        let config = ConfigImpl;
+        assert_eq!(config.default_online_judge(), OJKind::AtCoder);
     }
 }

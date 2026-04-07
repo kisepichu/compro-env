@@ -13,10 +13,22 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Log in to an OJ (manually enter the REVEL_SESSION cookie)
+    /// Log in to an OJ by saving your REVEL_SESSION cookie
+    ///
+    /// Steps:
+    ///   1. Open https://atcoder.jp and log in with your browser.
+    ///   2. Open DevTools > Application > Cookies > https://atcoder.jp
+    ///   3. Copy the value of REVEL_SESSION.
+    ///   4. Run: ce login [atcoder]
+    ///      You will be prompted to paste the cookie value.
+    ///      Alternatively, pass it directly: ce login [atcoder] --cookie VALUE
+    #[command(verbatim_doc_comment)]
     Login {
-        /// Target OJ (defaults to the value in config)
+        /// Target OJ (default: atcoder)
         oj: Option<String>,
+        /// REVEL_SESSION cookie value (prompted interactively if omitted)
+        #[arg(long)]
+        cookie: Option<String>,
     },
     /// Check the username of the currently logged-in user
     Whoami { oj: Option<String> },

@@ -18,7 +18,11 @@ impl OJKind {
     /// Infer OJ kind from contest ID prefix.
     pub fn from_contest_id_prefix(id: &str) -> Option<Self> {
         let lower = id.to_lowercase();
-        if lower.starts_with("abc") || lower.starts_with("arc") || lower.starts_with("ahc") || lower.starts_with("agc") {
+        if lower.starts_with("abc")
+            || lower.starts_with("arc")
+            || lower.starts_with("ahc")
+            || lower.starts_with("agc")
+        {
             Some(OJKind::AtCoder)
         } else {
             None
