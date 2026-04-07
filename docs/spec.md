@@ -125,12 +125,16 @@ revel_session = "xxxxxxxx"
 
 詳細: `docs/commands/whoami.md`
 
+- セッションを読み `OnlineJudge::whoami(&session)` を呼ぶ
+- ユーザー名を表示、セッションなしなら `(not logged in)` を表示して exit 0
+
 ### `ce logout [oj]`
 
 詳細: `docs/commands/logout.md`
 
-- セッションを読み `OnlineJudge::whoami(&session)` を呼ぶ
-- ユーザー名を表示、セッションなしなら `(not logged in)` を表示して exit 0
+- `SessionRepository::delete(oj)` を呼んでセッションを削除する
+- 削除できた場合: `Logged out from {oj}.` を表示して exit 0
+- セッションがなかった場合: `Already logged out.` を表示して exit 0
 
 ### `ce init <contest_id_or_url>`
 
@@ -231,7 +235,7 @@ trait SolutionRepository {
 }
 
 trait SessionRepository {
-    fn get(&self, oj: OJKind) -> Result<Option<Session>>;
+    fn get(&self, oj: &OJKind) -> Result<Option<Session>>;
     fn save(&self, session: &Session) -> Result<()>;
     fn delete(&self, oj: &OJKind) -> Result<bool>;
     // bool: true = deleted, false = was not present

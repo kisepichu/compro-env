@@ -71,7 +71,8 @@ fn save_session_to_path(session: &Session, path: &Path) -> Result<()> {
 }
 
 /// Removes the OJ's section from the TOML file at `path`.
-/// Returns `Ok(true)` if the section was present, `Ok(false)` if the file didn't exist.
+/// Returns `Ok(true)` if the section was present, `Ok(false)` if the file didn't exist
+/// or if the target OJ section was not present in the file.
 /// If the file becomes empty (no sections remain), it is deleted entirely.
 fn delete_session_from_path(oj: &OJKind, path: &Path) -> Result<bool> {
     if !path.exists() {

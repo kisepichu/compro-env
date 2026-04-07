@@ -31,7 +31,7 @@ pub fn run() -> Result<()> {
             };
 
             let cookie = match cookie {
-                Some(c) => c,
+                Some(c) => c.trim().to_string(),
                 None => {
                     println!("1. Open https://atcoder.jp in your browser and log in.");
                     println!("2. Open DevTools -> Application -> Cookies -> https://atcoder.jp");
@@ -45,6 +45,9 @@ pub fn run() -> Result<()> {
                     line.trim().to_string()
                 }
             };
+            if cookie.is_empty() {
+                anyhow::bail!("cookie must not be empty");
+            }
 
             match login_with_io(oj_kind, &cookie) {
                 Ok(()) => println!("Saved. Run `ce whoami` to verify."),

@@ -34,7 +34,7 @@ ce whoami [oj]
 `OnlineJudge::whoami` の AtCoder 実装:
 
 - `GET https://atcoder.jp/home` を REVEL_SESSION クッキー付きで送る
-- レスポンス HTML から `<a href="/users/{username}">` や `data-username="{username}"` 等のパターンでユーザー名を抽出する
+- レスポンス HTML から `class="username"` を持つ `<a href="/users/{username}">` パターンでユーザー名を抽出する
 - 抽出できなかった場合 (セッション切れ等): `Err` を返す
 
 ## エラーケース
