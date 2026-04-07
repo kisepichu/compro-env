@@ -53,17 +53,38 @@ impl OnlineJudge for AtCoder {
 }
 
 fn parse_username_from_html(html: &str) -> Option<String> {
-    // Look for href="/users/{username}" pattern and extract the username.
-    let marker = r#"href="/users/"#;
-    let start = html.find(marker)? + marker.len();
-    let rest = &html[start..];
-    let end = rest.find('"')?;
-    let username = &rest[..end];
-    if username.is_empty() {
-        None
-    } else {
-        Some(username.to_string())
+    // Look for an <a> tag that has BOTH class="username" AND href="/users/{username}".
+    // This is specific to the logged-in user's nav element and avoids false matches
+    // with arbitrary profile links elsewhere on the page (e.g. recent submissions).
+    let href_marker = r#"href="/users/"#;
+    let class_marker = r#"class="username""#;
+
+    let mut pos = 0;
+    while pos < html.len() {
+        let Some(rel) = html[pos..].find("<a ") else {
+            break;
+        };
+        let tag_start = pos + rel;
+        let Some(rel_end) = html[tag_start..].find('>') else {
+            break;
+        };
+        let tag = &html[tag_start..tag_start + rel_end + 1];
+
+        if tag.contains(class_marker) {
+            if let Some(href_pos) = tag.find(href_marker) {
+                let after = &tag[href_pos + href_marker.len()..];
+                if let Some(end) = after.find('"') {
+                    let username = &after[..end];
+                    if !username.is_empty() {
+                        return Some(username.to_string());
+                    }
+                }
+            }
+        }
+
+        pos = tag_start + rel_end + 1;
     }
+    None
 }
 
 #[cfg(test)]

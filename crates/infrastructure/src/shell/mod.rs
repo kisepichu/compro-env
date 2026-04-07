@@ -230,9 +230,11 @@ fn find_project_root() -> Result<std::path::PathBuf> {
 mod tests {
     use super::*;
     use domain::entity::OJKind;
+    use serial_test::serial;
 
     /// login_with_io saves the session cookie to session.toml in CE_CONFIG_DIR.
     #[test]
+    #[serial]
     fn login_saves_session_to_file() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         std::env::set_var("CE_CONFIG_DIR", tmp.path());
@@ -258,6 +260,7 @@ mod tests {
 
     /// login_with_io returns Err when the cookie is empty.
     #[test]
+    #[serial]
     fn login_returns_error_on_empty_cookie() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         std::env::set_var("CE_CONFIG_DIR", tmp.path());
@@ -268,6 +271,7 @@ mod tests {
 
     /// logout_with_io returns Ok(true) and removes session.toml when a session exists.
     #[test]
+    #[serial]
     fn logout_returns_true_when_session_exists() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let session_toml = tmp.path().join("session.toml");
@@ -280,11 +284,15 @@ mod tests {
 
         let result = logout_with_io(OJKind::AtCoder).expect("logout_with_io should return Ok");
         assert!(result, "expected true when a session was removed");
-        assert!(!session_toml.exists(), "session.toml should be gone after logout");
+        assert!(
+            !session_toml.exists(),
+            "session.toml should be gone after logout"
+        );
     }
 
     /// logout_with_io returns Ok(false) when no session exists.
     #[test]
+    #[serial]
     fn logout_returns_false_when_session_missing() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         std::env::set_var("CE_CONFIG_DIR", tmp.path());
@@ -300,6 +308,7 @@ mod tests {
 
     /// whoami_with_io returns Ok(None) when no session.toml exists (not logged in).
     #[test]
+    #[serial]
     fn whoami_returns_none_when_session_missing() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         std::env::set_var("CE_CONFIG_DIR", tmp.path());

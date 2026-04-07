@@ -41,19 +41,32 @@ impl SessionRepository for SessionRepositoryImpl {
 }
 
 /// Serializes a `Session` to TOML and writes it to `path`.
-/// Parent directories are created if they don't exist.
+/// Reads the existing file first and updates only the relevant OJ section,
+/// preserving sessions for other OJs. Parent directories are created if needed.
 fn save_session_to_path(session: &Session, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let toml_content = match &session.online_judge {
-        OJKind::AtCoder => {
-            format!("[atcoder]\nrevel_session = {:?}\n", session.cookie)
-        }
+    let mut table: toml::Table = if path.exists() {
+        let contents = std::fs::read_to_string(path)?;
+        toml::from_str(&contents)?
+    } else {
+        toml::Table::new()
     };
 
-    std::fs::write(path, toml_content)?;
+    let section_key = match &session.online_judge {
+        OJKind::AtCoder => "atcoder",
+    };
+
+    let mut section = toml::Table::new();
+    section.insert(
+        "revel_session".to_string(),
+        toml::Value::String(session.cookie.clone()),
+    );
+    table.insert(section_key.to_string(), toml::Value::Table(section));
+
+    std::fs::write(path, toml::to_string(&table)?)?;
     Ok(())
 }
 
@@ -113,6 +126,7 @@ fn get_session_from_path(oj: &OJKind, path: &Path) -> Result<Option<Session>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
 
     /// Helper: create a Session for AtCoder with the given cookie value.
@@ -128,6 +142,7 @@ mod tests {
     /// Uses CE_CONFIG_DIR env override so that the file is read from a temp directory
     /// instead of the real ~/.config/ce/.
     #[test]
+    #[serial]
     fn get_returns_session_when_file_exists() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let config_path = tmp.path().join("session.toml");
@@ -160,6 +175,7 @@ mod tests {
     ///
     /// Uses CE_CONFIG_DIR env override pointing at an empty temp directory.
     #[test]
+    #[serial]
     fn get_returns_none_when_file_missing() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
 
@@ -177,6 +193,7 @@ mod tests {
     ///
     /// Uses CE_CONFIG_DIR env override so that the file is read from a temp directory.
     #[test]
+    #[serial]
     fn delete_returns_true_when_session_exists() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let config_path = tmp.path().join("session.toml");
@@ -191,7 +208,7 @@ mod tests {
             .delete(&OJKind::AtCoder)
             .expect("delete should not return Err");
 
-        assert_eq!(result, true, "expected Ok(true) when session existed");
+        assert!(result, "expected Ok(true) when session existed");
         assert!(
             !config_path.exists(),
             "session.toml should have been removed after delete"
@@ -202,6 +219,7 @@ mod tests {
     ///
     /// Uses CE_CONFIG_DIR env override pointing at an empty temp directory.
     #[test]
+    #[serial]
     fn delete_returns_false_when_session_missing() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
 
@@ -212,7 +230,7 @@ mod tests {
             .delete(&OJKind::AtCoder)
             .expect("delete should not return Err");
 
-        assert_eq!(result, false, "expected Ok(false) when no session existed");
+        assert!(!result, "expected Ok(false) when no session existed");
     }
 
     /// After save(), ~/.config/ce/session.toml must contain the expected TOML content.
@@ -220,6 +238,7 @@ mod tests {
     /// Uses CE_CONFIG_DIR env override so that the file is written to a temp directory
     /// instead of the real ~/.config/ce/.
     #[test]
+    #[serial]
     fn save_writes_revel_session_to_toml() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let config_path = tmp.path().join("session.toml");
