@@ -2,7 +2,7 @@ pub mod commands;
 
 use anyhow::Result;
 use clap::Parser;
-use commands::{Cli, LoginCommand, WhoamiCommand};
+use commands::{Cli, LoginCommand, LogoutCommand, WhoamiCommand};
 
 use crate::{
     config_impl::ConfigImpl,
@@ -70,6 +70,24 @@ pub fn run() -> Result<()> {
                     println!("Run `ce login` to save your session.");
                     return Ok(());
                 }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            Ok(())
+        }
+        commands::Commands::Logout { oj } => {
+            let oj_kind = match oj {
+                Some(s) => s
+                    .parse::<domain::entity::OJKind>()
+                    .map_err(|e| anyhow::anyhow!(e))?,
+                None => ConfigImpl.default_online_judge(),
+            };
+
+            match logout_with_io(oj_kind.clone()) {
+                Ok(true) => println!("Logged out from {oj_kind}."),
+                Ok(false) => println!("Already logged out."),
                 Err(e) => {
                     eprintln!("{e}");
                     std::process::exit(1);
@@ -160,6 +178,23 @@ pub fn whoami_with_io(oj: domain::entity::OJKind) -> Result<Option<String>> {
     }
 }
 
+/// Removes the saved session for the given OJ. Returns `true` if a session was
+/// removed, `false` if no session was found.
+///
+/// This is the testable core of the Logout command.
+pub fn logout_with_io(oj: domain::entity::OJKind) -> Result<bool> {
+    let service = Service::new(
+        Box::new(AtCoder),
+        Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
+        Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
+        Box::new(SessionRepositoryImpl),
+        Box::new(ConfigImpl),
+    );
+    let controller = Controller::new(service);
+    let input = LogoutCommand { oj };
+    controller.logout(&input)
+}
+
 fn build_controller() -> Result<Controller> {
     let root = find_project_root()?;
 
@@ -229,6 +264,38 @@ mod tests {
 
         let result = login_with_io(OJKind::AtCoder, "");
         assert!(result.is_err(), "expected Err for empty cookie, got Ok");
+    }
+
+    /// logout_with_io returns Ok(true) and removes session.toml when a session exists.
+    #[test]
+    fn logout_returns_true_when_session_exists() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let session_toml = tmp.path().join("session.toml");
+
+        // Write session.toml directly to avoid CE_CONFIG_DIR races with login_with_io.
+        std::fs::write(&session_toml, "[atcoder]\nrevel_session = \"my_cookie\"\n")
+            .expect("failed to write session.toml");
+
+        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+
+        let result = logout_with_io(OJKind::AtCoder).expect("logout_with_io should return Ok");
+        assert!(result, "expected true when a session was removed");
+        assert!(!session_toml.exists(), "session.toml should be gone after logout");
+    }
+
+    /// logout_with_io returns Ok(false) when no session exists.
+    #[test]
+    fn logout_returns_false_when_session_missing() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+
+        assert!(
+            !tmp.path().join("session.toml").exists(),
+            "session.toml must not exist for this test"
+        );
+
+        let result = logout_with_io(OJKind::AtCoder).expect("logout_with_io should return Ok");
+        assert!(!result, "expected false when no session was present");
     }
 
     /// whoami_with_io returns Ok(None) when no session.toml exists (not logged in).

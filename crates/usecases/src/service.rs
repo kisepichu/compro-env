@@ -9,6 +9,7 @@ use crate::{
 
 pub mod init;
 pub mod login;
+pub mod logout;
 pub mod new_solution;
 pub mod submit;
 pub mod test;

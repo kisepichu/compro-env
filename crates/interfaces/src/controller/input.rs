@@ -9,6 +9,10 @@ pub trait WhoamiInput {
     fn oj(&self) -> OJKind;
 }
 
+pub trait LogoutInput {
+    fn oj(&self) -> OJKind;
+}
+
 pub trait InitInput {
     fn contest_id(&self) -> String;
     fn oj(&self) -> OJKind;

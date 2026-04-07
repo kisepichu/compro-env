@@ -33,6 +33,11 @@ impl SessionRepository for SessionRepositoryImpl {
         let path = Self::session_toml_path();
         save_session_to_path(session, &path)
     }
+
+    fn delete(&self, oj: &OJKind) -> Result<bool> {
+        let path = Self::session_toml_path();
+        delete_session_from_path(oj, &path)
+    }
 }
 
 /// Serializes a `Session` to TOML and writes it to `path`.
@@ -50,6 +55,35 @@ fn save_session_to_path(session: &Session, path: &Path) -> Result<()> {
 
     std::fs::write(path, toml_content)?;
     Ok(())
+}
+
+/// Removes the OJ's section from the TOML file at `path`.
+/// Returns `Ok(true)` if the section was present, `Ok(false)` if the file didn't exist.
+/// If the file becomes empty (no sections remain), it is deleted entirely.
+fn delete_session_from_path(oj: &OJKind, path: &Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    let contents = std::fs::read_to_string(path)?;
+    let mut table: toml::Table = toml::from_str(&contents)?;
+
+    let section_key = match oj {
+        OJKind::AtCoder => "atcoder",
+    };
+
+    if table.remove(section_key).is_none() {
+        return Ok(false);
+    }
+
+    if table.is_empty() {
+        std::fs::remove_file(path)?;
+    } else {
+        let new_contents = toml::to_string(&table)?;
+        std::fs::write(path, new_contents)?;
+    }
+
+    Ok(true)
 }
 
 /// Reads a `Session` for the given OJ from a TOML file at `path`.
@@ -137,6 +171,48 @@ mod tests {
             .expect("get should not return Err");
 
         assert_eq!(result, None, "expected None when session.toml is absent");
+    }
+
+    /// delete() returns Ok(true) when session.toml exists, and the file is removed afterwards.
+    ///
+    /// Uses CE_CONFIG_DIR env override so that the file is read from a temp directory.
+    #[test]
+    fn delete_returns_true_when_session_exists() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let config_path = tmp.path().join("session.toml");
+
+        fs::write(&config_path, "[atcoder]\nrevel_session = \"some_cookie\"\n")
+            .expect("failed to write session.toml");
+
+        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+
+        let repo = SessionRepositoryImpl;
+        let result = repo
+            .delete(&OJKind::AtCoder)
+            .expect("delete should not return Err");
+
+        assert_eq!(result, true, "expected Ok(true) when session existed");
+        assert!(
+            !config_path.exists(),
+            "session.toml should have been removed after delete"
+        );
+    }
+
+    /// delete() returns Ok(false) when session.toml does not exist.
+    ///
+    /// Uses CE_CONFIG_DIR env override pointing at an empty temp directory.
+    #[test]
+    fn delete_returns_false_when_session_missing() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+
+        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+
+        let repo = SessionRepositoryImpl;
+        let result = repo
+            .delete(&OJKind::AtCoder)
+            .expect("delete should not return Err");
+
+        assert_eq!(result, false, "expected Ok(false) when no session existed");
     }
 
     /// After save(), ~/.config/ce/session.toml must contain the expected TOML content.

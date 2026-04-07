@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use domain::entity::{Language, OJKind};
 use interfaces::controller::input::{
-    InitInput, LoginInput, NewInput, SubmitInput, TestInput, WhoamiInput,
+    InitInput, LoginInput, LogoutInput, NewInput, SubmitInput, TestInput, WhoamiInput,
 };
 
 #[derive(Parser)]
@@ -32,6 +32,8 @@ pub enum Commands {
     },
     /// Check the username of the currently logged-in user
     Whoami { oj: Option<String> },
+    /// Log out from an OJ by removing the saved session
+    Logout { oj: Option<String> },
     /// Initialize a contest (fetch problems and create directories)
     Init {
         /// Contest ID or URL
@@ -86,6 +88,15 @@ pub struct WhoamiCommand {
     pub oj: OJKind,
 }
 impl WhoamiInput for WhoamiCommand {
+    fn oj(&self) -> OJKind {
+        self.oj.clone()
+    }
+}
+
+pub struct LogoutCommand {
+    pub oj: OJKind,
+}
+impl LogoutInput for LogoutCommand {
     fn oj(&self) -> OJKind {
         self.oj.clone()
     }
