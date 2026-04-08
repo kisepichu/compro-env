@@ -10,35 +10,39 @@ impl SessionRepositoryImpl {
     /// Returns the config directory path.
     /// Uses the `CE_CONFIG_DIR` environment variable if set to a non-empty, non-whitespace value;
     /// otherwise falls back to `~/.config/ce/`.
-    fn config_dir() -> PathBuf {
+    /// Returns an error if neither `CE_CONFIG_DIR` nor `HOME` is set.
+    fn config_dir() -> Result<PathBuf> {
         if let Ok(dir) = std::env::var("CE_CONFIG_DIR") {
             if !dir.trim().is_empty() {
-                return PathBuf::from(dir);
+                return Ok(PathBuf::from(dir));
             }
         }
-        let home = std::env::var("HOME")
-            .expect("HOME environment variable is not set; cannot determine config directory");
-        PathBuf::from(home).join(".config").join("ce")
+        let home = std::env::var("HOME").map_err(|_| {
+            anyhow::anyhow!(
+                "HOME environment variable is not set; cannot determine config directory"
+            )
+        })?;
+        Ok(PathBuf::from(home).join(".config").join("ce"))
     }
 
-    fn session_toml_path() -> PathBuf {
-        Self::config_dir().join("session.toml")
+    fn session_toml_path() -> Result<PathBuf> {
+        Ok(Self::config_dir()?.join("session.toml"))
     }
 }
 
 impl SessionRepository for SessionRepositoryImpl {
     fn get(&self, oj: &OJKind) -> Result<Option<Session>> {
-        let path = Self::session_toml_path();
+        let path = Self::session_toml_path()?;
         get_session_from_path(oj, &path)
     }
 
     fn save(&self, session: &Session) -> Result<()> {
-        let path = Self::session_toml_path();
+        let path = Self::session_toml_path()?;
         save_session_to_path(session, &path)
     }
 
     fn delete(&self, oj: &OJKind) -> Result<bool> {
-        let path = Self::session_toml_path();
+        let path = Self::session_toml_path()?;
         delete_session_from_path(oj, &path)
     }
 }
