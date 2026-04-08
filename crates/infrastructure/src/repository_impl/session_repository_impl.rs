@@ -8,15 +8,17 @@ pub struct SessionRepositoryImpl;
 
 impl SessionRepositoryImpl {
     /// Returns the config directory path.
-    /// Uses the `CE_CONFIG_DIR` environment variable if set; otherwise `~/.config/ce/`.
+    /// Uses the `CE_CONFIG_DIR` environment variable if set to a non-empty, non-whitespace value;
+    /// otherwise falls back to `~/.config/ce/`.
     fn config_dir() -> PathBuf {
         if let Ok(dir) = std::env::var("CE_CONFIG_DIR") {
-            PathBuf::from(dir)
-        } else {
-            let home = std::env::var("HOME")
-                .expect("HOME environment variable is not set; cannot determine config directory");
-            PathBuf::from(home).join(".config").join("ce")
+            if !dir.trim().is_empty() {
+                return PathBuf::from(dir);
+            }
         }
+        let home = std::env::var("HOME")
+            .expect("HOME environment variable is not set; cannot determine config directory");
+        PathBuf::from(home).join(".config").join("ce")
     }
 
     fn session_toml_path() -> PathBuf {
@@ -101,8 +103,13 @@ fn delete_session_from_path(oj: &OJKind, path: &Path) -> Result<bool> {
     if table.is_empty() {
         std::fs::remove_file(path)?;
     } else {
-        let new_contents = toml::to_string(&table)?;
-        std::fs::write(path, new_contents)?;
+        std::fs::write(path, toml::to_string(&table)?)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
     }
 
     Ok(true)
