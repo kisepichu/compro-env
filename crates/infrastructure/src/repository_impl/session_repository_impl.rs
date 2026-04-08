@@ -131,6 +131,29 @@ mod tests {
     use serial_test::serial;
     use std::fs;
 
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     /// Helper: create a Session for AtCoder with the given cookie value.
     fn atcoder_session(cookie: &str) -> Session {
         Session {
@@ -156,7 +179,7 @@ mod tests {
         )
         .expect("failed to write session.toml");
 
-        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         let repo = SessionRepositoryImpl;
         let result = repo
@@ -180,8 +203,7 @@ mod tests {
     #[serial]
     fn get_returns_none_when_file_missing() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
-
-        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         let repo = SessionRepositoryImpl;
         let result = repo
@@ -203,7 +225,7 @@ mod tests {
         fs::write(&config_path, "[atcoder]\nrevel_session = \"some_cookie\"\n")
             .expect("failed to write session.toml");
 
-        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         let repo = SessionRepositoryImpl;
         let result = repo
@@ -224,8 +246,7 @@ mod tests {
     #[serial]
     fn delete_returns_false_when_session_missing() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
-
-        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         let repo = SessionRepositoryImpl;
         let result = repo
@@ -245,8 +266,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let config_path = tmp.path().join("session.toml");
 
-        // Point the impl at the temp directory via environment variable.
-        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         let repo = SessionRepositoryImpl;
         let session = atcoder_session("test_revel_session_value");

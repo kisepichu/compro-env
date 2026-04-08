@@ -132,9 +132,10 @@ pub fn run() -> Result<()> {
 /// Saves the login session for the given OJ using the provided cookie string.
 ///
 /// This is the testable core of the Login command. Returns an error if `cookie`
-/// is empty or whitespace-only.
+/// is empty or whitespace-only. The value is trimmed before being persisted.
 pub fn login_with_io(oj: domain::entity::OJKind, cookie: &str) -> Result<()> {
-    if cookie.trim().is_empty() {
+    let cookie = cookie.trim();
+    if cookie.is_empty() {
         anyhow::bail!("cookie must not be empty");
     }
     let service = Service::new(
@@ -234,12 +235,35 @@ mod tests {
     use domain::entity::OJKind;
     use serial_test::serial;
 
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     /// login_with_io saves the session cookie to session.toml in CE_CONFIG_DIR.
     #[test]
     #[serial]
     fn login_saves_session_to_file() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         login_with_io(OJKind::AtCoder, "my_cookie").expect("login_with_io should succeed");
 
@@ -265,7 +289,7 @@ mod tests {
     #[serial]
     fn login_returns_error_on_empty_cookie() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         let result = login_with_io(OJKind::AtCoder, "");
         assert!(result.is_err(), "expected Err for empty cookie, got Ok");
@@ -282,7 +306,7 @@ mod tests {
         std::fs::write(&session_toml, "[atcoder]\nrevel_session = \"my_cookie\"\n")
             .expect("failed to write session.toml");
 
-        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         let result = logout_with_io(OJKind::AtCoder).expect("logout_with_io should return Ok");
         assert!(result, "expected true when a session was removed");
@@ -297,7 +321,7 @@ mod tests {
     #[serial]
     fn logout_returns_false_when_session_missing() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         assert!(
             !tmp.path().join("session.toml").exists(),
@@ -313,7 +337,7 @@ mod tests {
     #[serial]
     fn whoami_returns_none_when_session_missing() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        std::env::set_var("CE_CONFIG_DIR", tmp.path());
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         // Confirm there is no session file in the temp dir.
         assert!(
