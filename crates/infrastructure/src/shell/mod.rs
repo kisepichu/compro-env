@@ -131,6 +131,17 @@ pub fn run() -> Result<()> {
 
 /// Saves the login session for the given OJ using the provided cookie string.
 ///
+fn build_controller_no_root() -> Controller {
+    let service = Service::new(
+        Box::new(AtCoder),
+        Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
+        Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
+        Box::new(SessionRepositoryImpl),
+        Box::new(ConfigImpl),
+    );
+    Controller::new(service)
+}
+
 /// This is the testable core of the Login command. Returns an error if `cookie`
 /// is empty or whitespace-only. The value is trimmed before being persisted.
 pub fn login_with_io(oj: domain::entity::OJKind, cookie: &str) -> Result<()> {
@@ -138,35 +149,19 @@ pub fn login_with_io(oj: domain::entity::OJKind, cookie: &str) -> Result<()> {
     if cookie.is_empty() {
         anyhow::bail!("cookie must not be empty");
     }
-    let service = Service::new(
-        Box::new(AtCoder),
-        Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
-        Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
-        Box::new(SessionRepositoryImpl),
-        Box::new(ConfigImpl),
-    );
-    let controller = Controller::new(service);
     let input = LoginCommand {
         oj,
         cookie: cookie.to_string(),
     };
-    controller.login(&input)
+    build_controller_no_root().login(&input)
 }
 
 /// Returns the logged-in username for the given OJ, or `None` if no session is saved.
 ///
 /// This is the testable core of the Whoami command.
 pub fn whoami_with_io(oj: domain::entity::OJKind) -> Result<Option<String>> {
-    let service = Service::new(
-        Box::new(AtCoder),
-        Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
-        Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
-        Box::new(SessionRepositoryImpl),
-        Box::new(ConfigImpl),
-    );
-    let controller = Controller::new(service);
     let input = WhoamiCommand { oj };
-    match controller.whoami(&input) {
+    match build_controller_no_root().whoami(&input) {
         Ok(username) => Ok(Some(username)),
         Err(e) => {
             if e.downcast_ref::<domain::error::CeError>()
@@ -186,16 +181,8 @@ pub fn whoami_with_io(oj: domain::entity::OJKind) -> Result<Option<String>> {
 ///
 /// This is the testable core of the Logout command.
 pub fn logout_with_io(oj: domain::entity::OJKind) -> Result<bool> {
-    let service = Service::new(
-        Box::new(AtCoder),
-        Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
-        Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
-        Box::new(SessionRepositoryImpl),
-        Box::new(ConfigImpl),
-    );
-    let controller = Controller::new(service);
     let input = LogoutCommand { oj };
-    controller.logout(&input)
+    build_controller_no_root().logout(&input)
 }
 
 fn build_controller() -> Result<Controller> {

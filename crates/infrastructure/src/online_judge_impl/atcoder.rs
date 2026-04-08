@@ -10,9 +10,7 @@ impl OnlineJudge for AtCoder {
     }
 
     fn whoami(&self, session: &Session) -> Result<String> {
-        let client = reqwest::blocking::Client::builder()
-            .cookie_store(true)
-            .build()?;
+        let client = reqwest::blocking::Client::builder().build()?;
         // Set the REVEL_SESSION cookie before making the request.
         let cookie = format!("REVEL_SESSION={}", session.cookie);
         client
