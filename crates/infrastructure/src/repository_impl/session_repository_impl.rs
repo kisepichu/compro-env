@@ -68,6 +68,13 @@ fn save_session_to_path(session: &Session, path: &Path) -> Result<()> {
     table.insert(section_key.to_string(), toml::Value::Table(section));
 
     std::fs::write(path, toml::to_string(&table)?)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+
     Ok(())
 }
 
