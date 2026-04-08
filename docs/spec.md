@@ -123,8 +123,18 @@ revel_session = "xxxxxxxx"
 
 ### `ce whoami [oj]`
 
+詳細: `docs/commands/whoami.md`
+
 - セッションを読み `OnlineJudge::whoami(&session)` を呼ぶ
-- ユーザー名を表示 or "not logged in"
+- ユーザー名を表示、セッションなしなら `(not logged in)` を表示して exit 0
+
+### `ce logout [oj]`
+
+詳細: `docs/commands/logout.md`
+
+- `SessionRepository::delete(oj)` を呼んでセッションを削除する
+- 削除できた場合: `Logged out from {oj}.` を表示して exit 0
+- セッションがなかった場合: `Already logged out.` を表示して exit 0
 
 ### `ce init <contest_id_or_url>`
 
@@ -225,8 +235,10 @@ trait SolutionRepository {
 }
 
 trait SessionRepository {
-    fn get(&self, oj: OJKind) -> Result<Option<Session>>;
+    fn get(&self, oj: &OJKind) -> Result<Option<Session>>;
     fn save(&self, session: &Session) -> Result<()>;
+    fn delete(&self, oj: &OJKind) -> Result<bool>;
+    // bool: true = deleted, false = was not present
 }
 ```
 
@@ -320,5 +332,6 @@ MVP には含めない。将来のリアルタイムモードで対応。
 
 ### Q14. `ce whoami` のエラーハンドリング → 確定
 
-- session 未設定: "not logged in. Do you want to execute `ce login` now? [y/N]: " と聞く
-- AtCoder 接続失敗: エラー内容を表示して終了
+- session 未設定: `(not logged in)` を表示し `Run \`ce login\` to save your session.` を促す。exit 0
+- セッション切れ (ユーザー名抽出失敗): `session expired. Run \`ce login\` again.` を表示して exit 1
+- AtCoder 接続失敗: エラー内容を表示して exit 1

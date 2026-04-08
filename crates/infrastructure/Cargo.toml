@@ -13,3 +13,7 @@ serde = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", features = ["blocking", "cookies"] }
 toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"
+serial_test = "3"

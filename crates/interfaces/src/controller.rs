@@ -2,7 +2,7 @@ use anyhow::Result;
 use usecases::service::Service;
 
 pub mod input;
-use input::{InitInput, LoginInput, NewInput, SubmitInput, TestInput, WhoamiInput};
+use input::{InitInput, LoginInput, LogoutInput, NewInput, SubmitInput, TestInput, WhoamiInput};
 
 pub struct Controller {
     service: Service,
@@ -19,6 +19,10 @@ impl Controller {
 
     pub fn whoami(&self, args: &dyn WhoamiInput) -> Result<String> {
         self.service.whoami(&args.oj())
+    }
+
+    pub fn logout(&self, args: &dyn LogoutInput) -> Result<bool> {
+        self.service.logout(&args.oj())
     }
 
     pub fn init(&self, args: &dyn InitInput) -> Result<usecases::service::init::InitResult> {
