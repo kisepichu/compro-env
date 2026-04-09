@@ -18,14 +18,35 @@ ce test <contest_id> <problem_code> [solution_name] [--lang <lang>]
 ## 挙動
 
 1. `solutions/{contest_id}/testcases/{problem_code}/` からテストケースを読む
-2. config のテストコマンドを実行する:
-   ```toml
-   [language.rust]
-   test = "cargo test -p {problem}"
-   ```
-   - `{problem}` → problem_code に置換
-   - `{file}` → 解法ファイルの絶対パスに置換
-3. 結果を表示する (MVP: シンプルなパス/フェイル表示、将来: カラー AC/WA/TLE)
+2. config のテストコマンドをテストケースごとに実行する:
+   - コマンド内のプレースホルダーを置換して実行
+   - 標準出力を `expected` と照合する
+3. 結果を表示する
+
+## テストコマンドのプレースホルダー
+
+| プレースホルダー | 内容 |
+| --- | --- |
+| `{problem}` | problem_code (例: `a`) |
+| `{solution}` | solution_name (例: `main`) |
+| `{file}` | 解法ファイルの絶対パス (`solution_file` で設定) |
+| `{input}` | テストケースの入力内容 (テストケースごとに展開・実行) |
+
+`{input}` を含むコマンドはテストケース 1 件ずつ実行される。
+
+### config 例
+
+```toml
+[language.rust]
+solution_file = "src/main.rs"
+test = "cargo test -p {problem}-{solution}"
+
+[language.cpp]
+solution_file = "main.cpp"
+test = "g++ {file} -o /tmp/ce_bin && echo '{input}' | /tmp/ce_bin"
+```
+
+Rust の `cargo test` はテストケースを stdin/stdout で扱わないため、テンプレートにテストケースを展開するロジックを含む場合に使う。C++ のように stdin/stdout で動作させる場合は `{input}` を用いる。
 
 ## 出力形式 (MVP)
 
@@ -47,4 +68,5 @@ ce test <contest_id> <problem_code> [solution_name] [--lang <lang>]
 ## 将来拡張
 
 - カラー表示 (AC: 緑、WA: 赤、TLE: 黄)
-- TLE 判定 (time_limit を testcase メタデータから取得)
+- TLE 判定 (time_limit をテストケースメタデータから取得)
+- `{input_format}` プレースホルダー (入力形式から自動コード生成、形式は未定)

@@ -11,10 +11,15 @@ compro-env/                         ← リポジトリルート
   config.toml                       ← プロジェクトローカル設定 (optional, global を上書き)
   templates/
     rust/
-      src/main.rs
-      Cargo.toml                    ← {problem_code} プレースホルダあり
+      Cargo.toml.tera               ← コンテストレベル (workspace members を全解法分列挙)
+      __problem__/                  ← 問題ごとに展開 → {problem.code}/
+        __solution__/               ← 解法ごとに展開 → {solution.name}/
+          Cargo.toml.tera           ← name = "{{problem.code}}-{{solution.name}}"
+          src/main.rs
     cpp/
-      main.cpp
+      __problem__/
+        __solution__/
+          main.cpp
   solutions/
     {contest_id}/
       .ce.toml                      ← OJ 情報を保存 (ce init 時に生成)
@@ -22,7 +27,7 @@ compro-env/                         ← リポジトリルート
         {problem_code}/             1文字固定でない (ex, practice_2 等あり)
           1.in  1.out  2.in  2.out
       {lang}/                       rust / cpp / ...
-        Cargo.toml                  ← Rust: contest レベル workspace
+        Cargo.toml                  ← Rust: contest レベル workspace (テンプレートから生成)
         Cargo.lock
         {problem_code}/
           {solution_name}/          デフォルト: main
@@ -35,9 +40,19 @@ compro-env/                         ← リポジトリルート
 ```toml
 online_judge = "atcoder"
 contest_id = "abc334"
+
+[[problems]]
+code = "a"
+title = "Product"
+
+[[problems]]
+code = "b"
+title = "ABC"
 ```
 
 `ce test` / `ce sub` 時に OJ を特定するために必須。プレフィックス判定だけでは `xyz999` 等に対応不可。
+`problems` は `ContestRepository::get()` で `Contest` ドメインオブジェクトとして再構築するために保存する。
+`ce init` 時に生成し、以降は上書きしない。
 
 ### Cargo package name 規則
 
@@ -87,7 +102,6 @@ language = "rust"
 solution_file = "src/main.rs"
 test = "cargo test -p {problem}-{solution}"
 run = "cargo run -p {problem}-{solution}"
-submit_file = "src/main.rs"
 submit_preprocess = ""
 
 [language.rust.atcoder]
@@ -96,7 +110,6 @@ lang_id = "5054"
 [language.cpp]
 solution_file = "main.cpp"
 test = "g++ {file} -o /tmp/ce_bin && echo '{input}' | /tmp/ce_bin"
-submit_file = "main.cpp"
 
 [language.cpp.atcoder]
 lang_id = "5001"
@@ -140,9 +153,11 @@ revel_session = "xxxxxxxx"
 
 詳細: `docs/commands/init.md`
 
-### `ce new <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+### `ce solution <subcommand>`
 
-詳細: `docs/commands/new.md`
+詳細: `docs/commands/solution.md`
+
+サブコマンド: `new` (将来: `rename` 等)
 
 ### `ce test <contest_id> <problem_code> [solution_name] [--lang <lang>]`
 
@@ -162,7 +177,7 @@ revel_session = "xxxxxxxx"
 ## OJ 判定ロジック
 
 ```
-"abc334"     → "abc"/"arc"/"ahc" プレフィックス → AtCoder
+"abc334"     → "abc"/"arc"/"agc"/"ahc" プレフィックス → AtCoder
 "aoj0000"    → "aoj" プレフィックス → AOJ (将来)
 "https://atcoder.jp/contests/abc334" → URL パース → AtCoder, id="abc334"
 "xyz999"     → 不明 → stdin: "OJ を選んでください [atcoder]: "
@@ -220,17 +235,19 @@ trait ContestRepository {
     fn exists_unstarted(&self, contest_id: &str) -> Result<bool>;
     fn create_unstarted(&self, contest_id: &str) -> Result<()>;
     fn create(&self, contest: &Contest) -> Result<()>;
-    // ↑ .ce.toml 生成 + testcase ファイル保存を含む
-    fn get_oj_kind(&self, contest_id: &str) -> Result<OJKind>;
+    // ↑ .ce.toml 生成 (problems 含む) + testcase ファイル保存を含む
+    fn get(&self, contest_id: &str) -> Result<Contest>;
+    // ↑ .ce.toml から Contest ドメインオブジェクトを再構築 (samples は空)
     fn get_samples(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Sample>>;
-    fn list_problem_codes(&self, contest_id: &str) -> Result<Vec<String>>;
 }
 
 trait SolutionRepository {
     fn list(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Solution>>;
     fn exists(&self, contest_id: &str, problem_code: &str, name: &str, lang: &Language) -> Result<bool>;
     fn create(&self, solution: &Solution) -> Result<()>;
-    // ↑ ディレクトリ + テンプレート展開 + Cargo.toml members 更新を含む
+    // ↑ __solution__/ 展開のみ。contest-level 再レンダリングは含まない
+    fn sync_contest_templates(&self, contest: &Contest, lang: &Language) -> Result<()>;
+    // ↑ contest-level .tera を再レンダリング。problem.solutions のみ infra 層でファイルシステムスキャン
     fn get_source(&self, solution: &Solution) -> Result<String>;
 }
 
@@ -290,8 +307,9 @@ usecases/
   service/
     login.rs      SessionRepository::save()
     whoami.rs     OnlineJudge::whoami()
-    init.rs       OnlineJudge::get_problems_detail() + ContestRepository::create() + SolutionRepository::create()
-    new.rs        SolutionRepository::create()
+    init.rs       OnlineJudge::get_problems_detail() + ContestRepository::create() + SolutionRepository::create() × N + SolutionRepository::sync_contest_templates(&contest, lang)
+    solution/
+      new.rs      ContestRepository::get() + SolutionRepository::create() + SolutionRepository::sync_contest_templates(&contest, lang)
     test.rs       ContestRepository::get_samples() + Config (test command)
     submit.rs     SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::submit()
 
@@ -302,7 +320,7 @@ interfaces/
 infrastructure/
   repository_impl/
     contest_repository_impl.rs
-    solution_repository_impl.rs   ← Cargo.toml members 更新含む
+    solution_repository_impl.rs   ← テンプレート展開・コンテストレベル .tera 再レンダリング含む
     session_repository_impl.rs
   online_judge_impl/
     atcoder/

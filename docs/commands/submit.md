@@ -20,10 +20,10 @@ ce sub <contest_id> <problem_code> [solution_name] [--lang <lang>]
 
 1. 解法ファイルのパスを決定する:
    ```
-   solutions/{contest_id}/{lang}/{problem_code}/{solution_name}/{submit_file}
+   solutions/{contest_id}/{lang}/{problem_code}/{solution_name}/{solution_file}
    ```
-   - `submit_file` は config の `language.{lang}.submit_file`
-2. config の `submit_preprocess` コマンドがあれば実行する (バンドル等)
+   - `solution_file` は config の `language.{lang}.solution_file`
+2. config の `submit_preprocess` コマンドがあれば実行する (バンドル等、処理結果を提出内容とする)
 3. セッション (`~/.config/ce/session.toml`) を読む
 4. OJ の提出 API に送信する
 5. 提出 URL を表示する
