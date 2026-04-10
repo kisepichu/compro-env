@@ -129,8 +129,8 @@ pub fn run() -> Result<()> {
     }
 }
 
-/// Saves the login session for the given OJ using the provided cookie string.
-///
+/// Builds a `Controller` wired with all infrastructure implementations,
+/// without requiring a project root (suitable for login/whoami/logout).
 fn build_controller_no_root() -> Controller {
     let service = Service::new(
         Box::new(AtCoder),
