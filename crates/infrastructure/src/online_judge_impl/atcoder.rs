@@ -51,60 +51,45 @@ impl OnlineJudge for AtCoder {
 }
 
 fn parse_username_from_html(html: &str) -> Option<String> {
-    // Look for an <a> tag that has BOTH class="username" AND href="/users/{username}".
-    // This is specific to the logged-in user's nav element and avoids false matches
-    // with arbitrary profile links elsewhere on the page (e.g. recent submissions).
-    let href_marker = r#"href="/users/"#;
-    let class_marker = r#"class="username""#;
-
-    let mut pos = 0;
-    while pos < html.len() {
-        let Some(rel) = html[pos..].find("<a ") else {
-            break;
-        };
-        let tag_start = pos + rel;
-        let Some(rel_end) = html[tag_start..].find('>') else {
-            break;
-        };
-        let tag = &html[tag_start..tag_start + rel_end + 1];
-
-        if tag.contains(class_marker) {
-            if let Some(href_pos) = tag.find(href_marker) {
-                let after = &tag[href_pos + href_marker.len()..];
-                if let Some(end) = after.find('"') {
-                    let username = &after[..end];
-                    if !username.is_empty() {
-                        return Some(username.to_string());
-                    }
-                }
-            }
-        }
-
-        pos = tag_start + rel_end + 1;
+    // AtCoder injects the logged-in username as a JavaScript variable near the
+    // top of every page: `var userScreenName = "alice";` when logged in, or
+    // `var userScreenName = "";` when not. This is more reliable than scraping
+    // the navbar HTML, which changed structure over time.
+    let marker = "var userScreenName = \"";
+    let pos = html.find(marker)?;
+    let after = &html[pos + marker.len()..];
+    let end = after.find('"')?;
+    let username = &after[..end];
+    if username.is_empty() {
+        None
+    } else {
+        Some(username.to_string())
     }
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Simulate the logged-in AtCoder page.
+    /// AtCoder injects `var userScreenName = "alice";` in the <head> when
+    /// logged in. The page body also has ranking user links that must not
+    /// be picked up.
     fn logged_in_html(username: &str) -> String {
         format!(
             r#"<!DOCTYPE html>
 <html>
-<head><title>AtCoder</title></head>
+<head>
+<script>
+var userScreenName = "{username}";
+</script>
+</head>
 <body>
-<nav class="navbar">
-  <div class="container">
-    <ul class="nav navbar-nav navbar-right">
-      <li><a href="/users/{username}" class="username"><span class="user-gray">{username}</span></a></li>
-      <li><a href="/logout">Sign Out</a></li>
-    </ul>
-  </div>
-</nav>
 <div class="container">
-  <h1>AtCoder Home</h1>
+  <table>
+    <tr><td><a href="/users/tourist" class="username"><span class="user-red">tourist</span></a></td></tr>
+    <tr><td><a href="/users/ksun48" class="username"><span class="user-red">ksun48</span></a></td></tr>
+  </table>
 </div>
 </body>
 </html>"#,
@@ -112,20 +97,23 @@ mod tests {
         )
     }
 
+    /// Simulate the unauthenticated AtCoder page.
+    /// `var userScreenName = "";` (empty string) when not logged in.
+    /// Page body still has user links from rankings.
     fn not_logged_in_html() -> String {
         r#"<!DOCTYPE html>
 <html>
-<head><title>AtCoder</title></head>
+<head>
+<script>
+var userScreenName = "";
+</script>
+</head>
 <body>
-<nav class="navbar">
-  <div class="container">
-    <ul class="nav navbar-nav navbar-right">
-      <li><a href="/login">Sign In</a></li>
-    </ul>
-  </div>
-</nav>
 <div class="container">
-  <h1>AtCoder Home</h1>
+  <table>
+    <tr><td><a href="/users/tourist" class="username"><span class="user-red">tourist</span></a></td></tr>
+    <tr><td><a href="/users/ksun48" class="username"><span class="user-red">ksun48</span></a></td></tr>
+  </table>
 </div>
 </body>
 </html>"#
@@ -144,5 +132,14 @@ mod tests {
         let html = not_logged_in_html();
         let result = parse_username_from_html(&html);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn parse_username_ignores_ranking_users() {
+        // tourist appears in the ranking section but must not be picked up
+        // when logged in as a different user.
+        let html = logged_in_html("kisepichu");
+        let result = parse_username_from_html(&html);
+        assert_eq!(result, Some("kisepichu".to_string()));
     }
 }
