@@ -73,8 +73,8 @@ mod tests {
 
     /// Simulate the logged-in AtCoder page.
     /// AtCoder injects `var userScreenName = "alice";` in the <head> when
-    /// logged in. The page body also has ranking user links that must not
-    /// be picked up.
+    /// logged in. The page body includes ranking user links that must not
+    /// shadow the logged-in user.
     fn logged_in_html(username: &str) -> String {
         format!(
             r#"<!DOCTYPE html>
@@ -87,8 +87,8 @@ var userScreenName = "{username}";
 <body>
 <div class="container">
   <table>
-    <tr><td><a href="/users/tourist" class="username"><span class="user-red">tourist</span></a></td></tr>
-    <tr><td><a href="/users/ksun48" class="username"><span class="user-red">ksun48</span></a></td></tr>
+    <tr><td><a href="/users/highly_ranked_user" class="username"><span class="user-red">highly_ranked_user</span></a></td></tr>
+    <tr><td><a href="/users/another_ranked_user" class="username"><span class="user-red">another_ranked_user</span></a></td></tr>
   </table>
 </div>
 </body>
@@ -111,8 +111,8 @@ var userScreenName = "";
 <body>
 <div class="container">
   <table>
-    <tr><td><a href="/users/tourist" class="username"><span class="user-red">tourist</span></a></td></tr>
-    <tr><td><a href="/users/ksun48" class="username"><span class="user-red">ksun48</span></a></td></tr>
+    <tr><td><a href="/users/highly_ranked_user" class="username"><span class="user-red">highly_ranked_user</span></a></td></tr>
+    <tr><td><a href="/users/another_ranked_user" class="username"><span class="user-red">another_ranked_user</span></a></td></tr>
   </table>
 </div>
 </body>
@@ -122,6 +122,8 @@ var userScreenName = "";
 
     #[test]
     fn parse_username_returns_username_when_logged_in() {
+        // The fixture includes ranking user links that must not shadow the
+        // logged-in user extracted from userScreenName.
         let html = logged_in_html("kisepichu");
         let result = parse_username_from_html(&html);
         assert_eq!(result, Some("kisepichu".to_string()));
@@ -132,14 +134,5 @@ var userScreenName = "";
         let html = not_logged_in_html();
         let result = parse_username_from_html(&html);
         assert_eq!(result, None);
-    }
-
-    #[test]
-    fn parse_username_ignores_ranking_users() {
-        // tourist appears in the ranking section but must not be picked up
-        // when logged in as a different user.
-        let html = logged_in_html("kisepichu");
-        let result = parse_username_from_html(&html);
-        assert_eq!(result, Some("kisepichu".to_string()));
     }
 }
