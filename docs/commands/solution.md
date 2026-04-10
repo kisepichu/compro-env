@@ -6,12 +6,12 @@
 
 ## サブコマンド
 
-- `ce solution new` — 解法ディレクトリを追加する
+- `ce solution add` — 解法ディレクトリを追加する
 - (将来) `ce solution rename` — 解法名を変更する
 
 ---
 
-# ce solution new
+# ce solution add
 
 ## 概要
 
@@ -20,7 +20,7 @@
 ## シグネチャ
 
 ```
-ce solution new <contest_id> <problem_code> [solution_name] [--lang <lang>]
+ce solution add <contest_id> <problem_code> [solution_name] --lang <lang>
 ```
 
 - `contest_id`: コンテスト ID (例: `abc334`)
@@ -32,16 +32,21 @@ ce solution new <contest_id> <problem_code> [solution_name] [--lang <lang>]
 
 1. `ContestRepository::get(contest_id)` で `Contest` を取得する
 2. `SolutionRepository::create(&solution)` を呼ぶ
-   - `templates/{lang}/__problem__/__solution__/` を `{problem_code}/{solution_name}/` として展開
-   - 既に存在するファイルはスキップ
-3. `SolutionRepository::sync_contest_templates(&contest, lang)` を呼ぶ
-   - contest-level `.tera` ファイルを再レンダリング
-4. 作成したパスを表示する
+   - `templates/{lang}/` を `solutions/{contest_id}/{problem_code}/{solution_name}/` として展開
+   - 既に同名ディレクトリが存在する場合はエラー
+3. 作成したパスを表示する
+
+## 出力形式
+
+```
+Created solutions/abc334/a/sol2 (rust)
+```
 
 ## エラーケース
 
 - 対象ディレクトリが既に存在する: エラーメッセージを表示して終了
 - `contest_id` に対応するコンテストがない: `ce init` を先に実行するよう促す
+- `lang` に対応するテンプレートが存在しない: テンプレートパスを示してエラー終了
 
 ## 未決事項
 

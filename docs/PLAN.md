@@ -22,13 +22,13 @@
 | MVP スコープ | login, init, test, submit |
 | AtCoder ログイン | `REVEL_SESSION` 手動コピー (aclogin 方式を自前実装) |
 | oj 連携 | なし (Cloudflare Turnstile で破綻中) |
-| ディレクトリ構造 | `solutions/{contest_id}/{lang}/{problem_code}/{solution_name}/` |
+| ディレクトリ構造 | `solutions/{contest_id}/{problem_code}/{solution_name}/` |
 | テストケース置き場 | `solutions/{contest_id}/testcases/{problem_code}/` (言語共通) |
 | solution_name デフォルト | `main` |
 | init の挙動 | サンプル取得 + ディレクトリ作成 (MVP)。テスト生成は将来 |
 | OJ 判定 | プレフィックスで自動判定 + URL 対応 + 不明時は stdin |
 | コンフィグ | グローバル `~/.config/ce/` + プロジェクトローカル 2 段階 |
-| Rust Cargo 構成 | コンテストレベル workspace、問題ごとに package |
+| テンプレート | `templates/{lang}/` が解法ディレクトリ 1 つ分のテンプレート。言語はユーザー追加可能 |
 | エラー設計 | `anyhow` + `thiserror`、型パラメータなし |
 | コンテキスト検出 | カレントディレクトリから `contest_id` を自動検出 |
 

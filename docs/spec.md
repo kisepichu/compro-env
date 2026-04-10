@@ -10,29 +10,19 @@
 compro-env/                         ← リポジトリルート
   config.toml                       ← プロジェクトローカル設定 (optional, global を上書き)
   templates/
-    rust/
-      Cargo.toml.tera               ← コンテストレベル (workspace members を全解法分列挙)
-      __problem__/                  ← 問題ごとに展開 → {problem.code}/
-        __solution__/               ← 解法ごとに展開 → {solution.name}/
-          Cargo.toml.tera           ← name = "{{problem.code}}-{{solution.name}}"
-          src/main.rs
-    cpp/
-      __problem__/
-        __solution__/
-          main.cpp
+    rust/                           ← 解法ディレクトリのテンプレート (ユーザーが言語を追加可能)
+      Cargo.toml.tera               ← [package] name = "{{problem.code}}-{{solution.name}}"
+      src/main.rs
   solutions/
     {contest_id}/
-      .ce.toml                      ← OJ 情報を保存 (ce init 時に生成)
+      .ce.toml                      ← OJ 情報を保存 (ce init 時に生成、以降上書きしない)
       testcases/
         {problem_code}/             1文字固定でない (ex, practice_2 等あり)
           1.in  1.out  2.in  2.out
-      {lang}/                       rust / cpp / ...
-        Cargo.toml                  ← Rust: contest レベル workspace (テンプレートから生成)
-        Cargo.lock
-        {problem_code}/
-          {solution_name}/          デフォルト: main
-            Cargo.toml              ← name = "{problem_code}-{solution_name}"  ★注意
-            src/main.rs
+      {problem_code}/
+        {solution_name}/            デフォルト: main
+          Cargo.toml                ← name = "{problem_code}-{solution_name}"  ★注意
+          src/main.rs
 ```
 
 ### .ce.toml の内容
@@ -52,40 +42,17 @@ title = "ABC"
 
 `ce test` / `ce sub` 時に OJ を特定するために必須。プレフィックス判定だけでは `xyz999` 等に対応不可。
 `problems` は `ContestRepository::get()` で `Contest` ドメインオブジェクトとして再構築するために保存する。
-`ce init` 時に生成し、以降は上書きしない。
+`ce init` 時に生成し、以降は上書きしない。samples は testcases/ にファイルとして保存するため `.ce.toml` には含まない。
 
 ### Cargo package name 規則
 
-同一 workspace 内で package name が衝突するため、常に `{problem_code}-{solution_name}` を使う。
+同一 workspace を使わない場合でも、ディレクトリ名が衝突したときのため `{problem_code}-{solution_name}` を package name に使う。
 
 | ディレクトリ | package name |
 | ------------ | ------------ |
 | `a/main/`    | `a-main`     |
 | `a/sol2/`    | `a-sol2`     |
 | `ex/main/`   | `ex-main`    |
-
-`ce test a` → 内部で `cargo test -p a-main`
-
----
-
-## Cargo 構成 (Rust)
-
-```
-solutions/abc334/rust/
-  Cargo.toml    ← [workspace] members = ["a/main", "a/sol2", "b/main", ...]
-  Cargo.lock
-  a/
-    main/
-      Cargo.toml  ← [package] name = "a-main"
-      src/main.rs
-    sol2/
-      Cargo.toml  ← [package] name = "a-sol2"
-      src/main.rs
-  b/
-    main/
-      Cargo.toml  ← [package] name = "b-main"
-      src/main.rs
-```
 
 ---
 
@@ -100,20 +67,15 @@ language = "rust"
 
 [language.rust]
 solution_file = "src/main.rs"
-test = "cargo test -p {problem}-{solution}"
-run = "cargo run -p {problem}-{solution}"
+test = "cargo run --manifest-path {dir}/Cargo.toml < {input_file}"
 submit_preprocess = ""
 
 [language.rust.atcoder]
 lang_id = "5054"
-
-[language.cpp]
-solution_file = "main.cpp"
-test = "g++ {file} -o /tmp/ce_bin && echo '{input}' | /tmp/ce_bin"
-
-[language.cpp.atcoder]
-lang_id = "5001"
 ```
+
+`{dir}` は解法ディレクトリの絶対パス、`{input_file}` はテストケース入力ファイルの絶対パス。  
+言語はユーザーが自由に追加できる。`[language.{name}]` セクションを追加するだけで `ce` が認識する。
 
 ### プロジェクトローカル: `compro-env/config.toml` (任意)
 
@@ -157,7 +119,7 @@ revel_session = "xxxxxxxx"
 
 詳細: `docs/commands/solution.md`
 
-サブコマンド: `new` (将来: `rename` 等)
+サブコマンド: `add` (将来: `rename` 等)
 
 ### `ce test <contest_id> <problem_code> [solution_name] [--lang <lang>]`
 
@@ -222,7 +184,7 @@ Language                            ← Value Object (enum)
   Rust | Cpp | ...
 ```
 
-`Solution.path` は `SolutionRepository` がプロジェクトルートを保持し、そこからの相対で導出。
+`Solution.path` は `SolutionRepository` がプロジェクトルートを保持し、そこからの相対で導出。  
 `IOSpec` は MVP スコープ外。
 
 ---
@@ -235,19 +197,18 @@ trait ContestRepository {
     fn exists_unstarted(&self, contest_id: &str) -> Result<bool>;
     fn create_unstarted(&self, contest_id: &str) -> Result<()>;
     fn create(&self, contest: &Contest) -> Result<()>;
-    // ↑ .ce.toml 生成 (problems 含む) + testcase ファイル保存を含む
+    // .ce.toml 生成 (problems 含む、samples は除く) + testcase ファイル保存
     fn get(&self, contest_id: &str) -> Result<Contest>;
-    // ↑ .ce.toml から Contest ドメインオブジェクトを再構築 (samples は空)
+    // .ce.toml から Contest ドメインオブジェクトを再構築。samples は populate しない
     fn get_samples(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Sample>>;
 }
 
 trait SolutionRepository {
     fn list(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Solution>>;
-    fn exists(&self, contest_id: &str, problem_code: &str, name: &str, lang: &Language) -> Result<bool>;
+    fn exists(&self, solution: &Solution) -> Result<bool>;
     fn create(&self, solution: &Solution) -> Result<()>;
-    // ↑ __solution__/ 展開のみ。contest-level 再レンダリングは含まない
-    fn sync_contest_templates(&self, contest: &Contest, lang: &Language) -> Result<()>;
-    // ↑ contest-level .tera を再レンダリング。problem.solutions のみ infra 層でファイルシステムスキャン
+    // templates/{lang}/ を solutions/{contest_id}/{problem_code}/{solution_name}/ に展開
+    // 既存ファイルはスキップ
     fn get_source(&self, solution: &Solution) -> Result<String>;
 }
 
@@ -262,7 +223,7 @@ trait SessionRepository {
 責務の境界:
 
 - `ContestRepository`: コンテストディレクトリ・`.ce.toml`・testcase ファイルを管理
-- `SolutionRepository`: 解法ディレクトリ・ソースファイル・Rust workspace を管理
+- `SolutionRepository`: 解法ディレクトリ・ソースファイルを管理 (テンプレート展開含む)
 - `SessionRepository`: `~/.config/ce/session.toml` を管理
 
 ---
@@ -273,6 +234,7 @@ trait SessionRepository {
 trait OnlineJudge {
     fn name(&self) -> &str;
     fn whoami(&self, session: &Session) -> Result<String>;
+    fn get_start_time(&self, contest_id: &str) -> Result<DateTime<Utc>>;
     fn get_problems_detail(&self, contest_id: &str, session: Option<&Session>) -> Result<Vec<Problem>>;
     fn submit(
         &self,
@@ -282,12 +244,12 @@ trait OnlineJudge {
         source: &str,
         session: &Session,
     ) -> Result<SubmitResult>;
-    fn wait_for_start(&self, contest_id: &str) -> Result<()>;
 }
 ```
 
-`login(username, password)` は不要 (手動クッキー方式のため削除)。
-`get_problems_detail` は公開コンテストなら session 不要 (`Option<&Session>`)。
+`login(username, password)` は不要 (手動クッキー方式のため削除)。  
+`get_problems_detail` は公開コンテストなら session 不要 (`Option<&Session>`)。  
+コンテスト開始待機ロジック (ポーリング・カウントダウン表示) は `usecases/service/init.rs` に実装し、`get_start_time` で取得した時刻をもとに制御する。OJ 固有ロジックは含まない。
 
 ---
 
@@ -307,9 +269,10 @@ usecases/
   service/
     login.rs      SessionRepository::save()
     whoami.rs     OnlineJudge::whoami()
-    init.rs       OnlineJudge::get_problems_detail() + ContestRepository::create() + SolutionRepository::create() × N + SolutionRepository::sync_contest_templates(&contest, lang)
+    init.rs       OnlineJudge::get_start_time() + 待機ループ + OnlineJudge::get_problems_detail()
+                  + ContestRepository::create() + SolutionRepository::create() × N
     solution/
-      new.rs      ContestRepository::get() + SolutionRepository::create() + SolutionRepository::sync_contest_templates(&contest, lang)
+      add.rs      ContestRepository::get() + SolutionRepository::create()
     test.rs       ContestRepository::get_samples() + Config (test command)
     submit.rs     SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::submit()
 
@@ -320,7 +283,7 @@ interfaces/
 infrastructure/
   repository_impl/
     contest_repository_impl.rs
-    solution_repository_impl.rs   ← テンプレート展開・コンテストレベル .tera 再レンダリング含む
+    solution_repository_impl.rs   ← テンプレート展開含む
     session_repository_impl.rs
   online_judge_impl/
     atcoder/
@@ -337,7 +300,7 @@ infrastructure/
 
 ### Q11. `Solution.path` の導出
 
-`SolutionRepository` がプロジェクトルートパスを持ち、`solution.contest_id / lang / problem_code / name` から導出する設計で OK?
+`SolutionRepository` がプロジェクトルートパスを持ち、`solution.contest_id / problem_code / name` から導出する設計で OK?
 
 ### Q12. `ce test` の出力形式
 

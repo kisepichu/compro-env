@@ -20,7 +20,7 @@ ce sub <contest_id> <problem_code> [solution_name] [--lang <lang>]
 
 1. 解法ファイルのパスを決定する:
    ```
-   solutions/{contest_id}/{lang}/{problem_code}/{solution_name}/{solution_file}
+   solutions/{contest_id}/{problem_code}/{solution_name}/{solution_file}
    ```
    - `solution_file` は config の `language.{lang}.solution_file`
 2. config の `submit_preprocess` コマンドがあれば実行する (バンドル等、処理結果を提出内容とする)

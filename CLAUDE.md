@@ -30,9 +30,9 @@ infrastructure/ 実装 (AtCoder HTTP, filesystem, clap エントリポイント)
 ## ディレクトリ構造 (solutions/)
 
 ```
-solutions/{contest_id}/{lang}/{problem_code}/{solution_name}/
+solutions/{contest_id}/{problem_code}/{solution_name}/
 solutions/{contest_id}/testcases/{problem_code}/  ← 言語共通
-templates/{lang}/                                  ← ce init 用テンプレート
+templates/{lang}/                                  ← 解法ディレクトリのテンプレート (言語はユーザーが追加可能)
 ```
 
 ## 開発ワークフロー
