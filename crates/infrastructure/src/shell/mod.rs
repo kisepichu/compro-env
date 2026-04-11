@@ -2,7 +2,8 @@ pub mod commands;
 
 use anyhow::Result;
 use clap::Parser;
-use commands::{Cli, LoginCommand, LogoutCommand, WhoamiCommand};
+use commands::{Cli, InitCommand, LoginCommand, LogoutCommand, WhoamiCommand};
+use domain::entity::OJKind;
 
 use crate::{
     config_impl::ConfigImpl,
@@ -95,9 +96,15 @@ pub fn run() -> Result<()> {
             Ok(())
         }
         // These commands require a project root.
-        commands::Commands::Init { contest: _ } => {
-            let _controller = build_controller()?;
-            todo!()
+        commands::Commands::Init { contest, lang } => {
+            match init_with_io(&contest, lang.as_deref()) {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            Ok(())
         }
         commands::Commands::New {
             contest: _,
@@ -183,6 +190,124 @@ pub fn whoami_with_io(oj: domain::entity::OJKind) -> Result<Option<String>> {
 pub fn logout_with_io(oj: domain::entity::OJKind) -> Result<bool> {
     let input = LogoutCommand { oj };
     build_controller_no_root().logout(&input)
+}
+
+/// Parses a contest input string (contest ID or URL) into an (OJKind, contest_id) pair.
+///
+/// Handles:
+/// - AtCoder URL: "https://atcoder.jp/contests/{id}" → (AtCoder, id)
+/// - Contest ID prefix (abc/arc/agc/ahc): "abc334" → (AtCoder, "abc334")
+/// - Unknown input: None
+fn parse_contest_input(input: &str) -> Option<(OJKind, String)> {
+    const ATCODER_URL_PREFIX: &str = "https://atcoder.jp/contests/";
+    if let Some(rest) = input.strip_prefix(ATCODER_URL_PREFIX) {
+        // Take only the first path segment (ignore trailing slashes or extra paths)
+        let contest_id = rest.trim_end_matches('/').split('/').next()?;
+        if contest_id.is_empty() {
+            return None;
+        }
+        return Some((OJKind::AtCoder, contest_id.to_string()));
+    }
+    if let Some(oj) = OJKind::from_contest_id_prefix(input) {
+        return Some((oj, input.to_lowercase()));
+    }
+    None
+}
+
+/// Initializes a contest from a contest ID or URL string.
+///
+/// Parses the input, detects OJ kind and contest_id, reads the default language from config
+/// (or uses `lang_override` when provided), validates it against templates/, and calls the
+/// controller init.
+pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<()> {
+    let (oj, contest_id) = match parse_contest_input(contest_input) {
+        Some(pair) => pair,
+        None => {
+            // Unknown contest ID — prompt for OJ
+            print!("OJ (e.g. atcoder): ");
+            use std::io::Write as _;
+            std::io::stdout().flush()?;
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            let oj_str = line.trim();
+            let oj_str = if oj_str.is_empty() { "atcoder" } else { oj_str };
+            let oj = oj_str
+                .parse::<OJKind>()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            (oj, contest_input.to_string())
+        }
+    };
+
+    let language = if let Some(lang) = lang_override {
+        domain::entity::Language::new(lang)
+    } else {
+        match ConfigImpl.default_language() {
+            Ok(lang) => lang,
+            Err(_) => {
+                // prompt stdin
+                print!("Language (e.g. rust, cpp): ");
+                use std::io::Write as _;
+                std::io::stdout().flush()?;
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                let s = line.trim();
+                if s.is_empty() {
+                    anyhow::bail!("language must not be empty");
+                }
+                domain::entity::Language::new(s)
+            }
+        }
+    };
+
+    let root = find_project_root()?;
+    let tmpl_dir = root.join("templates").join(language.as_str());
+    if !tmpl_dir.is_dir() {
+        let available: Vec<String> = std::fs::read_dir(root.join("templates"))
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        anyhow::bail!(
+            "unknown language \"{}\". Available: {}",
+            language.as_str(),
+            available.join(", ")
+        );
+    }
+
+    let result = build_controller()?.init(&InitCommand {
+        contest_id: contest_id.clone(),
+        oj: oj.clone(),
+        language: language.clone(),
+    })?;
+
+    let n_problems = result.created_solutions.len();
+    let problem_codes: Vec<&str> = result
+        .created_solutions
+        .iter()
+        .map(|s| s.problem_code.as_str())
+        .collect();
+    let first_code = problem_codes.first().copied().unwrap_or("");
+    let last_code = problem_codes.last().copied().unwrap_or("");
+
+    // Format OJ display name (capitalize first letter)
+    let oj_display = match &result.oj_kind {
+        OJKind::AtCoder => "AtCoder",
+    };
+
+    println!(
+        "Initialized {contest_id} ({oj_display}) — {n_problems} problems: {}",
+        problem_codes.join(" ")
+    );
+    println!("  testcases   {} files", result.total_sample_files);
+    println!(
+        "  {lang}      {n_problems} solutions ({first_code}/main … {last_code}/main)",
+        lang = language
+    );
+
+    Ok(())
 }
 
 fn build_controller() -> Result<Controller> {
@@ -317,6 +442,104 @@ mod tests {
 
         let result = logout_with_io(OJKind::AtCoder).expect("logout_with_io should return Ok");
         assert!(!result, "expected false when no session was present");
+    }
+
+    /// parse_contest_input correctly identifies an AtCoder contest ID by prefix.
+    #[test]
+    fn parse_contest_input_handles_atcoder_id() {
+        let result = parse_contest_input("abc334");
+        assert_eq!(result, Some((OJKind::AtCoder, "abc334".to_string())));
+    }
+
+    /// parse_contest_input correctly parses an AtCoder contest URL.
+    #[test]
+    fn parse_contest_input_handles_atcoder_url() {
+        let result = parse_contest_input("https://atcoder.jp/contests/abc334");
+        assert_eq!(result, Some((OJKind::AtCoder, "abc334".to_string())));
+    }
+
+    /// parse_contest_input returns None for an unknown contest ID.
+    #[test]
+    fn parse_contest_input_returns_none_for_unknown() {
+        let result = parse_contest_input("xyz123");
+        assert_eq!(result, None);
+    }
+
+    /// RAII guard that restores the current working directory on drop.
+    struct CwdGuard(std::path::PathBuf);
+
+    impl CwdGuard {
+        fn new() -> Self {
+            Self(std::env::current_dir().expect("failed to get cwd"))
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+
+    /// init_with_io accepts a valid lang_override without producing a language error.
+    ///
+    /// The call will fail deeper (no session, no network), but the error must NOT
+    /// contain "unknown language" because "rust" is a valid template directory.
+    #[test]
+    #[serial]
+    fn init_with_io_uses_lang_override_when_provided() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+
+        // Create templates/rust/ so "rust" is a recognised language.
+        std::fs::create_dir_all(tmp.path().join("templates").join("rust"))
+            .expect("failed to create templates/rust");
+
+        // Point CE_CONFIG_DIR to the temp dir (no default_language in config).
+        let _config_guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+
+        // Change current directory into the temp root so find_project_root() finds templates/.
+        let _cwd_guard = CwdGuard::new();
+        std::env::set_current_dir(tmp.path()).expect("failed to chdir to temp dir");
+
+        let result = init_with_io("abc001", Some("rust"));
+
+        // The error must NOT be a language-validation error.
+        if let Err(e) = result {
+            let msg = format!("{e}");
+            assert!(
+                !msg.contains("unknown language"),
+                "expected no language error, but got: {msg}"
+            );
+        }
+        // Ok(_) is also acceptable (unlikely without network, but not forbidden).
+    }
+
+    /// init_with_io rejects a lang_override that has no matching templates/ directory.
+    #[test]
+    #[serial]
+    fn init_with_io_rejects_unknown_language() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+
+        // Only templates/rust/ exists — "cpp" is absent.
+        std::fs::create_dir_all(tmp.path().join("templates").join("rust"))
+            .expect("failed to create templates/rust");
+
+        let _config_guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+
+        let _cwd_guard = CwdGuard::new();
+        std::env::set_current_dir(tmp.path()).expect("failed to chdir to temp dir");
+
+        let result = init_with_io("abc001", Some("cpp"));
+
+        assert!(result.is_err(), "expected Err for unknown language, got Ok");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("unknown language"),
+            "expected 'unknown language' in error, got: {msg}"
+        );
+        assert!(
+            msg.contains("cpp"),
+            "expected 'cpp' mentioned in error, got: {msg}"
+        );
     }
 
     /// whoami_with_io returns Ok(None) when no session.toml exists (not logged in).

@@ -36,10 +36,12 @@ online_judge = "atcoder"
 contest_id = "abc334"
 
 [[problems]]
+id = "abc334_a"
 code = "a"
 title = "Product"
 
 [[problems]]
+id = "abc334_b"
 code = "b"
 title = "ABC"
 ```

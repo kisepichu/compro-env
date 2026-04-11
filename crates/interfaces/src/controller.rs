@@ -35,6 +35,7 @@ impl Controller {
         let solution = Solution {
             contest_id: args.contest_id(),
             problem_code: args.problem_code(),
+            problem_title: String::new(),
             name: args.solution_name(),
             language: args.language(),
         };
@@ -46,6 +47,7 @@ impl Controller {
         let solution = Solution {
             contest_id: args.contest_id(),
             problem_code: args.problem_code(),
+            problem_title: String::new(),
             name: args.solution_name(),
             language: args.language(),
         };
@@ -57,6 +59,7 @@ impl Controller {
         let solution = Solution {
             contest_id: args.contest_id(),
             problem_code: args.problem_code(),
+            problem_title: String::new(),
             name: args.solution_name(),
             language: args.language(),
         };

@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 domain = { workspace = true }
 anyhow = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 mockall = "0.13"

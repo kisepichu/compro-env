@@ -19,7 +19,7 @@ ce init <contest_id_or_url> [--lang <lang>]
 "abc334"    → プレフィックス "abc"/"arc"/"agc"/"ahc" → AtCoder
 "aoj0000"   → プレフィックス "aoj" → AOJ (将来対応)
 "https://atcoder.jp/contests/abc334" → URL パース → AtCoder, id = "abc334"
-それ以外     → stdin: "OJ を選んでください [atcoder]: "
+それ以外     → stdin: "OJ (e.g. atcoder): " (空 Enter でデフォルト atcoder)
 ```
 
 ## HTTP リクエスト構成 (AtCoder)
