@@ -78,7 +78,8 @@ impl Service {
                                     &*self.solution_repo,
                                 );
                             }
-                            _ => {
+                            Ok(_) => {
+                                // No problems yet; keep polling until deadline
                                 if now > post_start_deadline {
                                     anyhow::bail!(
                                         "timed out waiting for problems after contest start"
@@ -86,6 +87,7 @@ impl Service {
                                 }
                                 std::thread::sleep(std::time::Duration::from_secs(1));
                             }
+                            Err(e) => return Err(e), // auth errors etc. — propagate immediately
                         }
                     }
                 }

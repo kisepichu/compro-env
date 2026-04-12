@@ -192,6 +192,15 @@ pub fn logout_with_io(oj: domain::entity::OJKind) -> Result<bool> {
     build_controller_no_root().logout(&input)
 }
 
+/// Returns true if `s` is a single safe filesystem path component (no separators, no `.`/`..`).
+fn is_safe_path_component(s: &str) -> bool {
+    let mut components = std::path::Path::new(s).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    )
+}
+
 /// Parses a contest input string (contest ID or URL) into an (OJKind, contest_id) pair.
 ///
 /// Handles:
@@ -206,10 +215,18 @@ fn parse_contest_input(input: &str) -> Option<(OJKind, String)> {
         if contest_id.is_empty() {
             return None;
         }
-        return Some((OJKind::AtCoder, contest_id.to_lowercase()));
+        let contest_id = contest_id.to_lowercase();
+        if !is_safe_path_component(&contest_id) {
+            return None;
+        }
+        return Some((OJKind::AtCoder, contest_id));
     }
     if let Some(oj) = OJKind::from_contest_id_prefix(input) {
-        return Some((oj, input.to_lowercase()));
+        let contest_id = input.to_lowercase();
+        if !is_safe_path_component(&contest_id) {
+            return None;
+        }
+        return Some((oj, contest_id));
     }
     None
 }
@@ -219,6 +236,7 @@ fn parse_contest_input(input: &str) -> Option<(OJKind, String)> {
 /// Pure function: reads config and the filesystem under `root`, but performs no I/O prompts
 /// and makes no network requests. Returns `Err` for unknown languages so the shell can report
 /// it without invoking the controller.
+#[cfg(test)]
 fn resolve_init_args(
     contest_input: &str,
     lang_override: Option<&str>,
@@ -263,6 +281,12 @@ fn validate_language(
     language: &domain::entity::Language,
     root: &std::path::Path,
 ) -> Result<()> {
+    if !is_safe_path_component(language.as_str()) {
+        anyhow::bail!(
+            "invalid language \"{}\": must be a single path component",
+            language.as_str()
+        );
+    }
     let tmpl_dir = root.join("templates").join(language.as_str());
     if !tmpl_dir.is_dir() {
         let available: Vec<String> = std::fs::read_dir(root.join("templates"))
@@ -304,7 +328,13 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
             let oj = oj_str
                 .parse::<OJKind>()
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
-            (oj, contest_input.to_lowercase())
+            let contest_id = contest_input.to_lowercase();
+            if !is_safe_path_component(&contest_id) {
+                anyhow::bail!(
+                    "invalid contest ID \"{contest_input}\": must be a single path component"
+                );
+            }
+            (oj, contest_id)
         }
     };
 

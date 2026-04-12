@@ -1,6 +1,6 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use domain::entity::{Contest, OJKind, Sample};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use usecases::repository::contest_repository::ContestRepository;
 
 #[derive(Serialize)]
@@ -15,6 +15,21 @@ struct CeTomlProblem<'a> {
     id: &'a str,
     code: &'a str,
     title: &'a str,
+}
+
+/// Owned version for deserialization.
+#[derive(Deserialize)]
+struct CeTomlOwned {
+    online_judge: String,
+}
+
+impl ContestRepositoryImpl {
+    fn read_ce_toml(&self, contest_id: &str) -> Result<CeTomlOwned> {
+        let path = self.ce_toml_path(contest_id);
+        let contents = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {path:?}"))?;
+        toml::from_str(&contents).with_context(|| format!("failed to parse {path:?}"))
+    }
 }
 
 /// Manages solutions/ relative to the project root.
@@ -96,12 +111,34 @@ impl ContestRepository for ContestRepositoryImpl {
         Ok(())
     }
 
-    fn get_oj_kind(&self, _contest_id: &str) -> Result<OJKind> {
-        todo!()
+    fn get_oj_kind(&self, contest_id: &str) -> Result<OJKind> {
+        let data = self.read_ce_toml(contest_id)?;
+        data.online_judge
+            .parse::<OJKind>()
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
-    fn get_samples(&self, _contest_id: &str, _problem_code: &str) -> Result<Vec<Sample>> {
-        todo!()
+    fn get_samples(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Sample>> {
+        let tc_dir = self.contest_dir(contest_id).join("testcases").join(problem_code);
+        if !tc_dir.is_dir() {
+            return Ok(vec![]);
+        }
+        let mut samples = Vec::new();
+        let mut n = 1usize;
+        loop {
+            let in_path = tc_dir.join(format!("{n}.in"));
+            let out_path = tc_dir.join(format!("{n}.out"));
+            if !in_path.exists() {
+                break;
+            }
+            let input = std::fs::read_to_string(&in_path)
+                .with_context(|| format!("failed to read {in_path:?}"))?;
+            let output = std::fs::read_to_string(&out_path)
+                .with_context(|| format!("failed to read {out_path:?}"))?;
+            samples.push(Sample { input, output });
+            n += 1;
+        }
+        Ok(samples)
     }
 
     fn list_problem_codes(&self, contest_id: &str) -> Result<Vec<String>> {
@@ -232,6 +269,39 @@ mod tests {
 
         let codes = repo.list_problem_codes("abc334").unwrap();
         assert!(codes.is_empty());
+    }
+
+    #[test]
+    fn get_oj_kind_reads_ce_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(dir.path());
+        let contest = make_contest();
+        repo.create(&contest).unwrap();
+
+        let oj = repo.get_oj_kind("abc334").unwrap();
+        assert_eq!(oj, OJKind::AtCoder);
+    }
+
+    #[test]
+    fn get_samples_reads_testcase_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(dir.path());
+        let contest = make_contest();
+        repo.create(&contest).unwrap();
+
+        let samples = repo.get_samples("abc334", "a").unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].input, "1\n");
+        assert_eq!(samples[0].output, "2\n");
+    }
+
+    #[test]
+    fn get_samples_returns_empty_when_no_testcases() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(dir.path());
+
+        let samples = repo.get_samples("abc334", "a").unwrap();
+        assert!(samples.is_empty());
     }
 
     #[test]

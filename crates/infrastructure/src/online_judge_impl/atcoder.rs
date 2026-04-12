@@ -84,14 +84,25 @@ impl OnlineJudge for AtCoder {
 }
 
 fn parse_start_time_from_html(html: &str) -> Option<DateTime<Utc>> {
-    let marker = "class=\"fixtime-full\">";
-    let pos = html.find(marker)?;
-    let after = &html[pos + marker.len()..];
-    let end = after.find("</time>")?;
-    let text = &after[..end];
-    chrono::DateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%z")
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
+    // AtCoder may render the time tag with multiple classes, e.g.
+    // `class="fixtime fixtime-full"` or `class="fixtime-full"`.
+    // Scan all <time ...> tags and pick the first one whose attributes contain "fixtime-full".
+    let mut search_from = 0;
+    while let Some(rel) = html[search_from..].find("<time") {
+        let tag_start = search_from + rel;
+        let tag_end = tag_start + html[tag_start..].find('>')?;
+        let start_tag = &html[tag_start..=tag_end];
+        if start_tag.contains("fixtime-full") {
+            let after = &html[tag_end + 1..];
+            let end = after.find("</time>")?;
+            let text = &after[..end];
+            return chrono::DateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%z")
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc));
+        }
+        search_from = tag_end + 1;
+    }
+    None
 }
 
 fn parse_tasks_print_from_html(
@@ -189,13 +200,21 @@ fn decode_pre_content(s: &str) -> String {
             out.push(c);
         }
     }
-    // Decode common HTML entities
-    out.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
+    // Decode HTML entities. Loop until stable so that double-encoded sequences
+    // like `&amp;lt;` are fully decoded to `<`.
+    loop {
+        let decoded = out
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&nbsp;", " ");
+        if decoded == out {
+            return out;
+        }
+        out = decoded;
+    }
 }
 
 fn parse_username_from_html(html: &str) -> Option<String> {
