@@ -75,6 +75,7 @@ impl FromStr for Language {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
         if s.is_empty() {
             Err("language must not be empty".to_string())
         } else {
@@ -204,6 +205,18 @@ mod language_tests {
     #[test]
     fn from_str_errors_on_empty_string() {
         let result = Language::from_str("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_str_trims_whitespace() {
+        let lang: Language = "rust ".parse().unwrap();
+        assert_eq!(lang.as_str(), "rust");
+    }
+
+    #[test]
+    fn from_str_errors_on_whitespace_only() {
+        let result = Language::from_str("   ");
         assert!(result.is_err());
     }
 

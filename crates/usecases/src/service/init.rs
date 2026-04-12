@@ -16,7 +16,16 @@ pub struct InitResult {
 
 impl Service {
     /// Initializes a contest: fetches problems, saves test cases, and creates solution directories.
-    pub fn init(&self, contest_id: &str, oj: OJKind, lang: &Language) -> Result<InitResult> {
+    ///
+    /// `on_progress` is called with human-readable status messages during the wait loop.
+    /// Pass `|_| {}` to suppress output.
+    pub fn init(
+        &self,
+        contest_id: &str,
+        oj: OJKind,
+        lang: &Language,
+        on_progress: &dyn Fn(&str),
+    ) -> Result<InitResult> {
         // Step 0: Skip if already initialized
         if self.contest_repo.exists(contest_id)? {
             return Ok(InitResult {
@@ -36,61 +45,45 @@ impl Service {
         if let Some(start_time) = meta.start_time {
             if start_time > chrono::Utc::now() {
                 self.contest_repo.create_unstarted(contest_id)?;
+                // Poll deadline: give up 60 seconds after start if problems never appear
+                let post_start_deadline = start_time + chrono::Duration::seconds(60);
                 loop {
                     let now = chrono::Utc::now();
                     let remaining = start_time - now;
-                    if remaining <= chrono::Duration::zero() {
-                        break;
-                    }
                     if remaining > chrono::Duration::minutes(1) {
-                        println!(
+                        on_progress(&format!(
                             "Contest starts at {}. Remaining: {}m{}s",
                             start_time.format("%H:%M:%S"),
                             remaining.num_minutes(),
-                            remaining.num_seconds() % 60
-                        );
+                            remaining.num_seconds() % 60,
+                        ));
                         std::thread::sleep(std::time::Duration::from_secs(60));
                     } else if remaining > chrono::Duration::seconds(10) {
-                        println!("{}s remaining...", remaining.num_seconds());
+                        on_progress(&format!("{}s remaining...", remaining.num_seconds()));
                         std::thread::sleep(std::time::Duration::from_secs(1));
                     } else {
-                        // Within 10 seconds: poll for problems
+                        // Within 10 seconds of start or already started: poll for problems
                         match self.online_judge.get_problems_detail(
                             contest_id,
                             session.as_ref(),
                             &meta.problem_id_hints,
                         ) {
                             Ok(problems) if !problems.is_empty() => {
-                                let total_sample_files: usize =
-                                    problems.iter().map(|p| p.samples.len() * 2).sum();
-                                let oj_kind = oj.clone();
-                                let contest = domain::entity::Contest {
-                                    id: contest_id.to_string(),
-                                    online_judge: oj,
+                                return build_result(
+                                    contest_id,
+                                    oj,
+                                    lang,
                                     problems,
-                                };
-                                self.contest_repo.create(&contest)?;
-                                let mut created_solutions = Vec::new();
-                                for problem in &contest.problems {
-                                    let solution = Solution {
-                                        contest_id: contest_id.to_string(),
-                                        problem_code: problem.code.clone(),
-                                        problem_title: problem.title.clone(),
-                                        name: "main".to_string(),
-                                        language: lang.clone(),
-                                    };
-                                    self.solution_repo.create(&solution)?;
-                                    created_solutions.push(solution);
-                                }
-                                return Ok(InitResult {
-                                    contest_id: contest_id.to_string(),
-                                    oj_kind,
-                                    created_solutions,
-                                    total_sample_files,
-                                    already_initialized: false,
-                                });
+                                    &*self.contest_repo,
+                                    &*self.solution_repo,
+                                );
                             }
                             _ => {
+                                if now > post_start_deadline {
+                                    anyhow::bail!(
+                                        "timed out waiting for problems after contest start"
+                                    );
+                                }
                                 std::thread::sleep(std::time::Duration::from_secs(1));
                             }
                         }
@@ -99,48 +92,66 @@ impl Service {
             }
         }
 
-        // Step 3: Get problems
+        // Step 3: Get problems (no waiting required)
         let problems = self.online_judge.get_problems_detail(
             contest_id,
             session.as_ref(),
             &meta.problem_id_hints,
         )?;
 
-        // Step 4: Build Contest
-        let total_sample_files: usize = problems.iter().map(|p| p.samples.len() * 2).sum();
-        let oj_kind = oj.clone();
-        let contest = domain::entity::Contest {
-            id: contest_id.to_string(),
-            online_judge: oj,
-            problems,
-        };
-
-        // Step 5: Save contest
-        self.contest_repo.create(&contest)?;
-
-        // Step 6: Create solutions
-        let mut created_solutions = Vec::new();
-        for problem in &contest.problems {
-            let solution = Solution {
-                contest_id: contest_id.to_string(),
-                problem_code: problem.code.clone(),
-                problem_title: problem.title.clone(),
-                name: "main".to_string(),
-                language: lang.clone(),
-            };
-            self.solution_repo.create(&solution)?;
-            created_solutions.push(solution);
+        if problems.is_empty() {
+            anyhow::bail!(
+                "no problems found for contest \"{contest_id}\". \
+                 The contest may not have started yet, or login may be required (`ce login`)."
+            );
         }
 
-        // Step 7: Return result
-        Ok(InitResult {
-            contest_id: contest_id.to_string(),
-            oj_kind,
-            created_solutions,
-            total_sample_files,
-            already_initialized: false,
-        })
+        build_result(
+            contest_id,
+            oj,
+            lang,
+            problems,
+            &*self.contest_repo,
+            &*self.solution_repo,
+        )
     }
+}
+
+fn build_result(
+    contest_id: &str,
+    oj: OJKind,
+    lang: &Language,
+    problems: Vec<domain::entity::Problem>,
+    contest_repo: &dyn crate::repository::contest_repository::ContestRepository,
+    solution_repo: &dyn crate::repository::solution_repository::SolutionRepository,
+) -> Result<InitResult> {
+    let total_sample_files: usize = problems.iter().map(|p| p.samples.len() * 2).sum();
+    let oj_kind = oj.clone();
+    let contest = domain::entity::Contest {
+        id: contest_id.to_string(),
+        online_judge: oj,
+        problems,
+    };
+    contest_repo.create(&contest)?;
+    let mut created_solutions = Vec::new();
+    for problem in &contest.problems {
+        let solution = Solution {
+            contest_id: contest_id.to_string(),
+            problem_code: problem.code.clone(),
+            problem_title: problem.title.clone(),
+            name: "main".to_string(),
+            language: lang.clone(),
+        };
+        solution_repo.create(&solution)?;
+        created_solutions.push(solution);
+    }
+    Ok(InitResult {
+        contest_id: contest_id.to_string(),
+        oj_kind,
+        created_solutions,
+        total_sample_files,
+        already_initialized: false,
+    })
 }
 
 #[cfg(test)]
@@ -178,6 +189,8 @@ mod tests {
             }],
         }
     }
+
+    const NO_PROGRESS: &dyn Fn(&str) = &|_| {};
 
     struct StubOJ {
         problems: Vec<Problem>,
@@ -384,7 +397,7 @@ mod tests {
         );
 
         let result = service
-            .init("abc001", OJKind::AtCoder, &Language::new("rust"))
+            .init("abc001", OJKind::AtCoder, &Language::new("rust"), NO_PROGRESS)
             .unwrap();
 
         assert_eq!(result.contest_id, "abc001");
@@ -409,7 +422,7 @@ mod tests {
             },
         );
 
-        let result = service.init("abc001", OJKind::AtCoder, &Language::new("rust"));
+        let result = service.init("abc001", OJKind::AtCoder, &Language::new("rust"), NO_PROGRESS);
 
         assert!(
             result.is_ok(),
@@ -447,7 +460,7 @@ mod tests {
             Box::new(StubConfig),
         );
 
-        let _ = service.init("abc001", OJKind::AtCoder, &Language::new("rust"));
+        let _ = service.init("abc001", OJKind::AtCoder, &Language::new("rust"), NO_PROGRESS);
 
         assert!(
             !called.load(Ordering::SeqCst),
@@ -509,11 +522,36 @@ mod tests {
         );
 
         let result = service
-            .init("abc001", OJKind::AtCoder, &Language::new("rust"))
+            .init("abc001", OJKind::AtCoder, &Language::new("rust"), NO_PROGRESS)
             .unwrap();
 
         assert!(result.already_initialized);
         assert!(result.created_solutions.is_empty());
         assert_eq!(result.total_sample_files, 0);
+    }
+
+    /// When `get_problems_detail` returns an empty list, `init()` returns an error.
+    #[test]
+    fn init_errors_on_empty_problem_list() {
+        let service = make_service(
+            StubOJ {
+                problems: vec![], // empty
+                start_time: None,
+            },
+            None,
+            make_contest_repo(),
+            StubSolutionRepo {
+                created: RefCell::new(vec![]),
+            },
+        );
+
+        let result = service.init("abc001", OJKind::AtCoder, &Language::new("rust"), NO_PROGRESS);
+
+        assert!(result.is_err(), "expected Err for empty problem list");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("no problems found"),
+            "expected 'no problems found' in error, got: {msg}"
+        );
     }
 }

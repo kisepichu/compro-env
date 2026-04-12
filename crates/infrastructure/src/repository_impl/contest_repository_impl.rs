@@ -1,6 +1,21 @@
 use anyhow::Result;
 use domain::entity::{Contest, OJKind, Sample};
+use serde::Serialize;
 use usecases::repository::contest_repository::ContestRepository;
+
+#[derive(Serialize)]
+struct CeToml<'a> {
+    online_judge: &'a str,
+    contest_id: &'a str,
+    problems: Vec<CeTomlProblem<'a>>,
+}
+
+#[derive(Serialize)]
+struct CeTomlProblem<'a> {
+    id: &'a str,
+    code: &'a str,
+    title: &'a str,
+}
 
 /// Manages solutions/ relative to the project root.
 pub struct ContestRepositoryImpl {
@@ -44,17 +59,21 @@ impl ContestRepository for ContestRepositoryImpl {
 
         let toml_path = contest_dir.join(".ce.toml");
         if !toml_path.exists() {
-            let mut toml = format!(
-                "online_judge = \"{}\"\ncontest_id = \"{}\"\n",
-                contest.online_judge.as_str(),
-                contest.id
-            );
-            for problem in &contest.problems {
-                toml.push_str(&format!(
-                    "\n[[problems]]\nid = \"{}\"\ncode = \"{}\"\ntitle = \"{}\"\n",
-                    problem.id, problem.code, problem.title
-                ));
-            }
+            let data = CeToml {
+                online_judge: contest.online_judge.as_str(),
+                contest_id: &contest.id,
+                problems: contest
+                    .problems
+                    .iter()
+                    .map(|p| CeTomlProblem {
+                        id: &p.id,
+                        code: &p.code,
+                        title: &p.title,
+                    })
+                    .collect(),
+            };
+            let toml = toml::to_string(&data)
+                .map_err(|e| anyhow::anyhow!("failed to serialize .ce.toml: {e}"))?;
             std::fs::write(&toml_path, toml)?;
         }
 

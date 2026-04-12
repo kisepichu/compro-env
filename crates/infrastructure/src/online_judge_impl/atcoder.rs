@@ -60,12 +60,15 @@ impl OnlineJudge for AtCoder {
                 format!("REVEL_SESSION={}", session.cookie),
             );
         }
-        let html = req.send()?.error_for_status()?.text()?;
-        Ok(parse_tasks_print_from_html(
-            &html,
-            contest_id,
-            problem_id_hints,
-        ))
+        let resp = req.send()?.error_for_status()?;
+        // AtCoder redirects unauthenticated requests to /login (still 200).
+        let final_url = resp.url().clone();
+        let html = resp.text()?;
+        if final_url.path().contains("/login") {
+            anyhow::bail!("not logged in or session expired. Run `ce login` again.");
+        }
+        let problems = parse_tasks_print_from_html(&html, contest_id, problem_id_hints);
+        Ok(problems)
     }
 
     fn submit(
@@ -102,16 +105,17 @@ fn parse_tasks_print_from_html(
 
     // Skip the first chunk (content before the first problem)
     for chunk in chunks.iter().skip(1) {
-        // Extract title: text up to </span>
-        let title = match chunk.find("</span>") {
+        // Extract heading: full text up to </span> (e.g. "A - Christmas Present")
+        let heading = match chunk.find("</span>") {
             Some(end) => chunk[..end].trim().to_string(),
             None => continue,
         };
 
-        // Extract problem_code: part before " - " in title, trimmed, lowercased
-        let problem_code = match title.find(" - ") {
-            Some(pos) => title[..pos].trim().to_lowercase(),
-            None => title.trim().to_lowercase(),
+        // Split "A - Title" into code "a" and title "Title".
+        // If no separator exists, treat the whole heading as both.
+        let (problem_code, title) = match heading.split_once(" - ") {
+            Some((code, t)) => (code.trim().to_lowercase(), t.trim().to_string()),
+            None => (heading.trim().to_lowercase(), heading.clone()),
         };
 
         // Extract samples from this chunk
@@ -370,7 +374,7 @@ var userScreenName = "";
             .find(|p| p.code == "a")
             .expect("problem a not found");
         assert_eq!(a.id, "abc334_a");
-        assert_eq!(a.title, "A - Christmas Present");
+        assert_eq!(a.title, "Christmas Present");
         assert_eq!(a.samples.len(), 1);
         assert_eq!(
             a.samples[0],
@@ -385,7 +389,7 @@ var userScreenName = "";
             .find(|p| p.code == "b")
             .expect("problem b not found");
         assert_eq!(b.id, "abc334_b");
-        assert_eq!(b.title, "B - 333");
+        assert_eq!(b.title, "333");
         assert_eq!(b.samples.len(), 1);
         assert_eq!(
             b.samples[0],

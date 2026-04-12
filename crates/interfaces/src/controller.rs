@@ -25,9 +25,13 @@ impl Controller {
         self.service.logout(&args.oj())
     }
 
-    pub fn init(&self, args: &dyn InitInput) -> Result<usecases::service::init::InitResult> {
+    pub fn init(
+        &self,
+        args: &dyn InitInput,
+        on_progress: &dyn Fn(&str),
+    ) -> Result<usecases::service::init::InitResult> {
         self.service
-            .init(&args.contest_id(), args.oj(), &args.language())
+            .init(&args.contest_id(), args.oj(), &args.language(), on_progress)
     }
 
     pub fn new_solution(&self, args: &dyn NewInput) -> Result<()> {

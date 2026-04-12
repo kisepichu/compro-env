@@ -206,7 +206,7 @@ fn parse_contest_input(input: &str) -> Option<(OJKind, String)> {
         if contest_id.is_empty() {
             return None;
         }
-        return Some((OJKind::AtCoder, contest_id.to_string()));
+        return Some((OJKind::AtCoder, contest_id.to_lowercase()));
     }
     if let Some(oj) = OJKind::from_contest_id_prefix(input) {
         return Some((oj, input.to_lowercase()));
@@ -214,52 +214,29 @@ fn parse_contest_input(input: &str) -> Option<(OJKind, String)> {
     None
 }
 
-/// Initializes a contest from a contest ID or URL string.
+/// Resolves and validates the OJ, contest_id, and language for `ce init`.
 ///
-/// Parses the input, detects OJ kind and contest_id, reads the default language from config
-/// (or uses `lang_override` when provided), validates it against templates/, and calls the
-/// controller init.
-pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<()> {
-    let (oj, contest_id) = match parse_contest_input(contest_input) {
-        Some(pair) => pair,
-        None => {
-            // Unknown contest ID — prompt for OJ
-            print!("OJ (e.g. atcoder): ");
-            use std::io::Write as _;
-            std::io::stdout().flush()?;
-            let mut line = String::new();
-            std::io::stdin().read_line(&mut line)?;
-            let oj_str = line.trim();
-            let oj_str = if oj_str.is_empty() { "atcoder" } else { oj_str };
-            let oj = oj_str
-                .parse::<OJKind>()
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
-            (oj, contest_input.to_string())
-        }
-    };
+/// Pure function: reads config and the filesystem under `root`, but performs no I/O prompts
+/// and makes no network requests. Returns `Err` for unknown languages so the shell can report
+/// it without invoking the controller.
+fn resolve_init_args(
+    contest_input: &str,
+    lang_override: Option<&str>,
+    root: &std::path::Path,
+) -> Result<(OJKind, String, domain::entity::Language)> {
+    let (oj, contest_id) = parse_contest_input(contest_input).ok_or_else(|| {
+        anyhow::anyhow!(
+            "cannot infer OJ from \"{contest_input}\". \
+             Pass a full URL or a known prefix (abc, arc, agc, ahc)."
+        )
+    })?;
 
     let language = if let Some(lang) = lang_override {
         domain::entity::Language::new(lang)
     } else {
-        match ConfigImpl.default_language() {
-            Ok(lang) => lang,
-            Err(_) => {
-                // prompt stdin
-                print!("Language (e.g. rust, cpp): ");
-                use std::io::Write as _;
-                std::io::stdout().flush()?;
-                let mut line = String::new();
-                std::io::stdin().read_line(&mut line)?;
-                let s = line.trim();
-                if s.is_empty() {
-                    anyhow::bail!("language must not be empty");
-                }
-                domain::entity::Language::new(s)
-            }
-        }
+        ConfigImpl.default_language()?
     };
 
-    let root = find_project_root()?;
     let tmpl_dir = root.join("templates").join(language.as_str());
     if !tmpl_dir.is_dir() {
         let available: Vec<String> = std::fs::read_dir(root.join("templates"))
@@ -277,11 +254,81 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
         );
     }
 
-    let result = build_controller()?.init(&InitCommand {
-        contest_id: contest_id.clone(),
-        oj: oj.clone(),
-        language: language.clone(),
-    })?;
+    Ok((oj, contest_id, language))
+}
+
+/// Initializes a contest from a contest ID or URL string.
+///
+/// Parses the input, detects OJ kind and contest_id, reads the default language from config
+/// (or uses `lang_override` when provided), validates it against templates/, and calls the
+/// controller init.
+pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<()> {
+    let root = find_project_root()?;
+
+    let (oj, contest_id, language) = match resolve_init_args(contest_input, lang_override, &root) {
+        Ok(args) => args,
+        Err(_) if parse_contest_input(contest_input).is_none() => {
+            // Unknown contest ID — prompt for OJ, then re-resolve language
+            print!("OJ (e.g. atcoder): ");
+            use std::io::Write as _;
+            std::io::stdout().flush()?;
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            let oj_str = line.trim();
+            let oj_str = if oj_str.is_empty() { "atcoder" } else { oj_str };
+            let oj = oj_str
+                .parse::<OJKind>()
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+            let language = if let Some(lang) = lang_override {
+                domain::entity::Language::new(lang)
+            } else {
+                match ConfigImpl.default_language() {
+                    Ok(lang) => lang,
+                    Err(_) => {
+                        print!("Language (e.g. rust, cpp): ");
+                        std::io::stdout().flush()?;
+                        let mut line = String::new();
+                        std::io::stdin().read_line(&mut line)?;
+                        let s = line.trim();
+                        if s.is_empty() {
+                            anyhow::bail!("language must not be empty");
+                        }
+                        domain::entity::Language::new(s)
+                    }
+                }
+            };
+
+            let tmpl_dir = root.join("templates").join(language.as_str());
+            if !tmpl_dir.is_dir() {
+                let available: Vec<String> = std::fs::read_dir(root.join("templates"))
+                    .map(|rd| {
+                        rd.filter_map(|e| e.ok())
+                            .filter(|e| e.path().is_dir())
+                            .filter_map(|e| e.file_name().into_string().ok())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                anyhow::bail!(
+                    "unknown language \"{}\". Available: {}",
+                    language.as_str(),
+                    available.join(", ")
+                );
+            }
+
+            (oj, contest_input.to_lowercase(), language)
+        }
+        Err(e) => return Err(e),
+    };
+
+    let result = build_controller()?.init(
+        &InitCommand {
+            contest_id: contest_id.clone(),
+            oj: oj.clone(),
+            language: language.clone(),
+        },
+        &|msg| println!("{msg}"),
+    )?;
 
     if result.already_initialized {
         println!("Contest {contest_id} is already initialized.");
@@ -470,70 +517,34 @@ mod tests {
         assert_eq!(result, None);
     }
 
-    /// RAII guard that restores the current working directory on drop.
-    struct CwdGuard(std::path::PathBuf);
-
-    impl CwdGuard {
-        fn new() -> Self {
-            Self(std::env::current_dir().expect("failed to get cwd"))
-        }
-    }
-
-    impl Drop for CwdGuard {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.0);
-        }
-    }
-
-    /// init_with_io accepts a valid lang_override without producing a language error.
-    ///
-    /// The call will fail deeper (no session, no network), but the error must NOT
-    /// contain "unknown language" because "rust" is a valid template directory.
+    /// resolve_init_args accepts a valid lang_override and returns Ok without network I/O.
     #[test]
-    #[serial]
-    fn init_with_io_uses_lang_override_when_provided() {
+    fn resolve_init_args_accepts_valid_language() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
 
         // Create templates/rust/ so "rust" is a recognised language.
         std::fs::create_dir_all(tmp.path().join("templates").join("rust"))
             .expect("failed to create templates/rust");
 
-        // Point CE_CONFIG_DIR to the temp dir (no default_language in config).
-        let _config_guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+        let result = resolve_init_args("abc001", Some("rust"), tmp.path());
 
-        // Change current directory into the temp root so find_project_root() finds templates/.
-        let _cwd_guard = CwdGuard::new();
-        std::env::set_current_dir(tmp.path()).expect("failed to chdir to temp dir");
-
-        let result = init_with_io("abc001", Some("rust"));
-
-        // The error must NOT be a language-validation error.
-        if let Err(e) = result {
-            let msg = format!("{e}");
-            assert!(
-                !msg.contains("unknown language"),
-                "expected no language error, but got: {msg}"
-            );
-        }
-        // Ok(_) is also acceptable (unlikely without network, but not forbidden).
+        assert!(result.is_ok(), "expected Ok for valid language, got: {:?}", result);
+        let (oj, contest_id, lang) = result.unwrap();
+        assert_eq!(oj, OJKind::AtCoder);
+        assert_eq!(contest_id, "abc001");
+        assert_eq!(lang.as_str(), "rust");
     }
 
-    /// init_with_io rejects a lang_override that has no matching templates/ directory.
+    /// resolve_init_args rejects a lang_override that has no matching templates/ directory.
     #[test]
-    #[serial]
-    fn init_with_io_rejects_unknown_language() {
+    fn resolve_init_args_rejects_unknown_language() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
 
         // Only templates/rust/ exists — "cpp" is absent.
         std::fs::create_dir_all(tmp.path().join("templates").join("rust"))
             .expect("failed to create templates/rust");
 
-        let _config_guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
-
-        let _cwd_guard = CwdGuard::new();
-        std::env::set_current_dir(tmp.path()).expect("failed to chdir to temp dir");
-
-        let result = init_with_io("abc001", Some("cpp"));
+        let result = resolve_init_args("abc001", Some("cpp"), tmp.path());
 
         assert!(result.is_err(), "expected Err for unknown language, got Ok");
         let msg = format!("{}", result.unwrap_err());
