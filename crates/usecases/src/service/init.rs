@@ -431,7 +431,7 @@ mod tests {
         );
     }
 
-    /// When `get_start_time` returns `None`, `init()` proceeds directly to problem fetch
+    /// When `get_contest_meta().start_time` is `None`, `init()` proceeds directly to problem fetch
     /// without calling `create_unstarted`.
     #[test]
     fn init_skips_waiting_when_start_time_is_none() {

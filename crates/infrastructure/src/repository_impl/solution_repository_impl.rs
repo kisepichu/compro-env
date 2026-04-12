@@ -49,68 +49,79 @@ impl SolutionRepository for SolutionRepositoryImpl {
         std::fs::create_dir_all(&solution_dir)
             .with_context(|| format!("failed to create solution dir: {solution_dir:?}"))?;
 
-        let template_dir = self
-            .root
-            .join("templates")
-            .join(solution.language.dir_name());
-
-        // Build Tera context
-        let mut ctx = tera::Context::new();
-        ctx.insert("contest", &serde_json::json!({"id": solution.contest_id}));
-        ctx.insert(
-            "problem",
-            &serde_json::json!({"code": solution.problem_code, "title": solution.problem_title}),
-        );
-        ctx.insert("solution", &serde_json::json!({"name": solution.name}));
-
-        // Walk the template directory recursively
-        for entry in walkdir::WalkDir::new(&template_dir) {
-            let entry = entry.with_context(|| "error walking template dir")?;
-            let src_path = entry.path();
-
-            if src_path.is_dir() {
-                continue;
-            }
-
-            // Relative path from the template root
-            let rel_path = src_path
-                .strip_prefix(&template_dir)
-                .with_context(|| "failed to strip template prefix")?;
-
-            let file_name = src_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-            if file_name.ends_with(".tera") {
-                // Render with Tera and write with .tera stripped
-                let content = std::fs::read_to_string(src_path)
-                    .with_context(|| format!("failed to read template: {src_path:?}"))?;
-                let rendered = tera::Tera::one_off(&content, &ctx, false)
-                    .with_context(|| format!("failed to render template: {src_path:?}"))?;
-
-                // Strip ".tera" from the destination filename
-                let dest_rel = rel_path.with_extension(""); // removes last extension (.tera)
-                let dest_path = solution_dir.join(&dest_rel);
-                if let Some(parent) = dest_path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::write(&dest_path, rendered)
-                    .with_context(|| format!("failed to write rendered file: {dest_path:?}"))?;
-            } else {
-                // Copy as-is
-                let dest_path = solution_dir.join(rel_path);
-                if let Some(parent) = dest_path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::copy(src_path, &dest_path)
-                    .with_context(|| format!("failed to copy file: {src_path:?}"))?;
-            }
+        // Expand templates; clean up the newly created dir if anything fails
+        // to prevent future runs from silently skipping a broken solution dir.
+        let result = expand_templates(&solution_dir, solution, self);
+        if result.is_err() {
+            let _ = std::fs::remove_dir_all(&solution_dir);
         }
-
-        Ok(())
+        result
     }
 
     fn get_source(&self, _solution: &Solution) -> Result<String> {
         todo!()
     }
+}
+
+fn expand_templates(
+    solution_dir: &std::path::Path,
+    solution: &Solution,
+    repo: &SolutionRepositoryImpl,
+) -> Result<()> {
+    let template_dir = repo.root.join("templates").join(solution.language.dir_name());
+
+    // Build Tera context
+    let mut ctx = tera::Context::new();
+    ctx.insert("contest", &serde_json::json!({"id": solution.contest_id}));
+    ctx.insert(
+        "problem",
+        &serde_json::json!({"code": solution.problem_code, "title": solution.problem_title}),
+    );
+    ctx.insert("solution", &serde_json::json!({"name": solution.name}));
+
+    // Walk the template directory recursively
+    for entry in walkdir::WalkDir::new(&template_dir) {
+        let entry = entry.with_context(|| "error walking template dir")?;
+        let src_path = entry.path();
+
+        if src_path.is_dir() {
+            continue;
+        }
+
+        // Relative path from the template root
+        let rel_path = src_path
+            .strip_prefix(&template_dir)
+            .with_context(|| "failed to strip template prefix")?;
+
+        let file_name = src_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        if file_name.ends_with(".tera") {
+            // Render with Tera and write with .tera stripped
+            let content = std::fs::read_to_string(src_path)
+                .with_context(|| format!("failed to read template: {src_path:?}"))?;
+            let rendered = tera::Tera::one_off(&content, &ctx, false)
+                .with_context(|| format!("failed to render template: {src_path:?}"))?;
+
+            // Strip ".tera" from the destination filename
+            let dest_rel = rel_path.with_extension(""); // removes last extension (.tera)
+            let dest_path = solution_dir.join(&dest_rel);
+            if let Some(parent) = dest_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&dest_path, rendered)
+                .with_context(|| format!("failed to write rendered file: {dest_path:?}"))?;
+        } else {
+            // Copy as-is
+            let dest_path = solution_dir.join(rel_path);
+            if let Some(parent) = dest_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(src_path, &dest_path)
+                .with_context(|| format!("failed to copy file: {src_path:?}"))?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

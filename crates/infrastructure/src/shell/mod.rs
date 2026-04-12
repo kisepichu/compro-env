@@ -237,6 +237,32 @@ fn resolve_init_args(
         ConfigImpl.default_language()?
     };
 
+    validate_language(&language, root)?;
+
+    Ok((oj, contest_id, language))
+}
+
+/// Prompts the user for a language and validates it against templates/.
+fn prompt_language(root: &std::path::Path) -> Result<domain::entity::Language> {
+    use std::io::Write as _;
+    print!("Language (e.g. rust, cpp): ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let s = line.trim();
+    if s.is_empty() {
+        anyhow::bail!("language must not be empty");
+    }
+    let language = domain::entity::Language::new(s);
+    validate_language(&language, root)?;
+    Ok(language)
+}
+
+/// Validates that `language` has a matching templates/ directory under `root`.
+fn validate_language(
+    language: &domain::entity::Language,
+    root: &std::path::Path,
+) -> Result<()> {
     let tmpl_dir = root.join("templates").join(language.as_str());
     if !tmpl_dir.is_dir() {
         let available: Vec<String> = std::fs::read_dir(root.join("templates"))
@@ -253,8 +279,7 @@ fn resolve_init_args(
             available.join(", ")
         );
     }
-
-    Ok((oj, contest_id, language))
+    Ok(())
 }
 
 /// Initializes a contest from a contest ID or URL string.
@@ -263,14 +288,14 @@ fn resolve_init_args(
 /// (or uses `lang_override` when provided), validates it against templates/, and calls the
 /// controller init.
 pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<()> {
+    use std::io::Write as _;
     let root = find_project_root()?;
 
-    let (oj, contest_id, language) = match resolve_init_args(contest_input, lang_override, &root) {
-        Ok(args) => args,
-        Err(_) if parse_contest_input(contest_input).is_none() => {
-            // Unknown contest ID — prompt for OJ, then re-resolve language
+    // Step 1: Resolve OJ and contest_id; prompt for OJ if unknown.
+    let (oj, contest_id) = match parse_contest_input(contest_input) {
+        Some(pair) => pair,
+        None => {
             print!("OJ (e.g. atcoder): ");
-            use std::io::Write as _;
             std::io::stdout().flush()?;
             let mut line = String::new();
             std::io::stdin().read_line(&mut line)?;
@@ -279,46 +304,23 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
             let oj = oj_str
                 .parse::<OJKind>()
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-            let language = if let Some(lang) = lang_override {
-                domain::entity::Language::new(lang)
-            } else {
-                match ConfigImpl.default_language() {
-                    Ok(lang) => lang,
-                    Err(_) => {
-                        print!("Language (e.g. rust, cpp): ");
-                        std::io::stdout().flush()?;
-                        let mut line = String::new();
-                        std::io::stdin().read_line(&mut line)?;
-                        let s = line.trim();
-                        if s.is_empty() {
-                            anyhow::bail!("language must not be empty");
-                        }
-                        domain::entity::Language::new(s)
-                    }
-                }
-            };
-
-            let tmpl_dir = root.join("templates").join(language.as_str());
-            if !tmpl_dir.is_dir() {
-                let available: Vec<String> = std::fs::read_dir(root.join("templates"))
-                    .map(|rd| {
-                        rd.filter_map(|e| e.ok())
-                            .filter(|e| e.path().is_dir())
-                            .filter_map(|e| e.file_name().into_string().ok())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                anyhow::bail!(
-                    "unknown language \"{}\". Available: {}",
-                    language.as_str(),
-                    available.join(", ")
-                );
-            }
-
-            (oj, contest_input.to_lowercase(), language)
+            (oj, contest_input.to_lowercase())
         }
-        Err(e) => return Err(e),
+    };
+
+    // Step 2: Resolve language; prompt if not overridden and not in config.
+    let language = if let Some(lang) = lang_override {
+        let language = domain::entity::Language::new(lang);
+        validate_language(&language, &root)?;
+        language
+    } else {
+        match ConfigImpl.default_language() {
+            Ok(lang) => {
+                validate_language(&lang, &root)?;
+                lang
+            }
+            Err(_) => prompt_language(&root)?,
+        }
     };
 
     let result = build_controller()?.init(

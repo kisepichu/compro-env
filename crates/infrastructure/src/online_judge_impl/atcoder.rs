@@ -65,7 +65,7 @@ impl OnlineJudge for AtCoder {
         let final_url = resp.url().clone();
         let html = resp.text()?;
         if final_url.path().contains("/login") {
-            anyhow::bail!("not logged in or session expired. Run `ce login` again.");
+            anyhow::bail!("not logged in. Run `ce login` first.");
         }
         let problems = parse_tasks_print_from_html(&html, contest_id, problem_id_hints);
         Ok(problems)

@@ -34,7 +34,8 @@ impl Config for ConfigImpl {
         let path = Self::config_toml_path()?;
         if !path.exists() {
             return Err(anyhow::anyhow!(
-                "default language is not set. Add `language = \"...\"` to ~/.config/ce/config.toml"
+                "default language is not set. Add `language = \"...\"` to {}",
+                path.display()
             ));
         }
         let contents = std::fs::read_to_string(&path)?;
@@ -44,7 +45,8 @@ impl Config for ConfigImpl {
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "default language is not set. Add `language = \"...\"` to ~/.config/ce/config.toml"
+                    "default language is not set. Add `language = \"...\"` to {}",
+                    path.display()
                 )
             })?;
         Language::from_str(lang_str).map_err(|e| anyhow::anyhow!(e))

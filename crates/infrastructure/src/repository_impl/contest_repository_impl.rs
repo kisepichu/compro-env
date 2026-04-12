@@ -104,8 +104,18 @@ impl ContestRepository for ContestRepositoryImpl {
         todo!()
     }
 
-    fn list_problem_codes(&self, _contest_id: &str) -> Result<Vec<String>> {
-        todo!()
+    fn list_problem_codes(&self, contest_id: &str) -> Result<Vec<String>> {
+        let tc_dir = self.contest_dir(contest_id).join("testcases");
+        if !tc_dir.is_dir() {
+            return Ok(vec![]);
+        }
+        let mut codes: Vec<String> = std::fs::read_dir(&tc_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        codes.sort();
+        Ok(codes)
     }
 }
 
@@ -202,6 +212,26 @@ mod tests {
         let tc_dir = contest_dir.join("testcases").join("a");
         assert!(tc_dir.join("1.in").exists());
         assert!(tc_dir.join("1.out").exists());
+    }
+
+    #[test]
+    fn list_problem_codes_returns_sorted_codes_from_testcases_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(dir.path());
+        let contest = make_contest();
+        repo.create(&contest).unwrap();
+
+        let codes = repo.list_problem_codes("abc334").unwrap();
+        assert_eq!(codes, vec!["a"]);
+    }
+
+    #[test]
+    fn list_problem_codes_returns_empty_when_no_testcases_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(dir.path());
+
+        let codes = repo.list_problem_codes("abc334").unwrap();
+        assert!(codes.is_empty());
     }
 
     #[test]
