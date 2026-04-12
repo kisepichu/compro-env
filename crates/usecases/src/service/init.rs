@@ -8,9 +8,14 @@ pub struct InitResult {
     pub contest_id: String,
     pub oj_kind: OJKind,
     pub created_solutions: Vec<Solution>,
-    /// Total number of sample files created (each Sample = 2 files: .in and .out).
+    /// Total number of sample input/output files implied by the fetched samples
+    /// (each Sample = 2 files: `.in` and `.out`).
+    ///
+    /// This is not necessarily the number of files newly written, because the
+    /// repository skips files that already exist on disk.
     pub total_sample_files: usize,
-    /// True when the contest directory already existed; no files were modified.
+    /// True when the contest was already initialized (`.ce.toml` exists); no
+    /// files were modified during this run.
     pub already_initialized: bool,
 }
 

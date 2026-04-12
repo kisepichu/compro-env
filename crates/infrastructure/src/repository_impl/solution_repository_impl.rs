@@ -30,7 +30,7 @@ impl SolutionRepository for SolutionRepositoryImpl {
             .join(contest_id)
             .join(problem_code)
             .join(name);
-        Ok(solution_dir.exists())
+        Ok(solution_dir.is_dir())
     }
 
     fn create(&self, solution: &Solution) -> Result<()> {

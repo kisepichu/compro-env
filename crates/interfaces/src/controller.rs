@@ -36,10 +36,14 @@ impl Controller {
 
     pub fn new_solution(&self, args: &dyn NewInput) -> Result<()> {
         use domain::entity::Solution;
+        let problem_code = args.problem_code();
         let solution = Solution {
             contest_id: args.contest_id(),
-            problem_code: args.problem_code(),
-            problem_title: String::new(),
+            // problem_title is not available at this call site; fall back to the
+            // problem code so that template variables like {{problem.title}} are
+            // non-empty rather than blank.
+            problem_title: problem_code.clone(),
+            problem_code,
             name: args.solution_name(),
             language: args.language(),
         };
