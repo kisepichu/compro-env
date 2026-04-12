@@ -283,6 +283,11 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
         language: language.clone(),
     })?;
 
+    if result.already_initialized {
+        println!("Contest {contest_id} is already initialized.");
+        return Ok(());
+    }
+
     let n_problems = result.created_solutions.len();
     let problem_codes: Vec<&str> = result
         .created_solutions

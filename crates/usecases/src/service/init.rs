@@ -10,11 +10,24 @@ pub struct InitResult {
     pub created_solutions: Vec<Solution>,
     /// Total number of sample files created (each Sample = 2 files: .in and .out).
     pub total_sample_files: usize,
+    /// True when the contest directory already existed; no files were modified.
+    pub already_initialized: bool,
 }
 
 impl Service {
     /// Initializes a contest: fetches problems, saves test cases, and creates solution directories.
     pub fn init(&self, contest_id: &str, oj: OJKind, lang: &Language) -> Result<InitResult> {
+        // Step 0: Skip if already initialized
+        if self.contest_repo.exists(contest_id)? {
+            return Ok(InitResult {
+                contest_id: contest_id.to_string(),
+                oj_kind: oj,
+                created_solutions: vec![],
+                total_sample_files: 0,
+                already_initialized: true,
+            });
+        }
+
         // Step 1: Get session (None is allowed for public contests)
         let session = self.session_repo.get(&oj)?;
 
@@ -74,6 +87,7 @@ impl Service {
                                     oj_kind,
                                     created_solutions,
                                     total_sample_files,
+                                    already_initialized: false,
                                 });
                             }
                             _ => {
@@ -124,6 +138,7 @@ impl Service {
             oj_kind,
             created_solutions,
             total_sample_files,
+            already_initialized: false,
         })
     }
 }
@@ -438,5 +453,67 @@ mod tests {
             !called.load(Ordering::SeqCst),
             "create_unstarted should not be called when start_time is None"
         );
+    }
+
+    /// When `contest_repo.exists()` returns true, `init()` returns `already_initialized = true`
+    /// without fetching problems or creating any files.
+    #[test]
+    fn init_returns_already_initialized_when_contest_exists() {
+        struct AlreadyExistsRepo;
+
+        impl ContestRepository for AlreadyExistsRepo {
+            fn exists(&self, _contest_id: &str) -> Result<bool> {
+                Ok(true)
+            }
+
+            fn exists_unstarted(&self, _contest_id: &str) -> Result<bool> {
+                Ok(false)
+            }
+
+            fn create_unstarted(&self, _contest_id: &str) -> Result<()> {
+                panic!("create_unstarted must not be called");
+            }
+
+            fn create(&self, _contest: &Contest) -> Result<()> {
+                panic!("create must not be called");
+            }
+
+            fn get_oj_kind(&self, _contest_id: &str) -> Result<OJKind> {
+                Ok(OJKind::AtCoder)
+            }
+
+            fn get_samples(
+                &self,
+                _contest_id: &str,
+                _problem_code: &str,
+            ) -> Result<Vec<domain::entity::Sample>> {
+                Ok(vec![])
+            }
+
+            fn list_problem_codes(&self, _contest_id: &str) -> Result<Vec<String>> {
+                Ok(vec![])
+            }
+        }
+
+        let service = Service::new(
+            Box::new(StubOJ {
+                problems: vec![make_problem("a")],
+                start_time: None,
+            }),
+            Box::new(AlreadyExistsRepo),
+            Box::new(StubSolutionRepo {
+                created: RefCell::new(vec![]),
+            }),
+            Box::new(StubSessionRepo { session: None }),
+            Box::new(StubConfig),
+        );
+
+        let result = service
+            .init("abc001", OJKind::AtCoder, &Language::new("rust"))
+            .unwrap();
+
+        assert!(result.already_initialized);
+        assert!(result.created_solutions.is_empty());
+        assert_eq!(result.total_sample_files, 0);
     }
 }
