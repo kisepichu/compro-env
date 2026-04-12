@@ -68,7 +68,16 @@ fn expand_templates(
     solution: &Solution,
     repo: &SolutionRepositoryImpl,
 ) -> Result<()> {
-    let template_dir = repo.root.join("templates").join(solution.language.dir_name());
+    let lang_dir = solution.language.dir_name();
+    // Guard against path traversal via language strings like "../.." or "foo/bar".
+    let mut components = std::path::Path::new(lang_dir).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => {}
+        _ => anyhow::bail!(
+            "invalid language template directory name: {lang_dir:?}"
+        ),
+    }
+    let template_dir = repo.root.join("templates").join(lang_dir);
 
     // Build Tera context
     let mut ctx = tera::Context::new();

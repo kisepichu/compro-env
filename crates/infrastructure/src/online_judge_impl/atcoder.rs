@@ -3,7 +3,17 @@ use chrono::{DateTime, Utc};
 use domain::entity::{Problem, Session, SubmitResult};
 use usecases::online_judge::{ContestMeta, OnlineJudge};
 
-pub struct AtCoder;
+pub struct AtCoder {
+    client: reqwest::blocking::Client,
+}
+
+impl AtCoder {
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            client: reqwest::blocking::Client::builder().build()?,
+        })
+    }
+}
 
 impl OnlineJudge for AtCoder {
     fn name(&self) -> &str {
@@ -11,10 +21,9 @@ impl OnlineJudge for AtCoder {
     }
 
     fn whoami(&self, session: &Session) -> Result<String> {
-        let client = reqwest::blocking::Client::builder().build()?;
         // Set the REVEL_SESSION cookie before making the request.
         let cookie = format!("REVEL_SESSION={}", session.cookie);
-        client
+        self.client
             .get("https://atcoder.jp/home")
             .header(reqwest::header::COOKIE, cookie)
             .send()?
@@ -29,16 +38,12 @@ impl OnlineJudge for AtCoder {
 
     fn get_contest_meta(&self, contest_id: &str) -> Result<ContestMeta> {
         let url = format!("https://atcoder.jp/contests/{}", contest_id);
-        let client = reqwest::blocking::Client::builder().build()?;
-        let body = match client.get(&url).send().and_then(|r| r.text()) {
-            Ok(b) => b,
-            Err(_) => {
-                return Ok(ContestMeta {
-                    start_time: None,
-                    problem_id_hints: vec![],
-                })
-            }
-        };
+        let body = self
+            .client
+            .get(&url)
+            .send()
+            .and_then(|r| r.text())
+            .map_err(|e| anyhow::anyhow!("failed to fetch contest page for {contest_id}: {e}"))?;
         Ok(ContestMeta {
             start_time: parse_start_time_from_html(&body),
             problem_id_hints: vec![],
@@ -51,9 +56,8 @@ impl OnlineJudge for AtCoder {
         session: Option<&Session>,
         problem_id_hints: &[(String, String)],
     ) -> Result<Vec<Problem>> {
-        let client = reqwest::blocking::Client::builder().build()?;
         let url = format!("https://atcoder.jp/contests/{}/tasks_print", contest_id);
-        let mut req = client.get(&url);
+        let mut req = self.client.get(&url);
         if let Some(session) = session {
             req = req.header(
                 reqwest::header::COOKIE,

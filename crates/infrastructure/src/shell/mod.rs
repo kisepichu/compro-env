@@ -138,15 +138,15 @@ pub fn run() -> Result<()> {
 
 /// Builds a `Controller` wired with all infrastructure implementations,
 /// without requiring a project root (suitable for login/whoami/logout).
-fn build_controller_no_root() -> Controller {
+fn build_controller_no_root() -> Result<Controller> {
     let service = Service::new(
-        Box::new(AtCoder),
+        Box::new(AtCoder::new()?),
         Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SessionRepositoryImpl),
         Box::new(ConfigImpl),
     );
-    Controller::new(service)
+    Ok(Controller::new(service))
 }
 
 /// This is the testable core of the Login command. Returns an error if `cookie`
@@ -160,7 +160,7 @@ pub fn login_with_io(oj: domain::entity::OJKind, cookie: &str) -> Result<()> {
         oj,
         cookie: cookie.to_string(),
     };
-    build_controller_no_root().login(&input)
+    build_controller_no_root()?.login(&input)
 }
 
 /// Returns the logged-in username for the given OJ, or `None` if no session is saved.
@@ -168,7 +168,7 @@ pub fn login_with_io(oj: domain::entity::OJKind, cookie: &str) -> Result<()> {
 /// This is the testable core of the Whoami command.
 pub fn whoami_with_io(oj: domain::entity::OJKind) -> Result<Option<String>> {
     let input = WhoamiCommand { oj };
-    match build_controller_no_root().whoami(&input) {
+    match build_controller_no_root()?.whoami(&input) {
         Ok(username) => Ok(Some(username)),
         Err(e) => {
             if e.downcast_ref::<domain::error::CeError>()
@@ -189,7 +189,7 @@ pub fn whoami_with_io(oj: domain::entity::OJKind) -> Result<Option<String>> {
 /// This is the testable core of the Logout command.
 pub fn logout_with_io(oj: domain::entity::OJKind) -> Result<bool> {
     let input = LogoutCommand { oj };
-    build_controller_no_root().logout(&input)
+    build_controller_no_root()?.logout(&input)
 }
 
 /// Returns true if `s` is a single safe filesystem path component (no separators, no `.`/`..`).
@@ -398,7 +398,7 @@ fn build_controller() -> Result<Controller> {
     let root = find_project_root()?;
 
     let service = Service::new(
-        Box::new(AtCoder),
+        Box::new(AtCoder::new()?),
         Box::new(ContestRepositoryImpl::new(root.clone())),
         Box::new(SolutionRepositoryImpl::new(root.clone())),
         Box::new(SessionRepositoryImpl),

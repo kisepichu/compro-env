@@ -92,7 +92,19 @@ impl Service {
                                 }
                                 std::thread::sleep(std::time::Duration::from_secs(1));
                             }
-                            Err(e) => return Err(e), // auth errors etc. — propagate immediately
+                            Err(e) => {
+                                // Fail fast on definitive auth errors; treat other
+                                // failures (e.g. transient 404/503) as retryable
+                                // until the post-start deadline.
+                                let msg = e.to_string();
+                                if msg.contains("not logged in") {
+                                    return Err(e);
+                                }
+                                if now > post_start_deadline {
+                                    return Err(e);
+                                }
+                                std::thread::sleep(std::time::Duration::from_secs(1));
+                            }
                         }
                     }
                 }
