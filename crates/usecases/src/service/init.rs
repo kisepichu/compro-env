@@ -61,7 +61,7 @@ impl Service {
                     if remaining > chrono::Duration::minutes(1) {
                         on_progress(&format!(
                             "Contest starts at {}. Remaining: {}m{}s",
-                            start_time.format("%H:%M:%S"),
+                            start_time.format("%Y-%m-%d %H:%M:%S %z"),
                             remaining.num_minutes(),
                             remaining.num_seconds() % 60,
                         ));
