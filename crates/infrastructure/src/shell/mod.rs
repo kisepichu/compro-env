@@ -268,10 +268,9 @@ fn prompt_language(root: &std::path::Path) -> Result<domain::entity::Language> {
     let mut line = String::new();
     std::io::stdin().read_line(&mut line)?;
     let s = line.trim();
-    if s.is_empty() {
-        anyhow::bail!("language must not be empty");
-    }
-    let language = domain::entity::Language::new(s);
+    let language = s
+        .parse::<domain::entity::Language>()
+        .map_err(|e| anyhow::anyhow!(e))?;
     validate_language(&language, root)?;
     Ok(language)
 }
@@ -340,7 +339,9 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
 
     // Step 2: Resolve language; prompt if not overridden and not in config.
     let language = if let Some(lang) = lang_override {
-        let language = domain::entity::Language::new(lang);
+        let language = lang
+            .parse::<domain::entity::Language>()
+            .map_err(|e| anyhow::anyhow!(e))?;
         validate_language(&language, &root)?;
         language
     } else {

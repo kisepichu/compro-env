@@ -158,7 +158,10 @@ fn build_result(
         online_judge: oj,
         problems,
     };
-    contest_repo.create(&contest)?;
+    // Create solution directories first so that a template-expansion failure
+    // does not leave .ce.toml on disk. If a solution fails, the contest has
+    // not been marked as initialized; the next run will skip already-existing
+    // solution dirs (idempotent) and retry any that are missing.
     let mut created_solutions = Vec::new();
     for problem in &contest.problems {
         let solution = Solution {
@@ -171,6 +174,8 @@ fn build_result(
         solution_repo.create(&solution)?;
         created_solutions.push(solution);
     }
+    // Write .ce.toml and test-case files only after all solutions succeed.
+    contest_repo.create(&contest)?;
     Ok(InitResult {
         contest_id: contest_id.to_string(),
         oj_kind,
