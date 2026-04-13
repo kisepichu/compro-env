@@ -42,8 +42,14 @@ impl SolutionRepository for SolutionRepositoryImpl {
             .join(&solution.name);
 
         // If the solution directory already exists, skip entirely to preserve user edits.
-        if solution_dir.exists() {
+        if solution_dir.is_dir() {
             return Ok(());
+        }
+        // A non-directory entry at the same path would leave the repo in a broken state.
+        if solution_dir.exists() {
+            anyhow::bail!(
+                "solution path exists but is not a directory: {solution_dir:?}"
+            );
         }
 
         std::fs::create_dir_all(&solution_dir)

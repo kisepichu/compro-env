@@ -42,8 +42,11 @@ impl OnlineJudge for AtCoder {
             .client
             .get(&url)
             .send()
-            .and_then(|r| r.text())
-            .map_err(|e| anyhow::anyhow!("failed to fetch contest page for {contest_id}: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("failed to fetch contest page for {contest_id}: {e}"))?
+            .error_for_status()
+            .map_err(|e| anyhow::anyhow!("contest page returned error for {contest_id}: {e}"))?
+            .text()
+            .map_err(|e| anyhow::anyhow!("failed to read contest page for {contest_id}: {e}"))?;
         Ok(ContestMeta {
             start_time: parse_start_time_from_html(&body),
             problem_id_hints: vec![],
@@ -69,7 +72,10 @@ impl OnlineJudge for AtCoder {
         let final_url = resp.url().clone();
         let html = resp.text()?;
         if final_url.path().contains("/login") {
-            anyhow::bail!("not logged in. Run `ce login` first.");
+            return Err(domain::error::CeError::NotLoggedIn {
+                oj: "atcoder".into(),
+            }
+            .into());
         }
         let problems = parse_tasks_print_from_html(&html, contest_id, problem_id_hints);
         Ok(problems)

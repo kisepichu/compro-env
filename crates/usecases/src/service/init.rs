@@ -31,11 +31,14 @@ impl Service {
         lang: &Language,
         on_progress: &dyn Fn(&str),
     ) -> Result<InitResult> {
-        // Step 0: Skip if already initialized
+        // Step 0: Skip if already initialized; read the stored OJ kind from disk
+        // rather than trusting the CLI argument, which may differ from what was
+        // written when the contest was first initialised.
         if self.contest_repo.exists(contest_id)? {
+            let oj_kind = self.contest_repo.get_oj_kind(contest_id)?;
             return Ok(InitResult {
                 contest_id: contest_id.to_string(),
-                oj_kind: oj,
+                oj_kind,
                 created_solutions: vec![],
                 total_sample_files: 0,
                 already_initialized: true,
@@ -96,8 +99,12 @@ impl Service {
                                 // Fail fast on definitive auth errors; treat other
                                 // failures (e.g. transient 404/503) as retryable
                                 // until the post-start deadline.
-                                let msg = e.to_string();
-                                if msg.contains("not logged in") {
+                                if e.downcast_ref::<domain::error::CeError>()
+                                    .map(|ce| {
+                                        matches!(ce, domain::error::CeError::NotLoggedIn { .. })
+                                    })
+                                    .unwrap_or(false)
+                                {
                                     return Err(e);
                                 }
                                 if now > post_start_deadline {

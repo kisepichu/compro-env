@@ -112,7 +112,7 @@ mod tests {
         assert_eq!(config.default_online_judge(), OJKind::AtCoder);
     }
 
-    /// When config.toml contains `language = "rust"`, default_language() returns Ok(Language::Rust).
+    /// When config.toml contains `language = "rust"`, default_language() returns Ok(Language::new("rust")).
     #[test]
     #[serial]
     fn default_language_returns_rust_when_config_has_rust() {
