@@ -26,7 +26,7 @@ ce solution add <contest_id> <problem_code> [solution_name] --lang <lang>
 - `contest_id`: コンテスト ID (例: `abc334`)
 - `problem_code`: 問題コード (例: `a`, `ex`)
 - `solution_name`: 解法名 (省略時: `main`)
-- `--lang`: 言語 (省略時: config のデフォルト言語)
+- `--lang`: 言語 (省略時: config のデフォルト言語、それもなければ stdin で確認)
 
 ## 挙動
 

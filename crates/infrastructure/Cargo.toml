@@ -8,11 +8,15 @@ domain = { workspace = true }
 usecases = { workspace = true }
 interfaces = { workspace = true }
 anyhow = { workspace = true }
+chrono = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", features = ["blocking", "cookies"] }
 toml = "0.8"
+tera = "1"
+walkdir = "2"
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"

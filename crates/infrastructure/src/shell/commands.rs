@@ -38,6 +38,9 @@ pub enum Commands {
     Init {
         /// Contest ID or URL
         contest: String,
+        /// Language override (e.g. rust, cpp); uses config default if omitted
+        #[arg(long)]
+        lang: Option<String>,
     },
     /// Add a solution directory
     New {

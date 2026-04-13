@@ -1,0 +1,8 @@
+[package]
+name = "{{problem.code}}-{{solution.name}}"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "{{problem.code}}-{{solution.name}}"
+path = "src/main.rs"

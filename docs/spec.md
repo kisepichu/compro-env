@@ -15,15 +15,19 @@ compro-env/                         ← リポジトリルート
       src/main.rs
   solutions/
     {contest_id}/
-      .ce.toml                      ← OJ 情報を保存 (ce init 時に生成、以降上書きしない)
-      testcases/
+      .ce.toml                      ← [アプリ管理] OJ 情報を保存 (ce init 時に生成、以降上書きしない)
+      testcases/                    ← [アプリ管理] ce init が生成・管理。ユーザーは直接編集しない
         {problem_code}/             1文字固定でない (ex, practice_2 等あり)
           1.in  1.out  2.in  2.out
       {problem_code}/
-        {solution_name}/            デフォルト: main
-          Cargo.toml                ← name = "{problem_code}-{solution_name}"  ★注意
+        {solution_name}/            ← [ユーザー作業領域] templates/{lang}/ を展開したもの。以降はユーザーが自由に編集
+          Cargo.toml                ← templates/rust/Cargo.toml.tera から展開
           src/main.rs
 ```
+
+**領域の区別**:
+- `.ce.toml` と `testcases/` は `ce` が管理するファイル。ユーザーは直接編集しない。
+- `{problem_code}/{solution_name}/` 以下がユーザーの作業領域。`ce init` / `ce solution add` 時に `templates/{lang}/` を展開して初期化され、以降はユーザーが自由に編集する。
 
 ### .ce.toml の内容
 
@@ -32,27 +36,19 @@ online_judge = "atcoder"
 contest_id = "abc334"
 
 [[problems]]
+id = "abc334_a"
 code = "a"
 title = "Product"
 
 [[problems]]
+id = "abc334_b"
 code = "b"
 title = "ABC"
 ```
 
 `ce test` / `ce sub` 時に OJ を特定するために必須。プレフィックス判定だけでは `xyz999` 等に対応不可。
-`problems` は `ContestRepository::get()` で `Contest` ドメインオブジェクトとして再構築するために保存する。
+`problems` は `ce solution add` 等で問題コード一覧を参照するために保存する。
 `ce init` 時に生成し、以降は上書きしない。samples は testcases/ にファイルとして保存するため `.ce.toml` には含まない。
-
-### Cargo package name 規則
-
-同一 workspace を使わない場合でも、ディレクトリ名が衝突したときのため `{problem_code}-{solution_name}` を package name に使う。
-
-| ディレクトリ | package name |
-| ------------ | ------------ |
-| `a/main/`    | `a-main`     |
-| `a/sol2/`    | `a-sol2`     |
-| `ex/main/`   | `ex-main`    |
 
 ---
 
@@ -75,7 +71,7 @@ lang_id = "5054"
 ```
 
 `{dir}` は解法ディレクトリの絶対パス、`{input_file}` はテストケース入力ファイルの絶対パス。  
-言語はユーザーが自由に追加できる。`[language.{name}]` セクションを追加するだけで `ce` が認識する。
+言語はユーザーが自由に追加できる。`templates/{lang}/` ディレクトリを追加するだけで `ce` がその言語名を認識する。`[language.{name}]` セクションはテスト・提出コマンドの設定に使用する (省略した場合はデフォルト設定のみ)。
 
 ### プロジェクトローカル: `compro-env/config.toml` (任意)
 
@@ -111,7 +107,7 @@ revel_session = "xxxxxxxx"
 - 削除できた場合: `Logged out from {oj}.` を表示して exit 0
 - セッションがなかった場合: `Already logged out.` を表示して exit 0
 
-### `ce init <contest_id_or_url>`
+### `ce init <contest_id_or_url> [--lang <lang>]`
 
 詳細: `docs/commands/init.md`
 
@@ -180,8 +176,9 @@ Session                             ← Value Object
 OJKind                              ← Value Object (enum)
   AtCoder | AOJ | ...
 
-Language                            ← Value Object (enum)
-  Rust | Cpp | ...
+Language                            ← Value Object (String の newtype)
+  templates/{lang}/ ディレクトリ名がそのまま言語名になる。固定 enum ではない。
+  検証: templates/{lang}/ が存在するかで判断する。
 ```
 
 `Solution.path` は `SolutionRepository` がプロジェクトルートを保持し、そこからの相対で導出。  
@@ -198,14 +195,22 @@ trait ContestRepository {
     fn create_unstarted(&self, contest_id: &str) -> Result<()>;
     fn create(&self, contest: &Contest) -> Result<()>;
     // .ce.toml 生成 (problems 含む、samples は除く) + testcase ファイル保存
-    fn get(&self, contest_id: &str) -> Result<Contest>;
-    // .ce.toml から Contest ドメインオブジェクトを再構築。samples は populate しない
+    fn get_oj_kind(&self, contest_id: &str) -> Result<OJKind>;
+    // .ce.toml から OJKind を読み取る
     fn get_samples(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Sample>>;
+    fn list_problem_codes(&self, contest_id: &str) -> Result<Vec<String>>;
+    // testcases/ 以下のディレクトリ名から問題コード一覧を返す
 }
 
 trait SolutionRepository {
     fn list(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Solution>>;
-    fn exists(&self, solution: &Solution) -> Result<bool>;
+    fn exists(
+        &self,
+        contest_id: &str,
+        problem_code: &str,
+        name: &str,
+        lang: &Language,
+    ) -> Result<bool>;
     fn create(&self, solution: &Solution) -> Result<()>;
     // templates/{lang}/ を solutions/{contest_id}/{problem_code}/{solution_name}/ に展開
     // 既存ファイルはスキップ
@@ -231,11 +236,29 @@ trait SessionRepository {
 ## OnlineJudge インターフェース (usecases 層)
 
 ```rust
+/// コンテストページ 1 回のフェッチで取れるメタ情報。
+struct ContestMeta {
+    /// コンテスト開始時刻。取得できない場合は None。
+    start_time: Option<DateTime<Utc>>,
+    /// ナビバードロップダウンから取れた (problem_code, problem_id) ペア。
+    /// 現行コンテストでは空 Vec。空なら get_problems_detail 側で {contest_id}_{code} と推定する。
+    /// ABC/ARC 同時開催の旧コンテストでは arc103_a 等の実際の ID が入る。
+    problem_id_hints: Vec<(String, String)>,
+}
+
 trait OnlineJudge {
     fn name(&self) -> &str;
     fn whoami(&self, session: &Session) -> Result<String>;
-    fn get_start_time(&self, contest_id: &str) -> Result<DateTime<Utc>>;
-    fn get_problems_detail(&self, contest_id: &str, session: Option<&Session>) -> Result<Vec<Problem>>;
+    /// コンテストページを 1 回フェッチして開始時刻と problem_id ヒントを返す。
+    fn get_contest_meta(&self, contest_id: &str) -> Result<ContestMeta>;
+    /// tasks_print ページを 1 回フェッチして全問題詳細を返す。
+    /// problem_id_hints が空なら {contest_id}_{code} と推定する。
+    fn get_problems_detail(
+        &self,
+        contest_id: &str,
+        session: Option<&Session>,
+        problem_id_hints: &[(String, String)],
+    ) -> Result<Vec<Problem>>;
     fn submit(
         &self,
         contest_id: &str,
@@ -249,7 +272,8 @@ trait OnlineJudge {
 
 `login(username, password)` は不要 (手動クッキー方式のため削除)。  
 `get_problems_detail` は公開コンテストなら session 不要 (`Option<&Session>`)。  
-コンテスト開始待機ロジック (ポーリング・カウントダウン表示) は `usecases/service/init.rs` に実装し、`get_start_time` で取得した時刻をもとに制御する。OJ 固有ロジックは含まない。
+コンテスト開始待機ロジック (ポーリング・カウントダウン表示) は `usecases/service/init.rs` に実装し、`get_contest_meta` で取得した時刻をもとに制御する。OJ 固有ロジックは含まない。  
+通常の `ce init` (コンテスト開始後) は `get_contest_meta` + `get_problems_detail` の **2 リクエスト**のみ。
 
 ---
 
@@ -269,10 +293,10 @@ usecases/
   service/
     login.rs      SessionRepository::save()
     whoami.rs     OnlineJudge::whoami()
-    init.rs       OnlineJudge::get_start_time() + 待機ループ + OnlineJudge::get_problems_detail()
+    init.rs       OnlineJudge::get_contest_meta() + 待機ループ + OnlineJudge::get_problems_detail()
                   + ContestRepository::create() + SolutionRepository::create() × N
     solution/
-      add.rs      ContestRepository::get() + SolutionRepository::create()
+      add.rs      ContestRepository::exists() + SolutionRepository::create()
     test.rs       ContestRepository::get_samples() + Config (test command)
     submit.rs     SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::submit()
 
@@ -286,8 +310,7 @@ infrastructure/
     solution_repository_impl.rs   ← テンプレート展開含む
     session_repository_impl.rs
   online_judge_impl/
-    atcoder/
-      get_problems.rs, submit.rs, whoami.rs
+    atcoder.rs
   config_impl.rs
   shell/   ← clap エントリポイント
 ```

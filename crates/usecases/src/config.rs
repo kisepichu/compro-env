@@ -1,7 +1,8 @@
+use anyhow::Result;
 use domain::entity::{Language, OJKind};
 
 pub trait Config {
-    fn default_language(&self) -> Language;
+    fn default_language(&self) -> Result<Language>;
     fn default_online_judge(&self) -> OJKind;
 
     /// Test command template. Placeholders {problem}, {solution}, {file} are substituted.

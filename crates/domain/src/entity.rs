@@ -48,24 +48,26 @@ impl FromStr for OJKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Language {
-    Rust,
-    Cpp,
-}
+pub struct Language(String);
 
 impl Language {
+    pub fn new(s: &str) -> Self {
+        Language(s.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
     /// Directory name used under solutions/.
-    pub fn dir_name(&self) -> &'static str {
-        match self {
-            Language::Rust => "rust",
-            Language::Cpp => "cpp",
-        }
+    pub fn dir_name(&self) -> &str {
+        &self.0
     }
 }
 
 impl std::fmt::Display for Language {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.dir_name())
+        write!(f, "{}", self.0)
     }
 }
 
@@ -73,10 +75,11 @@ impl FromStr for Language {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "rust" => Ok(Language::Rust),
-            "cpp" => Ok(Language::Cpp),
-            _ => Err(format!("unknown language: {s}")),
+        let s = s.trim();
+        if s.is_empty() {
+            Err("language must not be empty".to_string())
+        } else {
+            Ok(Language(s.to_string()))
         }
     }
 }
@@ -116,6 +119,8 @@ pub struct Sample {
 pub struct Solution {
     pub contest_id: String,
     pub problem_code: String,
+    /// Problem title — used to populate the `problem.title` Tera variable when expanding templates.
+    pub problem_title: String,
     pub name: String,
     pub language: Language,
 }
@@ -138,4 +143,124 @@ pub struct Session {
 #[derive(Debug, Clone)]
 pub struct SubmitResult {
     pub submission_url: String,
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::Language;
+    use std::str::FromStr;
+
+    // Language::new constructs from any string
+    #[test]
+    fn new_returns_language_with_given_string() {
+        let lang = Language::new("rust");
+        assert_eq!(lang.as_str(), "rust");
+    }
+
+    #[test]
+    fn new_accepts_arbitrary_string() {
+        let lang = Language::new("haskell");
+        assert_eq!(lang.as_str(), "haskell");
+    }
+
+    // as_str returns the inner string slice
+    #[test]
+    fn as_str_returns_inner_string() {
+        let lang = Language::new("cpp");
+        assert_eq!(lang.as_str(), "cpp");
+    }
+
+    // Display shows the inner string
+    #[test]
+    fn display_shows_inner_string() {
+        let lang = Language::new("rust");
+        assert_eq!(format!("{}", lang), "rust");
+    }
+
+    #[test]
+    fn display_shows_arbitrary_language() {
+        let lang = Language::new("python3");
+        assert_eq!(format!("{}", lang), "python3");
+    }
+
+    // FromStr parses any non-empty string
+    #[test]
+    fn from_str_parses_rust() {
+        let lang: Language = "rust".parse().unwrap();
+        assert_eq!(lang.as_str(), "rust");
+    }
+
+    #[test]
+    fn from_str_parses_cpp() {
+        let lang: Language = "cpp".parse().unwrap();
+        assert_eq!(lang.as_str(), "cpp");
+    }
+
+    #[test]
+    fn from_str_parses_arbitrary_non_empty_string() {
+        let lang: Language = "go".parse().unwrap();
+        assert_eq!(lang.as_str(), "go");
+    }
+
+    #[test]
+    fn from_str_errors_on_empty_string() {
+        let result = Language::from_str("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_str_trims_whitespace() {
+        let lang: Language = "rust ".parse().unwrap();
+        assert_eq!(lang.as_str(), "rust");
+    }
+
+    #[test]
+    fn from_str_errors_on_whitespace_only() {
+        let result = Language::from_str("   ");
+        assert!(result.is_err());
+    }
+
+    // dir_name returns same as as_str (used for template directory lookup)
+    #[test]
+    fn dir_name_returns_same_as_as_str() {
+        let lang = Language::new("rust");
+        assert_eq!(lang.dir_name(), lang.as_str());
+    }
+
+    #[test]
+    fn dir_name_returns_inner_string() {
+        let lang = Language::new("cpp");
+        assert_eq!(lang.dir_name(), "cpp");
+    }
+
+    // PartialEq / Clone derived
+    #[test]
+    fn equality_holds_for_same_string() {
+        let a = Language::new("rust");
+        let b = Language::new("rust");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn inequality_holds_for_different_strings() {
+        let a = Language::new("rust");
+        let b = Language::new("cpp");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn clone_produces_equal_value() {
+        let a = Language::new("rust");
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    // Serde round-trip
+    #[test]
+    fn serde_round_trip() {
+        let original = Language::new("rust");
+        let serialized = serde_json::to_string(&original).unwrap();
+        let deserialized: Language = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(original, deserialized);
+    }
 }
