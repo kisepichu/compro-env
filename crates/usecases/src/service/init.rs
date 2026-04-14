@@ -189,8 +189,8 @@ fn build_result(
 mod tests {
     use std::cell::RefCell;
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     };
 
     use anyhow::Result;
@@ -428,7 +428,12 @@ mod tests {
         );
 
         let result = service
-            .init("abc001", OJKind::AtCoder, &Language::new("rust"), NO_PROGRESS)
+            .init(
+                "abc001",
+                OJKind::AtCoder,
+                &Language::new("rust"),
+                NO_PROGRESS,
+            )
             .unwrap();
 
         assert_eq!(result.contest_id, "abc001");
@@ -453,7 +458,12 @@ mod tests {
             },
         );
 
-        let result = service.init("abc001", OJKind::AtCoder, &Language::new("rust"), NO_PROGRESS);
+        let result = service.init(
+            "abc001",
+            OJKind::AtCoder,
+            &Language::new("rust"),
+            NO_PROGRESS,
+        );
 
         assert!(
             result.is_ok(),
@@ -491,7 +501,12 @@ mod tests {
             Box::new(StubConfig),
         );
 
-        let _ = service.init("abc001", OJKind::AtCoder, &Language::new("rust"), NO_PROGRESS);
+        let _ = service.init(
+            "abc001",
+            OJKind::AtCoder,
+            &Language::new("rust"),
+            NO_PROGRESS,
+        );
 
         assert!(
             !called.load(Ordering::SeqCst),
@@ -553,7 +568,12 @@ mod tests {
         );
 
         let result = service
-            .init("abc001", OJKind::AtCoder, &Language::new("rust"), NO_PROGRESS)
+            .init(
+                "abc001",
+                OJKind::AtCoder,
+                &Language::new("rust"),
+                NO_PROGRESS,
+            )
             .unwrap();
 
         assert!(result.already_initialized);
@@ -576,7 +596,12 @@ mod tests {
             },
         );
 
-        let result = service.init("abc001", OJKind::AtCoder, &Language::new("rust"), NO_PROGRESS);
+        let result = service.init(
+            "abc001",
+            OJKind::AtCoder,
+            &Language::new("rust"),
+            NO_PROGRESS,
+        );
 
         assert!(result.is_err(), "expected Err for empty problem list");
         let msg = format!("{}", result.unwrap_err());

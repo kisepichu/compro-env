@@ -47,9 +47,7 @@ impl SolutionRepository for SolutionRepositoryImpl {
         }
         // A non-directory entry at the same path would leave the repo in a broken state.
         if solution_dir.exists() {
-            anyhow::bail!(
-                "solution path exists but is not a directory: {solution_dir:?}"
-            );
+            anyhow::bail!("solution path exists but is not a directory: {solution_dir:?}");
         }
 
         std::fs::create_dir_all(&solution_dir)
@@ -79,9 +77,7 @@ fn expand_templates(
     let mut components = std::path::Path::new(lang_dir).components();
     match (components.next(), components.next()) {
         (Some(std::path::Component::Normal(_)), None) => {}
-        _ => anyhow::bail!(
-            "invalid language template directory name: {lang_dir:?}"
-        ),
+        _ => anyhow::bail!("invalid language template directory name: {lang_dir:?}"),
     }
     let template_dir = repo.root.join("templates").join(lang_dir);
 

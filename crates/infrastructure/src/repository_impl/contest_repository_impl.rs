@@ -26,8 +26,8 @@ struct CeTomlOwned {
 impl ContestRepositoryImpl {
     fn read_ce_toml(&self, contest_id: &str) -> Result<CeTomlOwned> {
         let path = self.ce_toml_path(contest_id);
-        let contents = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {path:?}"))?;
+        let contents =
+            std::fs::read_to_string(&path).with_context(|| format!("failed to read {path:?}"))?;
         toml::from_str(&contents).with_context(|| format!("failed to parse {path:?}"))
     }
 }
@@ -119,7 +119,10 @@ impl ContestRepository for ContestRepositoryImpl {
     }
 
     fn get_samples(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Sample>> {
-        let tc_dir = self.contest_dir(contest_id).join("testcases").join(problem_code);
+        let tc_dir = self
+            .contest_dir(contest_id)
+            .join("testcases")
+            .join(problem_code);
         if !tc_dir.is_dir() {
             return Ok(vec![]);
         }

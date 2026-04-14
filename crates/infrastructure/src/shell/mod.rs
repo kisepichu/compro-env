@@ -276,10 +276,7 @@ fn prompt_language(root: &std::path::Path) -> Result<domain::entity::Language> {
 }
 
 /// Validates that `language` has a matching templates/ directory under `root`.
-fn validate_language(
-    language: &domain::entity::Language,
-    root: &std::path::Path,
-) -> Result<()> {
+fn validate_language(language: &domain::entity::Language, root: &std::path::Path) -> Result<()> {
     if !is_safe_path_component(language.as_str()) {
         anyhow::bail!(
             "invalid language \"{}\": must be a single path component",
@@ -440,7 +437,7 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let previous = std::env::var_os(key);
-            std::env::set_var(key, value);
+            unsafe { std::env::set_var(key, value) }; // safe: tests using this guard are #[serial]
             Self { key, previous }
         }
     }
@@ -448,9 +445,9 @@ mod tests {
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             if let Some(previous) = &self.previous {
-                std::env::set_var(self.key, previous);
+                unsafe { std::env::set_var(self.key, previous) }; // safe: tests using this guard are #[serial]
             } else {
-                std::env::remove_var(self.key);
+                unsafe { std::env::remove_var(self.key) }; // safe: tests using this guard are #[serial]
             }
         }
     }
@@ -561,7 +558,11 @@ mod tests {
 
         let result = resolve_init_args("abc001", Some("rust"), tmp.path());
 
-        assert!(result.is_ok(), "expected Ok for valid language, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "expected Ok for valid language, got: {:?}",
+            result
+        );
         let (oj, contest_id, lang) = result.unwrap();
         assert_eq!(oj, OJKind::AtCoder);
         assert_eq!(contest_id, "abc001");
