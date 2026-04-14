@@ -11,10 +11,10 @@ impl ConfigImpl {
     /// Uses the `CE_CONFIG_DIR` environment variable if set to a non-empty, non-whitespace value;
     /// otherwise falls back to `~/.config/ce/`.
     fn config_dir() -> Result<PathBuf> {
-        if let Ok(dir) = std::env::var("CE_CONFIG_DIR") {
-            if !dir.trim().is_empty() {
-                return Ok(PathBuf::from(dir));
-            }
+        if let Ok(dir) = std::env::var("CE_CONFIG_DIR")
+            && !dir.trim().is_empty()
+        {
+            return Ok(PathBuf::from(dir));
         }
         let home = std::env::var("HOME").map_err(|_| {
             anyhow::anyhow!(

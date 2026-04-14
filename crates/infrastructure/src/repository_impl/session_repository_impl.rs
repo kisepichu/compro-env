@@ -12,10 +12,10 @@ impl SessionRepositoryImpl {
     /// otherwise falls back to `~/.config/ce/`.
     /// Returns an error if neither `CE_CONFIG_DIR` nor `HOME` is set.
     fn config_dir() -> Result<PathBuf> {
-        if let Ok(dir) = std::env::var("CE_CONFIG_DIR") {
-            if !dir.trim().is_empty() {
-                return Ok(PathBuf::from(dir));
-            }
+        if let Ok(dir) = std::env::var("CE_CONFIG_DIR")
+            && !dir.trim().is_empty()
+        {
+            return Ok(PathBuf::from(dir));
         }
         let home = std::env::var("HOME").map_err(|_| {
             anyhow::anyhow!(

@@ -50,68 +50,64 @@ impl Service {
 
         // Step 2: Check start time and wait if needed
         let meta = self.online_judge.get_contest_meta(contest_id)?;
-        if let Some(start_time) = meta.start_time {
-            if start_time > chrono::Utc::now() {
-                self.contest_repo.create_unstarted(contest_id)?;
-                // Poll deadline: give up 60 seconds after start if problems never appear
-                let post_start_deadline = start_time + chrono::Duration::seconds(60);
-                loop {
-                    let now = chrono::Utc::now();
-                    let remaining = start_time - now;
-                    if remaining > chrono::Duration::minutes(1) {
-                        on_progress(&format!(
-                            "Contest starts at {}. Remaining: {}m{}s",
-                            start_time.format("%Y-%m-%d %H:%M:%S %z"),
-                            remaining.num_minutes(),
-                            remaining.num_seconds() % 60,
-                        ));
-                        std::thread::sleep(std::time::Duration::from_secs(60));
-                    } else if remaining > chrono::Duration::seconds(10) {
-                        on_progress(&format!("{}s remaining...", remaining.num_seconds()));
-                        std::thread::sleep(std::time::Duration::from_secs(1));
-                    } else {
-                        // Within 10 seconds of start or already started: poll for problems
-                        match self.online_judge.get_problems_detail(
-                            contest_id,
-                            session.as_ref(),
-                            &meta.problem_id_hints,
-                        ) {
-                            Ok(problems) if !problems.is_empty() => {
-                                return build_result(
-                                    contest_id,
-                                    oj,
-                                    lang,
-                                    problems,
-                                    &*self.contest_repo,
-                                    &*self.solution_repo,
-                                );
+        if let Some(start_time) = meta.start_time
+            && start_time > chrono::Utc::now()
+        {
+            self.contest_repo.create_unstarted(contest_id)?;
+            // Poll deadline: give up 60 seconds after start if problems never appear
+            let post_start_deadline = start_time + chrono::Duration::seconds(60);
+            loop {
+                let now = chrono::Utc::now();
+                let remaining = start_time - now;
+                if remaining > chrono::Duration::minutes(1) {
+                    on_progress(&format!(
+                        "Contest starts at {}. Remaining: {}m{}s",
+                        start_time.format("%Y-%m-%d %H:%M:%S %z"),
+                        remaining.num_minutes(),
+                        remaining.num_seconds() % 60,
+                    ));
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                } else if remaining > chrono::Duration::seconds(10) {
+                    on_progress(&format!("{}s remaining...", remaining.num_seconds()));
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                } else {
+                    // Within 10 seconds of start or already started: poll for problems
+                    match self.online_judge.get_problems_detail(
+                        contest_id,
+                        session.as_ref(),
+                        &meta.problem_id_hints,
+                    ) {
+                        Ok(problems) if !problems.is_empty() => {
+                            return build_result(
+                                contest_id,
+                                oj,
+                                lang,
+                                problems,
+                                &*self.contest_repo,
+                                &*self.solution_repo,
+                            );
+                        }
+                        Ok(_) => {
+                            // No problems yet; keep polling until deadline
+                            if now > post_start_deadline {
+                                anyhow::bail!("timed out waiting for problems after contest start");
                             }
-                            Ok(_) => {
-                                // No problems yet; keep polling until deadline
-                                if now > post_start_deadline {
-                                    anyhow::bail!(
-                                        "timed out waiting for problems after contest start"
-                                    );
-                                }
-                                std::thread::sleep(std::time::Duration::from_secs(1));
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                        }
+                        Err(e) => {
+                            // Fail fast on definitive auth errors; treat other
+                            // failures (e.g. transient 404/503) as retryable
+                            // until the post-start deadline.
+                            if e.downcast_ref::<domain::error::CeError>()
+                                .map(|ce| matches!(ce, domain::error::CeError::NotLoggedIn { .. }))
+                                .unwrap_or(false)
+                            {
+                                return Err(e);
                             }
-                            Err(e) => {
-                                // Fail fast on definitive auth errors; treat other
-                                // failures (e.g. transient 404/503) as retryable
-                                // until the post-start deadline.
-                                if e.downcast_ref::<domain::error::CeError>()
-                                    .map(|ce| {
-                                        matches!(ce, domain::error::CeError::NotLoggedIn { .. })
-                                    })
-                                    .unwrap_or(false)
-                                {
-                                    return Err(e);
-                                }
-                                if now > post_start_deadline {
-                                    return Err(e);
-                                }
-                                std::thread::sleep(std::time::Duration::from_secs(1));
+                            if now > post_start_deadline {
+                                return Err(e);
                             }
+                            std::thread::sleep(std::time::Duration::from_secs(1));
                         }
                     }
                 }
