@@ -276,10 +276,7 @@ fn prompt_language(root: &std::path::Path) -> Result<domain::entity::Language> {
 }
 
 /// Validates that `language` has a matching templates/ directory under `root`.
-fn validate_language(
-    language: &domain::entity::Language,
-    root: &std::path::Path,
-) -> Result<()> {
+fn validate_language(language: &domain::entity::Language, root: &std::path::Path) -> Result<()> {
     if !is_safe_path_component(language.as_str()) {
         anyhow::bail!(
             "invalid language \"{}\": must be a single path component",
@@ -440,7 +437,7 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let previous = std::env::var_os(key);
-            std::env::set_var(key, value);
+            unsafe { std::env::set_var(key, value) }; // safe: tests using this guard are #[serial]
             Self { key, previous }
         }
     }
@@ -448,9 +445,9 @@ mod tests {
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             if let Some(previous) = &self.previous {
-                std::env::set_var(self.key, previous);
+                unsafe { std::env::set_var(self.key, previous) }; // safe: tests using this guard are #[serial]
             } else {
-                std::env::remove_var(self.key);
+                unsafe { std::env::remove_var(self.key) }; // safe: tests using this guard are #[serial]
             }
         }
     }
@@ -531,6 +528,7 @@ mod tests {
 
     /// parse_contest_input correctly identifies an AtCoder contest ID by prefix.
     #[test]
+    #[serial]
     fn parse_contest_input_handles_atcoder_id() {
         let result = parse_contest_input("abc334");
         assert_eq!(result, Some((OJKind::AtCoder, "abc334".to_string())));
@@ -538,6 +536,7 @@ mod tests {
 
     /// parse_contest_input correctly parses an AtCoder contest URL.
     #[test]
+    #[serial]
     fn parse_contest_input_handles_atcoder_url() {
         let result = parse_contest_input("https://atcoder.jp/contests/abc334");
         assert_eq!(result, Some((OJKind::AtCoder, "abc334".to_string())));
@@ -545,6 +544,7 @@ mod tests {
 
     /// parse_contest_input returns None for an unknown contest ID.
     #[test]
+    #[serial]
     fn parse_contest_input_returns_none_for_unknown() {
         let result = parse_contest_input("xyz123");
         assert_eq!(result, None);
@@ -552,6 +552,7 @@ mod tests {
 
     /// resolve_init_args accepts a valid lang_override and returns Ok without network I/O.
     #[test]
+    #[serial]
     fn resolve_init_args_accepts_valid_language() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
 
@@ -561,7 +562,11 @@ mod tests {
 
         let result = resolve_init_args("abc001", Some("rust"), tmp.path());
 
-        assert!(result.is_ok(), "expected Ok for valid language, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "expected Ok for valid language, got: {:?}",
+            result
+        );
         let (oj, contest_id, lang) = result.unwrap();
         assert_eq!(oj, OJKind::AtCoder);
         assert_eq!(contest_id, "abc001");
@@ -570,6 +575,7 @@ mod tests {
 
     /// resolve_init_args rejects a lang_override that has no matching templates/ directory.
     #[test]
+    #[serial]
     fn resolve_init_args_rejects_unknown_language() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
 

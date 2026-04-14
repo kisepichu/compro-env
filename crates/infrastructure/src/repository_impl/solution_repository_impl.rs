@@ -47,9 +47,7 @@ impl SolutionRepository for SolutionRepositoryImpl {
         }
         // A non-directory entry at the same path would leave the repo in a broken state.
         if solution_dir.exists() {
-            anyhow::bail!(
-                "solution path exists but is not a directory: {solution_dir:?}"
-            );
+            anyhow::bail!("solution path exists but is not a directory: {solution_dir:?}");
         }
 
         std::fs::create_dir_all(&solution_dir)
@@ -79,9 +77,7 @@ fn expand_templates(
     let mut components = std::path::Path::new(lang_dir).components();
     match (components.next(), components.next()) {
         (Some(std::path::Component::Normal(_)), None) => {}
-        _ => anyhow::bail!(
-            "invalid language template directory name: {lang_dir:?}"
-        ),
+        _ => anyhow::bail!("invalid language template directory name: {lang_dir:?}"),
     }
     let template_dir = repo.root.join("templates").join(lang_dir);
 
@@ -143,6 +139,7 @@ fn expand_templates(
 mod tests {
     use super::*;
     use domain::entity::Language;
+    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
@@ -180,6 +177,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn exists_returns_false_when_solution_dir_not_present() {
         let dir = setup_temp_root();
         let repo = SolutionRepositoryImpl::new(dir.path().to_path_buf());
@@ -191,6 +189,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn exists_returns_true_when_solution_dir_present() {
         let dir = setup_temp_root();
         let root = dir.path();
@@ -206,6 +205,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn create_expands_tera_template() {
         let dir = setup_temp_root();
         let root = dir.path();
@@ -225,6 +225,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn create_copies_static_files() {
         let dir = setup_temp_root();
         let root = dir.path();
@@ -244,6 +245,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn create_is_noop_when_solution_dir_already_exists() {
         let dir = setup_temp_root();
         let root = dir.path();

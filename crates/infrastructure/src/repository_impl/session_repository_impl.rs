@@ -12,10 +12,10 @@ impl SessionRepositoryImpl {
     /// otherwise falls back to `~/.config/ce/`.
     /// Returns an error if neither `CE_CONFIG_DIR` nor `HOME` is set.
     fn config_dir() -> Result<PathBuf> {
-        if let Ok(dir) = std::env::var("CE_CONFIG_DIR") {
-            if !dir.trim().is_empty() {
-                return Ok(PathBuf::from(dir));
-            }
+        if let Ok(dir) = std::env::var("CE_CONFIG_DIR")
+            && !dir.trim().is_empty()
+        {
+            return Ok(PathBuf::from(dir));
         }
         let home = std::env::var("HOME").map_err(|_| {
             anyhow::anyhow!(
@@ -157,7 +157,7 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let previous = std::env::var_os(key);
-            std::env::set_var(key, value);
+            unsafe { std::env::set_var(key, value) }; // safe: tests using this guard are #[serial]
             Self { key, previous }
         }
     }
@@ -165,9 +165,9 @@ mod tests {
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             if let Some(previous) = &self.previous {
-                std::env::set_var(self.key, previous);
+                unsafe { std::env::set_var(self.key, previous) }; // safe: tests using this guard are #[serial]
             } else {
-                std::env::remove_var(self.key);
+                unsafe { std::env::remove_var(self.key) }; // safe: tests using this guard are #[serial]
             }
         }
     }

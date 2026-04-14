@@ -11,10 +11,10 @@ impl ConfigImpl {
     /// Uses the `CE_CONFIG_DIR` environment variable if set to a non-empty, non-whitespace value;
     /// otherwise falls back to `~/.config/ce/`.
     fn config_dir() -> Result<PathBuf> {
-        if let Ok(dir) = std::env::var("CE_CONFIG_DIR") {
-            if !dir.trim().is_empty() {
-                return Ok(PathBuf::from(dir));
-            }
+        if let Ok(dir) = std::env::var("CE_CONFIG_DIR")
+            && !dir.trim().is_empty()
+        {
+            return Ok(PathBuf::from(dir));
         }
         let home = std::env::var("HOME").map_err(|_| {
             anyhow::anyhow!(
@@ -91,7 +91,7 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let previous = std::env::var_os(key);
-            std::env::set_var(key, value);
+            unsafe { std::env::set_var(key, value) }; // safe: tests using this guard are #[serial]
             Self { key, previous }
         }
     }
@@ -99,14 +99,15 @@ mod tests {
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             if let Some(previous) = &self.previous {
-                std::env::set_var(self.key, previous);
+                unsafe { std::env::set_var(self.key, previous) }; // safe: tests using this guard are #[serial]
             } else {
-                std::env::remove_var(self.key);
+                unsafe { std::env::remove_var(self.key) }; // safe: tests using this guard are #[serial]
             }
         }
     }
 
     #[test]
+    #[serial]
     fn default_online_judge_returns_atcoder() {
         let config = ConfigImpl;
         assert_eq!(config.default_online_judge(), OJKind::AtCoder);

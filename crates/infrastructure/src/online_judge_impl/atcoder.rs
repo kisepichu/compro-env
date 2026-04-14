@@ -247,6 +247,7 @@ fn parse_username_from_html(html: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     /// Simulate the logged-in AtCoder page.
     /// AtCoder injects `var userScreenName = "alice";` in the <head> when
@@ -328,6 +329,7 @@ var userScreenName = "";
     }
 
     #[test]
+    #[serial]
     fn parse_start_time_returns_datetime_when_present() {
         use chrono::TimeZone;
         let html = contest_page_html_with_start_time();
@@ -340,6 +342,7 @@ var userScreenName = "";
     }
 
     #[test]
+    #[serial]
     fn parse_start_time_returns_none_when_absent() {
         let html = contest_page_html_without_start_time();
         let result = parse_start_time_from_html(&html);
@@ -347,6 +350,7 @@ var userScreenName = "";
     }
 
     #[test]
+    #[serial]
     fn parse_username_returns_username_when_logged_in() {
         // The fixture includes ranking user links that must not shadow the
         // logged-in user extracted from userScreenName.
@@ -356,6 +360,7 @@ var userScreenName = "";
     }
 
     #[test]
+    #[serial]
     fn parse_username_returns_none_when_not_logged_in() {
         let html = not_logged_in_html();
         let result = parse_username_from_html(&html);
@@ -392,6 +397,7 @@ var userScreenName = "";
     }
 
     #[test]
+    #[serial]
     fn parse_tasks_print_returns_two_problems() {
         use domain::entity::Sample;
         let html = tasks_print_html();
@@ -430,6 +436,7 @@ var userScreenName = "";
     }
 
     #[test]
+    #[serial]
     fn parse_tasks_print_uses_hints_when_provided() {
         let html = tasks_print_html();
         let hints = vec![
@@ -453,6 +460,7 @@ var userScreenName = "";
     }
 
     #[test]
+    #[serial]
     fn extract_pre_texts_decodes_html_entities() {
         let html = r#"<h3>Sample Input 1</h3><pre>3 &lt; 5
 &amp;foo
@@ -463,6 +471,7 @@ var userScreenName = "";
     }
 
     #[test]
+    #[serial]
     fn extract_pre_texts_strips_inline_html_tags() {
         let html = r#"<h3>Sample Input 1</h3><pre><var>N</var>
 <var>A</var> <var>B</var>
