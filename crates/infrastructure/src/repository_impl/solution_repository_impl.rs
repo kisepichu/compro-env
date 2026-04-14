@@ -139,6 +139,7 @@ fn expand_templates(
 mod tests {
     use super::*;
     use domain::entity::Language;
+    use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
 
@@ -176,6 +177,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn exists_returns_false_when_solution_dir_not_present() {
         let dir = setup_temp_root();
         let repo = SolutionRepositoryImpl::new(dir.path().to_path_buf());
@@ -187,6 +189,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn exists_returns_true_when_solution_dir_present() {
         let dir = setup_temp_root();
         let root = dir.path();
@@ -202,6 +205,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn create_expands_tera_template() {
         let dir = setup_temp_root();
         let root = dir.path();
@@ -221,6 +225,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn create_copies_static_files() {
         let dir = setup_temp_root();
         let root = dir.path();
@@ -240,6 +245,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn create_is_noop_when_solution_dir_already_exists() {
         let dir = setup_temp_root();
         let root = dir.path();

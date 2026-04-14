@@ -107,6 +107,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn default_online_judge_returns_atcoder() {
         let config = ConfigImpl;
         assert_eq!(config.default_online_judge(), OJKind::AtCoder);

@@ -528,6 +528,7 @@ mod tests {
 
     /// parse_contest_input correctly identifies an AtCoder contest ID by prefix.
     #[test]
+    #[serial]
     fn parse_contest_input_handles_atcoder_id() {
         let result = parse_contest_input("abc334");
         assert_eq!(result, Some((OJKind::AtCoder, "abc334".to_string())));
@@ -535,6 +536,7 @@ mod tests {
 
     /// parse_contest_input correctly parses an AtCoder contest URL.
     #[test]
+    #[serial]
     fn parse_contest_input_handles_atcoder_url() {
         let result = parse_contest_input("https://atcoder.jp/contests/abc334");
         assert_eq!(result, Some((OJKind::AtCoder, "abc334".to_string())));
@@ -542,6 +544,7 @@ mod tests {
 
     /// parse_contest_input returns None for an unknown contest ID.
     #[test]
+    #[serial]
     fn parse_contest_input_returns_none_for_unknown() {
         let result = parse_contest_input("xyz123");
         assert_eq!(result, None);
@@ -549,6 +552,7 @@ mod tests {
 
     /// resolve_init_args accepts a valid lang_override and returns Ok without network I/O.
     #[test]
+    #[serial]
     fn resolve_init_args_accepts_valid_language() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
 
@@ -571,6 +575,7 @@ mod tests {
 
     /// resolve_init_args rejects a lang_override that has no matching templates/ directory.
     #[test]
+    #[serial]
     fn resolve_init_args_rejects_unknown_language() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
 

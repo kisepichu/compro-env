@@ -163,6 +163,7 @@ impl ContestRepository for ContestRepositoryImpl {
 mod tests {
     use super::*;
     use domain::entity::{Contest, OJKind, Problem, Sample};
+    use serial_test::serial;
     use std::fs;
 
     fn make_repo(root: &std::path::Path) -> ContestRepositoryImpl {
@@ -170,6 +171,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn exists_returns_false_when_ce_toml_not_present() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
@@ -181,6 +183,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn exists_returns_true_when_ce_toml_present() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
@@ -192,6 +195,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn exists_unstarted_returns_true_when_dir_exists_without_toml() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
@@ -203,6 +207,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn exists_unstarted_returns_false_when_ce_toml_present() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
@@ -214,6 +219,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn create_unstarted_creates_directory() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
@@ -240,6 +246,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn create_writes_ce_toml_and_testcases() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
@@ -255,6 +262,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn list_problem_codes_returns_sorted_codes_from_testcases_dir() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
@@ -266,6 +274,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn list_problem_codes_returns_empty_when_no_testcases_dir() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
@@ -275,6 +284,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_oj_kind_reads_ce_toml() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
@@ -286,6 +296,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_samples_reads_testcase_files() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
@@ -299,6 +310,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn get_samples_returns_empty_when_no_testcases() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
@@ -308,6 +320,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn create_is_idempotent_for_ce_toml() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_repo(dir.path());
