@@ -1,0 +1,34 @@
+use proconio::input;
+
+fn solve<R: std::io::BufRead>(src: &mut impl proconio::source::Source<R>) -> String {
+    let _ = src; // Replace with: input! { from src, n: usize, a: [i64; n] }
+    todo!()
+}
+
+fn main() {
+    use proconio::source::line::LineSource;
+    use std::io::BufReader;
+    let src = &mut LineSource::new(BufReader::new(std::io::stdin()));
+    print!("{}", solve(src));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proconio::source::once::OnceSource;
+
+    // ↓ Add test cases here (note: breaks if sample contains `"#` — use r##"..."## then)
+    const CASES: &[(&str, &str)] = &[
+        {% for sample in samples -%}
+        (r#"{{ sample.input }}"#, r#"{{ sample.output }}"#),
+        {% endfor -%}
+    ];
+
+    #[test]
+    fn test_samples() {
+        for (i, &(input, expected)) in CASES.iter().enumerate() {
+            let src = &mut OnceSource::from(input);
+            assert_eq!(solve(src).trim(), expected.trim(), "case {}", i + 1);
+        }
+    }
+}
