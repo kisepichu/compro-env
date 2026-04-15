@@ -4,15 +4,17 @@ set -- "$CE_TESTCASES_DIR"/*.in
 if [ ! -e "$1" ]; then echo "no testcases found in $CE_TESTCASES_DIR"; exit 1; fi
 result=0
 for f in "$@"; do
-    expected=$(cat "${f%.in}.out")
-    actual=$(./a.out < "$f")
-    if [ "$actual" = "$expected" ]; then
+    expected_file="${f%.in}.out"
+    actual_file=$(mktemp) || exit 1
+    ./a.out < "$f" > "$actual_file"
+    if diff -u "$expected_file" "$actual_file" > /dev/null; then
         echo "AC: $(basename "$f")"
     else
         echo "WA: $(basename "$f")"
-        printf '  expected: %s\n  actual:   %s\n' "$expected" "$actual"
+        diff -u "$expected_file" "$actual_file"
         result=1
     fi
+    rm -f "$actual_file"
 done
 exit $result
 """

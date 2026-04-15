@@ -24,7 +24,7 @@ ce test <contest_id> <problem_code> [solution_name]
 3. 標準出力・標準エラーはそのまま端末に流す
 4. `test_command` の終了コードをそのまま `ce test` の終了コードとして返す
 
-`ce sub` はこの終了コードを参照し、0 以外なら提出をスキップする（詳細: `docs/commands/submit.md`）。
+将来的には `ce sub` がこの終了コードを参照し、0 以外なら提出をスキップする想定（詳細: `docs/commands/submit.md`）。
 
 ## テンプレートでの定義
 
