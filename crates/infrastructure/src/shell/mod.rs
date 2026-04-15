@@ -130,6 +130,8 @@ pub fn run() -> Result<()> {
                     "invalid problem code \"{problem}\": must be a single path component"
                 );
             }
+            let contest = contest.to_lowercase();
+            let problem = problem.to_lowercase();
             let solution_name = solution.as_deref().unwrap_or("main");
             if !is_safe_path_component(solution_name) {
                 anyhow::bail!(

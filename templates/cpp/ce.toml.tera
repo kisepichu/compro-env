@@ -5,8 +5,8 @@ if [ ! -e "$1" ]; then echo "no testcases found in $CE_TESTCASES_DIR"; exit 1; f
 result=0
 for f in "$@"; do
     expected_file="${f%.in}.out"
-    actual_file=$(mktemp) || exit 1
-    stderr_file=$(mktemp) || { rm -f "$actual_file"; exit 1; }
+    actual_file=$(mktemp "${TMPDIR:-/tmp}/ce_actual.XXXXXX") || exit 1
+    stderr_file=$(mktemp "${TMPDIR:-/tmp}/ce_stderr.XXXXXX") || { rm -f "$actual_file"; exit 1; }
     if ./a.out < "$f" > "$actual_file" 2> "$stderr_file"; then
         if diff -u "$expected_file" "$actual_file" > /dev/null; then
             echo "AC: $(basename "$f")"
