@@ -18,7 +18,7 @@ ce test <contest_id> <problem_code> [solution_name]
 ## 挙動
 
 1. `solutions/{contest_id}/{problem_code}/{solution_name}/ce.toml` を読む
-2. `test_command` を `/bin/sh -c` 経由で実行する
+2. `test_command` を `sh -c` 経由で実行する
    - 作業ディレクトリ: 解法ディレクトリ (`solutions/{contest_id}/{problem_code}/{solution_name}/`)
    - 環境変数 `CE_TESTCASES_DIR` に `solutions/{contest_id}/testcases/{problem_code}/` の絶対パスをセット
 3. 標準出力・標準エラーはそのまま端末に流す
@@ -66,34 +66,39 @@ test_command = "cargo test"
 
 `templates/rust/src/main.rs.tera`:
 ```rust
-use std::io::Read;
+use proconio::input;
 
-fn solve(input: &str) -> String {
+fn solve<R: std::io::BufRead>(src: &mut impl proconio::source::Source<R>) -> String {
+    let _ = src; // Replace with: input! { from src, n: usize, a: [i64; n] }
     todo!()
 }
 
 fn main() {
-    let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input).unwrap();
-    print!("{}", solve(&input));
+    use proconio::source::line::LineSource;
+    use std::io::BufReader;
+    let src = &mut LineSource::new(BufReader::new(std::io::stdin()));
+    print!("{}", solve(src));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proconio::source::once::OnceSource;
 
-    fn run(input: &str) -> String {
-        solve(input)
-    }
+    // ↓ Add test cases here (note: breaks if sample contains `"#` — use r##"..."## then)
+    const CASES: &[(&str, &str)] = &[
+        {% for sample in samples -%}
+        (r#"{{ sample.input }}"#, r#"{{ sample.output }}"#),
+        {% endfor -%}
+    ];
 
-    {% for sample in samples -%}
     #[test]
-    fn test_sample_{{ loop.index }}() {
-        let input = r#"{{ sample.input }}"#;
-        let expected = r#"{{ sample.output }}"#;
-        assert_eq!(run(input).trim(), expected.trim());
+    fn test_samples() {
+        for (i, &(input, expected)) in CASES.iter().enumerate() {
+            let src = &mut OnceSource::from(input);
+            assert_eq!(solve(src).trim(), expected.trim(), "case {}", i + 1);
+        }
     }
-    {% endfor -%}
 }
 ```
 
@@ -103,18 +108,21 @@ mod tests {
 ```toml
 test_command = """
 g++ -O2 -o a.out main.cpp || exit 1
+set -- "$CE_TESTCASES_DIR"/*.in
+if [ ! -e "$1" ]; then echo "no testcases found in $CE_TESTCASES_DIR"; exit 1; fi
 result=0
-for f in "$CE_TESTCASES_DIR"/*.in; do
-    expected=$(cat "${f%.in}.out")
-    actual=$(./a.out < "$f")
-    if [ "$actual" = "$expected" ]; then
+for f in "$@"; do
+    expected_file="${f%.in}.out"
+    actual_file=$(mktemp) || exit 1
+    ./a.out < "$f" > "$actual_file"
+    if diff -u "$expected_file" "$actual_file" > /dev/null; then
         echo "AC: $(basename "$f")"
     else
         echo "WA: $(basename "$f")"
-        echo "  expected: $expected"
-        echo "  actual:   $actual"
+        diff -u "$expected_file" "$actual_file"
         result=1
     fi
+    rm -f "$actual_file"
 done
 exit $result
 """

@@ -97,18 +97,18 @@ fn expand_templates(
 
     // Build Tera context
     let mut ctx = tera::Context::new();
-    ctx.insert("contest", &serde_json::json!({"id": solution.contest_id}));
+    ctx.insert("contest", &serde_json::json!({"id": &solution.contest_id}));
     ctx.insert(
         "problem",
-        &serde_json::json!({"code": solution.problem_code, "title": solution.problem_title}),
+        &serde_json::json!({"code": &solution.problem_code, "title": &solution.problem_title}),
     );
-    ctx.insert("solution", &serde_json::json!({"name": solution.name}));
+    ctx.insert("solution", &serde_json::json!({"name": &solution.name}));
     ctx.insert(
         "samples",
         &serde_json::json!(
             samples
                 .iter()
-                .map(|s| serde_json::json!({"input": s.input, "output": s.output}))
+                .map(|s| serde_json::json!({"input": &s.input, "output": &s.output}))
                 .collect::<Vec<_>>()
         ),
     );

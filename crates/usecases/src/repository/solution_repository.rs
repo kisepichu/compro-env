@@ -13,7 +13,7 @@ pub trait SolutionRepository {
         lang: &Language,
     ) -> Result<bool>;
 
-    /// Creates the solution directory, expands templates, and updates Cargo.toml members.
+    /// Creates the solution directory and expands templates.
     /// Tera context includes: contest.id, problem.code, problem.title, solution.name, samples
     fn create(&self, solution: &Solution, samples: &[Sample]) -> Result<()>;
 
