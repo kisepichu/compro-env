@@ -6,15 +6,23 @@ result=0
 for f in "$@"; do
     expected_file="${f%.in}.out"
     actual_file=$(mktemp) || exit 1
-    ./a.out < "$f" > "$actual_file"
-    if diff -u "$expected_file" "$actual_file" > /dev/null; then
-        echo "AC: $(basename "$f")"
+    stderr_file=$(mktemp) || { rm -f "$actual_file"; exit 1; }
+    if ./a.out < "$f" > "$actual_file" 2> "$stderr_file"; then
+        if diff -u "$expected_file" "$actual_file" > /dev/null; then
+            echo "AC: $(basename "$f")"
+        else
+            echo "WA: $(basename "$f")"
+            diff -u "$expected_file" "$actual_file"
+            result=1
+        fi
     else
-        echo "WA: $(basename "$f")"
-        diff -u "$expected_file" "$actual_file"
+        exit_code=$?
+        echo "RE: $(basename "$f") (exit code: $exit_code)"
+        if [ -s "$actual_file" ]; then echo "--- stdout ---"; cat "$actual_file"; fi
+        if [ -s "$stderr_file" ]; then echo "--- stderr ---" >&2; cat "$stderr_file" >&2; fi
         result=1
     fi
-    rm -f "$actual_file"
+    rm -f "$actual_file" "$stderr_file"
 done
 exit $result
 """
