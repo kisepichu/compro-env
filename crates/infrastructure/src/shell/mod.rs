@@ -2,7 +2,7 @@ pub mod commands;
 
 use anyhow::Result;
 use clap::Parser;
-use commands::{Cli, InitCommand, LoginCommand, LogoutCommand, WhoamiCommand};
+use commands::{Cli, InitCommand, LoginCommand, LogoutCommand, TestCommand, WhoamiCommand};
 use domain::entity::OJKind;
 
 use crate::{
@@ -116,13 +116,18 @@ pub fn run() -> Result<()> {
             todo!()
         }
         commands::Commands::Test {
-            contest: _,
-            problem: _,
-            solution: _,
-            lang: _,
+            contest,
+            problem,
+            solution,
         } => {
-            let _controller = build_controller()?;
-            todo!()
+            let controller = build_controller()?;
+            let solution_name = solution.as_deref().unwrap_or("main");
+            let exit_code = controller.test(&TestCommand {
+                contest_id: contest,
+                problem_code: problem,
+                solution_name: solution_name.to_string(),
+            })?;
+            std::process::exit(exit_code);
         }
         commands::Commands::Submit {
             contest: _,

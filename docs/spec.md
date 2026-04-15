@@ -11,8 +11,9 @@ compro-env/                         ← リポジトリルート
   config.toml                       ← プロジェクトローカル設定 (optional, global を上書き)
   templates/
     rust/                           ← 解法ディレクトリのテンプレート (ユーザーが言語を追加可能)
+      ce.toml.tera                  ← テストコマンド等を定義。ce init 時に ce.toml にレンダリング
       Cargo.toml.tera               ← [package] name = "{{problem.code}}-{{solution.name}}"
-      src/main.rs
+      src/main.rs.tera              ← サンプルを {% for sample in samples %} で埋め込み可能
   solutions/
     {contest_id}/
       .ce.toml                      ← [アプリ管理] OJ 情報を保存 (ce init 時に生成、以降上書きしない)
@@ -21,8 +22,9 @@ compro-env/                         ← リポジトリルート
           1.in  1.out  2.in  2.out
       {problem_code}/
         {solution_name}/            ← [ユーザー作業領域] templates/{lang}/ を展開したもの。以降はユーザーが自由に編集
+          ce.toml                   ← templates/{lang}/ce.toml.tera から展開。test_command 等を定義
           Cargo.toml                ← templates/rust/Cargo.toml.tera から展開
-          src/main.rs
+          src/main.rs               ← templates/rust/src/main.rs.tera から展開
 ```
 
 **領域の区別**:
@@ -63,15 +65,15 @@ language = "rust"
 
 [language.rust]
 solution_file = "src/main.rs"
-test = "cargo run --manifest-path {dir}/Cargo.toml < {input_file}"
 submit_preprocess = ""
 
 [language.rust.atcoder]
 lang_id = "5054"
 ```
 
-`{dir}` は解法ディレクトリの絶対パス、`{input_file}` はテストケース入力ファイルの絶対パス。  
-言語はユーザーが自由に追加できる。`templates/{lang}/` ディレクトリを追加するだけで `ce` がその言語名を認識する。`[language.{name}]` セクションはテスト・提出コマンドの設定に使用する (省略した場合はデフォルト設定のみ)。
+言語はユーザーが自由に追加できる。`templates/{lang}/` ディレクトリを追加するだけで `ce` がその言語名を認識する。`[language.{name}]` セクションは提出コマンドの設定に使用する (省略した場合はデフォルト設定のみ)。
+
+テストコマンドはグローバル config には置かず、`templates/{lang}/ce.toml.tera` で言語ごとに定義する（詳細: `docs/commands/test.md`）。`ce init` 時に Tera でレンダリングされ、解法ディレクトリの `ce.toml` として保存される。
 
 ### プロジェクトローカル: `compro-env/config.toml` (任意)
 
@@ -117,7 +119,7 @@ revel_session = "xxxxxxxx"
 
 サブコマンド: `add` (将来: `rename` 等)
 
-### `ce test <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+### `ce test <contest_id> <problem_code> [solution_name]`
 
 詳細: `docs/commands/test.md`
 
@@ -211,9 +213,10 @@ trait SolutionRepository {
         name: &str,
         lang: &Language,
     ) -> Result<bool>;
-    fn create(&self, solution: &Solution) -> Result<()>;
+    fn create(&self, solution: &Solution, samples: &[Sample]) -> Result<()>;
     // templates/{lang}/ を solutions/{contest_id}/{problem_code}/{solution_name}/ に展開
-    // 既存ファイルはスキップ
+    // Tera コンテキスト: contest.id, problem.code, problem.title, solution.name, samples
+    // 既存ディレクトリはスキップ (冪等)
     fn get_source(&self, solution: &Solution) -> Result<String>;
 }
 
@@ -294,11 +297,11 @@ usecases/
     login.rs      SessionRepository::save()
     whoami.rs     OnlineJudge::whoami()
     init.rs       OnlineJudge::get_contest_meta() + 待機ループ + OnlineJudge::get_problems_detail()
-                  + ContestRepository::create() + SolutionRepository::create() × N
+                  + ContestRepository::create() + SolutionRepository::create(solution, samples) × N
     solution/
-      add.rs      ContestRepository::exists() + SolutionRepository::create()
-    test.rs       ContestRepository::get_samples() + Config (test command)
-    submit.rs     SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::submit()
+      add.rs      ContestRepository::exists() + ContestRepository::get_samples() + SolutionRepository::create(solution, samples)
+    test.rs       解法ディレクトリの ce.toml を読み test_command を sh -c 実行。exit code をそのまま返す
+    submit.rs     test.rs を呼び exit 0 の場合のみ: SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::submit()
 
 interfaces/
   controller/

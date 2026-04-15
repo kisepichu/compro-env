@@ -56,8 +56,6 @@ pub enum Commands {
         contest: String,
         problem: String,
         solution: Option<String>,
-        #[arg(long)]
-        lang: Option<String>,
     },
     /// Submit a solution
     #[command(alias = "sub")]
@@ -147,7 +145,6 @@ pub struct TestCommand {
     pub contest_id: String,
     pub problem_code: String,
     pub solution_name: String,
-    pub language: Language,
 }
 impl TestInput for TestCommand {
     fn contest_id(&self) -> String {
@@ -158,9 +155,6 @@ impl TestInput for TestCommand {
     }
     fn solution_name(&self) -> String {
         self.solution_name.clone()
-    }
-    fn language(&self) -> Language {
-        self.language.clone()
     }
 }
 

@@ -167,7 +167,7 @@ fn build_result(
             name: "main".to_string(),
             language: lang.clone(),
         };
-        solution_repo.create(&solution)?;
+        solution_repo.create(&solution, &problem.samples)?;
         created_solutions.push(solution);
     }
     // Write .ce.toml and test-case files only after all solutions succeed.
@@ -312,6 +312,10 @@ mod tests {
         fn list_problem_codes(&self, _contest_id: &str) -> Result<Vec<String>> {
             Ok(vec![])
         }
+
+        fn testcases_dir(&self, _contest_id: &str, _problem_code: &str) -> std::path::PathBuf {
+            std::path::PathBuf::new()
+        }
     }
 
     struct StubSolutionRepo {
@@ -337,13 +341,26 @@ mod tests {
             Ok(false)
         }
 
-        fn create(&self, solution: &domain::entity::Solution) -> Result<()> {
+        fn create(
+            &self,
+            solution: &domain::entity::Solution,
+            _samples: &[domain::entity::Sample],
+        ) -> Result<()> {
             self.created.borrow_mut().push(solution.clone());
             Ok(())
         }
 
         fn get_source(&self, _solution: &domain::entity::Solution) -> Result<String> {
             Ok(String::new())
+        }
+
+        fn solution_dir(
+            &self,
+            _contest_id: &str,
+            _problem_code: &str,
+            _solution_name: &str,
+        ) -> std::path::PathBuf {
+            std::path::PathBuf::new()
         }
     }
 
@@ -356,14 +373,6 @@ mod tests {
 
         fn default_online_judge(&self) -> OJKind {
             OJKind::AtCoder
-        }
-
-        fn test_command(&self, _lang: &Language) -> String {
-            String::new()
-        }
-
-        fn run_command(&self, _lang: &Language) -> String {
-            String::new()
         }
 
         fn submit_file(&self, _lang: &Language) -> String {
@@ -547,6 +556,10 @@ mod tests {
 
             fn list_problem_codes(&self, _contest_id: &str) -> Result<Vec<String>> {
                 Ok(vec![])
+            }
+
+            fn testcases_dir(&self, _contest_id: &str, _problem_code: &str) -> std::path::PathBuf {
+                std::path::PathBuf::new()
             }
         }
 

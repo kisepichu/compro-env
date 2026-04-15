@@ -30,7 +30,6 @@ pub trait TestInput {
     fn contest_id(&self) -> String;
     fn problem_code(&self) -> String;
     fn solution_name(&self) -> String;
-    fn language(&self) -> Language;
 }
 
 pub trait SubmitInput {

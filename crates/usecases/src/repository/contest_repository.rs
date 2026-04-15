@@ -1,5 +1,6 @@
 use anyhow::Result;
 use domain::entity::{Contest, OJKind, Sample};
+use std::path::PathBuf;
 
 pub trait ContestRepository {
     /// Returns true if the contest directory exists.
@@ -22,4 +23,7 @@ pub trait ContestRepository {
 
     /// Returns the list of problem codes found under testcases/.
     fn list_problem_codes(&self, contest_id: &str) -> Result<Vec<String>>;
+
+    /// Returns the absolute path to testcases/{problem_code}/ under the contest directory.
+    fn testcases_dir(&self, contest_id: &str, problem_code: &str) -> PathBuf;
 }
