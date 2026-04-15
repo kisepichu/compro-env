@@ -120,8 +120,23 @@ pub fn run() -> Result<()> {
             problem,
             solution,
         } => {
-            let controller = build_controller()?;
+            if !is_safe_path_component(&contest) {
+                anyhow::bail!(
+                    "invalid contest ID \"{contest}\": must be a single path component"
+                );
+            }
+            if !is_safe_path_component(&problem) {
+                anyhow::bail!(
+                    "invalid problem code \"{problem}\": must be a single path component"
+                );
+            }
             let solution_name = solution.as_deref().unwrap_or("main");
+            if !is_safe_path_component(solution_name) {
+                anyhow::bail!(
+                    "invalid solution name \"{solution_name}\": must be a single path component"
+                );
+            }
+            let controller = build_controller()?;
             let exit_code = controller.test(&TestCommand {
                 contest_id: contest,
                 problem_code: problem,
