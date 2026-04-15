@@ -1,0 +1,18 @@
+test_command = """
+g++ -O2 -o a.out main.cpp || exit 1
+set -- "$CE_TESTCASES_DIR"/*.in
+if [ ! -e "$1" ]; then echo "no testcases found in $CE_TESTCASES_DIR"; exit 1; fi
+result=0
+for f in "$@"; do
+    expected=$(cat "${f%.in}.out")
+    actual=$(./a.out < "$f")
+    if [ "$actual" = "$expected" ]; then
+        echo "AC: $(basename "$f")"
+    else
+        echo "WA: $(basename "$f")"
+        printf '  expected: %s\n  actual:   %s\n' "$expected" "$actual"
+        result=1
+    fi
+done
+exit $result
+"""

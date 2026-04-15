@@ -1,8 +1,14 @@
+[workspace]
+
 [package]
 name = "{{problem.code}}-{{solution.name}}"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.92"
 
 [[bin]]
 name = "{{problem.code}}-{{solution.name}}"
 path = "src/main.rs"
+
+[dependencies]
+proconio = "0.4"
