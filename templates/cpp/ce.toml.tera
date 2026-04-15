@@ -1,5 +1,5 @@
 test_command = """
-g++ -O2 -o a.out main.cpp || exit 1
+g++ -std=gnu++17 -O2 -o a.out main.cpp || exit 1
 set -- "$CE_TESTCASES_DIR"/*.in
 if [ ! -e "$1" ]; then echo "no testcases found in $CE_TESTCASES_DIR"; exit 1; fi
 result=0
