@@ -301,7 +301,8 @@ usecases/
     solution/
       add.rs      ContestRepository::exists() + ContestRepository::get_samples() + SolutionRepository::create(solution, samples)
     test.rs       解法ディレクトリの ce.toml を読み test_command を sh -c 実行。exit code をそのまま返す
-    submit.rs     test.rs を呼び exit 0 の場合のみ: SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::submit()
+    submit.rs     SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::submit() を担う想定。
+                  test.rs を呼んで exit 0 の場合のみ submit するフローは未実装
 
 interfaces/
   controller/

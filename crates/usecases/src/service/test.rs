@@ -48,3 +48,216 @@ impl Service {
         Ok(status.code().unwrap_or(1))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        config::Config,
+        online_judge::{ContestMeta, OnlineJudge},
+        repository::{
+            contest_repository::ContestRepository,
+            session_repository::SessionRepository,
+            solution_repository::SolutionRepository,
+        },
+        service::Service,
+    };
+    use anyhow::Result;
+    use domain::entity::{Contest, Language, OJKind, Problem, Sample, Session, Solution, SubmitResult};
+    use std::path::PathBuf;
+
+    // ── Minimal stubs ────────────────────────────────────────────────────────
+
+    struct StubOJ;
+    impl OnlineJudge for StubOJ {
+        fn name(&self) -> &str {
+            "stub"
+        }
+        fn whoami(&self, _: &Session) -> Result<String> {
+            Ok(String::new())
+        }
+        fn get_contest_meta(&self, _: &str) -> Result<ContestMeta> {
+            todo!()
+        }
+        fn get_problems_detail(
+            &self,
+            _: &str,
+            _: Option<&Session>,
+            _: &[(String, String)],
+        ) -> Result<Vec<Problem>> {
+            todo!()
+        }
+        fn submit(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &Session,
+        ) -> Result<SubmitResult> {
+            todo!()
+        }
+    }
+
+    struct StubSession;
+    impl SessionRepository for StubSession {
+        fn get(&self, _: &OJKind) -> Result<Option<Session>> {
+            Ok(None)
+        }
+        fn save(&self, _: &Session) -> Result<()> {
+            Ok(())
+        }
+        fn delete(&self, _: &OJKind) -> Result<bool> {
+            Ok(false)
+        }
+    }
+
+    struct StubConfig;
+    impl Config for StubConfig {
+        fn default_language(&self) -> Result<Language> {
+            Ok(Language::new("rust"))
+        }
+        fn default_online_judge(&self) -> OJKind {
+            OJKind::AtCoder
+        }
+        fn submit_file(&self, _: &Language) -> String {
+            String::new()
+        }
+        fn submit_preprocess(&self, _: &Language) -> String {
+            String::new()
+        }
+        fn lang_id(&self, _: &Language, _: &OJKind) -> Option<String> {
+            None
+        }
+    }
+
+    struct StubContestRepo {
+        testcases_dir: PathBuf,
+    }
+    impl ContestRepository for StubContestRepo {
+        fn exists(&self, _: &str) -> Result<bool> {
+            Ok(true)
+        }
+        fn exists_unstarted(&self, _: &str) -> Result<bool> {
+            Ok(false)
+        }
+        fn create_unstarted(&self, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn create(&self, _: &Contest) -> Result<()> {
+            Ok(())
+        }
+        fn get_oj_kind(&self, _: &str) -> Result<OJKind> {
+            Ok(OJKind::AtCoder)
+        }
+        fn get_samples(&self, _: &str, _: &str) -> Result<Vec<Sample>> {
+            Ok(vec![])
+        }
+        fn list_problem_codes(&self, _: &str) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+        fn testcases_dir(&self, _: &str, _: &str) -> PathBuf {
+            self.testcases_dir.clone()
+        }
+    }
+
+    struct StubSolutionRepo {
+        solution_dir: PathBuf,
+    }
+    impl SolutionRepository for StubSolutionRepo {
+        fn list(&self, _: &str, _: &str) -> Result<Vec<Solution>> {
+            Ok(vec![])
+        }
+        fn exists(&self, _: &str, _: &str, _: &str, _: &Language) -> Result<bool> {
+            Ok(false)
+        }
+        fn create(&self, _: &Solution, _: &[Sample]) -> Result<()> {
+            Ok(())
+        }
+        fn get_source(&self, _: &Solution) -> Result<String> {
+            Ok(String::new())
+        }
+        fn solution_dir(&self, _: &str, _: &str, _: &str) -> PathBuf {
+            self.solution_dir.clone()
+        }
+    }
+
+    fn make_service(solution_dir: PathBuf, testcases_dir: PathBuf) -> Service {
+        Service::new(
+            Box::new(StubOJ),
+            Box::new(StubContestRepo { testcases_dir }),
+            Box::new(StubSolutionRepo { solution_dir }),
+            Box::new(StubSession),
+            Box::new(StubConfig),
+        )
+    }
+
+    // ── Tests ────────────────────────────────────────────────────────────────
+
+    /// A ce.toml with `exit 0` returns exit code 0.
+    #[test]
+    fn test_returns_zero_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ce.toml"), "test_command = \"exit 0\"\n").unwrap();
+        let service = make_service(dir.path().to_path_buf(), PathBuf::from("/tmp/testcases"));
+        assert_eq!(service.test("abc001", "a", "main").unwrap(), 0);
+    }
+
+    /// A ce.toml with `exit 1` returns exit code 1.
+    #[test]
+    fn test_returns_nonzero_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ce.toml"), "test_command = \"exit 1\"\n").unwrap();
+        let service = make_service(dir.path().to_path_buf(), PathBuf::from("/tmp/testcases"));
+        assert_eq!(service.test("abc001", "a", "main").unwrap(), 1);
+    }
+
+    /// Missing solution directory produces an error mentioning "solution directory not found".
+    #[test]
+    fn test_errors_when_solution_dir_missing() {
+        let service = make_service(
+            PathBuf::from("/nonexistent/__ce_test_missing_dir__"),
+            PathBuf::from("/tmp/testcases"),
+        );
+        let err = service.test("abc001", "a", "main").unwrap_err();
+        assert!(
+            err.to_string().contains("solution directory not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Existing solution directory with no ce.toml produces an error mentioning "ce.toml not found".
+    #[test]
+    fn test_errors_when_ce_toml_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = make_service(dir.path().to_path_buf(), PathBuf::from("/tmp/testcases"));
+        let err = service.test("abc001", "a", "main").unwrap_err();
+        assert!(
+            err.to_string().contains("ce.toml not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// CE_TESTCASES_DIR env var is set to the path returned by contest_repo.testcases_dir().
+    #[test]
+    fn test_ce_testcases_dir_env_is_set() {
+        let solution_dir = tempfile::tempdir().unwrap();
+        let testcases_dir = tempfile::tempdir().unwrap();
+        let expected = testcases_dir.path().display().to_string();
+        // Shell command verifies the env var matches the expected path
+        let cmd = format!("test \"$CE_TESTCASES_DIR\" = \"{expected}\"");
+        std::fs::write(
+            solution_dir.path().join("ce.toml"),
+            format!("test_command = \"\"\"\n{cmd}\n\"\"\"\n"),
+        )
+        .unwrap();
+        let service = make_service(
+            solution_dir.path().to_path_buf(),
+            testcases_dir.path().to_path_buf(),
+        );
+        assert_eq!(
+            service.test("abc001", "a", "main").unwrap(),
+            0,
+            "CE_TESTCASES_DIR was not set to {expected}"
+        );
+    }
+}
