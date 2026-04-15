@@ -38,27 +38,25 @@ impl Service {
         let testcases_dir = self.contest_repo.testcases_dir(contest_id, problem_code);
 
         #[cfg(not(unix))]
-        let exit_code: i32 = anyhow::bail!(
+        anyhow::bail!(
             "test_command execution requires a Unix-like shell (`sh`), which is unsupported on this platform"
         );
 
         #[cfg(unix)]
-        let exit_code: i32 = {
-            let status = Command::new("sh")
-                .arg("-c")
-                .arg(test_command)
-                .current_dir(&solution_dir)
-                .env("CE_TESTCASES_DIR", &testcases_dir)
-                .status()
-                .with_context(|| "failed to launch sh")?;
-            status.code().unwrap_or(1)
-        };
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg(test_command)
+            .current_dir(&solution_dir)
+            .env("CE_TESTCASES_DIR", &testcases_dir)
+            .status()
+            .with_context(|| "failed to launch sh")?;
 
-        Ok(exit_code)
+        #[cfg(unix)]
+        Ok(status.code().unwrap_or(1))
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use crate::{
         config::Config,

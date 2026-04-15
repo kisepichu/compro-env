@@ -17,10 +17,10 @@ mod tests {
     use super::*;
     use proconio::source::once::OnceSource;
 
-    // ↓ Add test cases here (note: breaks if sample contains `"#` — use r##"..."## then)
+    // ↓ Add test cases here
     const CASES: &[(&str, &str)] = &[
         {% for sample in samples -%}
-        (r#"{{ sample.input }}"#, r#"{{ sample.output }}"#),
+        ({{ sample.input | json_encode() }}, {{ sample.output | json_encode() }}),
         {% endfor -%}
     ];
 
