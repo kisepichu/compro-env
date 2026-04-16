@@ -200,7 +200,7 @@ trait ContestRepository {
     fn get_oj_kind(&self, contest_id: &str) -> Result<OJKind>;
     // .ce.toml から OJKind を読み取る
     fn get_samples(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Sample>>;
-    // testcases/{problem_code}/ が存在しない場合はエラー。存在するがファイルがない場合は空 Vec を返す
+    // testcases/{problem_code}/ が存在しない場合、または存在するがファイルがない場合は空 Vec を返す
     fn list_problem_codes(&self, contest_id: &str) -> Result<Vec<String>>;
     // testcases/ 以下のディレクトリ名から問題コード一覧を返す
 }

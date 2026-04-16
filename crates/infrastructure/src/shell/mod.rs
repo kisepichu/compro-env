@@ -435,7 +435,17 @@ pub fn new_solution_with_io(
 ) -> Result<()> {
     let root = find_project_root()?;
 
-    // Resolve language before path validation so interactive prompting happens first.
+    // Validate paths before any interactive prompting so invalid inputs are rejected early.
+    if !is_safe_path_component(contest) {
+        anyhow::bail!("invalid contest ID \"{contest}\": must be a single path component");
+    }
+    if !is_safe_path_component(problem) {
+        anyhow::bail!("invalid problem code \"{problem}\": must be a single path component");
+    }
+    if !is_safe_path_component(solution_name) {
+        anyhow::bail!("invalid solution name \"{solution_name}\": must be a single path component");
+    }
+
     let resolved_lang = match lang_override {
         Some(l) => l.to_string(),
         None => match ConfigImpl.default_language() {
