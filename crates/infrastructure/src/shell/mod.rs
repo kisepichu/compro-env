@@ -106,14 +106,25 @@ pub fn run() -> Result<()> {
             }
             Ok(())
         }
-        commands::Commands::New {
-            contest: _,
-            problem: _,
-            solution: _,
-            lang: _,
-        } => {
-            let _controller = build_controller()?;
-            todo!()
+        commands::Commands::Solution { subcommand } => {
+            match subcommand {
+                commands::SolutionSubcommand::Add {
+                    contest,
+                    problem,
+                    solution,
+                    lang,
+                } => {
+                    let solution_name = solution.as_deref().unwrap_or("main");
+                    match new_solution_with_io(&contest, &problem, solution_name, lang.as_deref()) {
+                        Ok(()) => {}
+                        Err(e) => {
+                            eprintln!("{e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+            Ok(())
         }
         commands::Commands::Test {
             contest,
@@ -121,9 +132,7 @@ pub fn run() -> Result<()> {
             solution,
         } => {
             if !is_safe_path_component(&contest) {
-                anyhow::bail!(
-                    "invalid contest ID \"{contest}\": must be a single path component"
-                );
+                anyhow::bail!("invalid contest ID \"{contest}\": must be a single path component");
             }
             if !is_safe_path_component(&problem) {
                 anyhow::bail!(
@@ -414,6 +423,95 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
     Ok(())
 }
 
+/// Creates a new solution directory from CLI arguments.
+///
+/// Validates inputs, resolves language (falling back to interactive prompt when config is absent),
+/// calls the controller, and prints the result.
+pub fn new_solution_with_io(
+    contest: &str,
+    problem: &str,
+    solution_name: &str,
+    lang_override: Option<&str>,
+) -> Result<()> {
+    let root = find_project_root()?;
+
+    // Validate paths before any interactive prompting so invalid inputs are rejected early.
+    if !is_safe_path_component(contest) {
+        anyhow::bail!("invalid contest ID \"{contest}\": must be a single path component");
+    }
+    if !is_safe_path_component(problem) {
+        anyhow::bail!("invalid problem code \"{problem}\": must be a single path component");
+    }
+    if !is_safe_path_component(solution_name) {
+        anyhow::bail!("invalid solution name \"{solution_name}\": must be a single path component");
+    }
+
+    let resolved_lang = match lang_override {
+        Some(l) => l.to_string(),
+        None => match ConfigImpl.default_language() {
+            Ok(l) => l.as_str().to_string(),
+            Err(_) => prompt_language(&root)?.as_str().to_string(),
+        },
+    };
+
+    let (contest_id, problem_code, solution_name, language) =
+        resolve_new_solution_args(contest, problem, solution_name, Some(&resolved_lang), &root)?;
+
+    build_controller()?.new_solution(&commands::NewCommand {
+        contest_id: contest_id.clone(),
+        problem_code: problem_code.clone(),
+        solution_name: solution_name.clone(),
+        language: language.clone(),
+    })?;
+
+    println!(
+        "Created solutions/{}/{}/{} ({})",
+        contest_id, problem_code, solution_name, language
+    );
+
+    Ok(())
+}
+
+/// Validates path safety, normalises inputs to lowercase, and validates the language
+/// against `templates/` under `root`.
+///
+/// Used by both `new_solution_with_io` (production) and tests.
+fn resolve_new_solution_args(
+    contest: &str,
+    problem: &str,
+    solution_name: &str,
+    lang_override: Option<&str>,
+    root: &std::path::Path,
+) -> Result<(String, String, String, domain::entity::Language)> {
+    if !is_safe_path_component(contest) {
+        anyhow::bail!("invalid contest ID \"{contest}\": must be a single path component");
+    }
+    if !is_safe_path_component(problem) {
+        anyhow::bail!("invalid problem code \"{problem}\": must be a single path component");
+    }
+    if !is_safe_path_component(solution_name) {
+        anyhow::bail!("invalid solution name \"{solution_name}\": must be a single path component");
+    }
+
+    let contest_id = contest.to_lowercase();
+    let problem_code = problem.to_lowercase();
+    let solution_name = solution_name.to_lowercase();
+
+    let language = if let Some(lang) = lang_override {
+        let language = lang
+            .parse::<domain::entity::Language>()
+            .map_err(|e| anyhow::anyhow!(e))?;
+        validate_language(&language, root)?;
+        language
+    } else {
+        let lang = ConfigImpl.default_language()?;
+        validate_language(&lang, root)?;
+        lang
+    };
+
+    Ok((contest_id, problem_code, solution_name, language))
+}
+
 fn build_controller() -> Result<Controller> {
     let root = find_project_root()?;
 
@@ -637,6 +735,82 @@ mod tests {
             result.expect("whoami_with_io should return Ok, not Err"),
             None,
             "expected None when no session is saved"
+        );
+    }
+
+    /// resolve_new_solution_args accepts valid inputs and normalises to lowercase.
+    #[test]
+    #[serial]
+    fn resolve_new_solution_args_accepts_valid_inputs() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        std::fs::create_dir_all(tmp.path().join("templates").join("rust"))
+            .expect("failed to create templates/rust");
+
+        let result = resolve_new_solution_args("ABC001", "A", "Sol2", Some("rust"), tmp.path());
+
+        assert!(
+            result.is_ok(),
+            "expected Ok for valid inputs, got: {:?}",
+            result
+        );
+        let (contest_id, problem_code, sol_name, lang) = result.unwrap();
+        assert_eq!(contest_id, "abc001");
+        assert_eq!(problem_code, "a");
+        assert_eq!(sol_name, "sol2");
+        assert_eq!(lang.as_str(), "rust");
+    }
+
+    /// resolve_new_solution_args rejects a contest_id with a path separator.
+    #[test]
+    #[serial]
+    fn resolve_new_solution_args_rejects_path_traversal_in_contest() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        std::fs::create_dir_all(tmp.path().join("templates").join("rust")).unwrap();
+
+        let result = resolve_new_solution_args("../evil", "a", "main", Some("rust"), tmp.path());
+
+        assert!(result.is_err(), "expected Err for path traversal, got Ok");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("invalid contest ID"),
+            "expected 'invalid contest ID' in error, got: {msg}"
+        );
+    }
+
+    /// resolve_new_solution_args rejects a problem_code with a slash.
+    #[test]
+    #[serial]
+    fn resolve_new_solution_args_rejects_slash_in_problem_code() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        std::fs::create_dir_all(tmp.path().join("templates").join("rust")).unwrap();
+
+        let result = resolve_new_solution_args("abc001", "a/b", "main", Some("rust"), tmp.path());
+
+        assert!(
+            result.is_err(),
+            "expected Err for slash in problem code, got Ok"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("invalid problem code"),
+            "expected 'invalid problem code' in error, got: {msg}"
+        );
+    }
+
+    /// resolve_new_solution_args rejects an unknown language.
+    #[test]
+    #[serial]
+    fn resolve_new_solution_args_rejects_unknown_language() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        std::fs::create_dir_all(tmp.path().join("templates").join("rust")).unwrap();
+
+        let result = resolve_new_solution_args("abc001", "a", "main", Some("cpp"), tmp.path());
+
+        assert!(result.is_err(), "expected Err for unknown language, got Ok");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("unknown language"),
+            "expected 'unknown language' in error, got: {msg}"
         );
     }
 }

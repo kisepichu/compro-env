@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use domain::entity::{Language, Sample, Solution};
+use domain::entity::{Sample, Solution};
 use usecases::repository::solution_repository::SolutionRepository;
 
 pub struct SolutionRepositoryImpl {
@@ -17,13 +17,7 @@ impl SolutionRepository for SolutionRepositoryImpl {
         todo!()
     }
 
-    fn exists(
-        &self,
-        contest_id: &str,
-        problem_code: &str,
-        name: &str,
-        _lang: &Language,
-    ) -> Result<bool> {
+    fn exists(&self, contest_id: &str, problem_code: &str, name: &str) -> Result<bool> {
         let solution_dir = self
             .root
             .join("solutions")
@@ -205,9 +199,7 @@ mod tests {
         let dir = setup_temp_root();
         let repo = SolutionRepositoryImpl::new(dir.path().to_path_buf());
 
-        let result = repo
-            .exists("abc001", "a", "main", &Language::new("rust"))
-            .unwrap();
+        let result = repo.exists("abc001", "a", "main").unwrap();
         assert!(!result);
     }
 
@@ -221,9 +213,7 @@ mod tests {
         fs::create_dir_all(&solution_dir).unwrap();
 
         let repo = SolutionRepositoryImpl::new(root.to_path_buf());
-        let result = repo
-            .exists("abc001", "a", "main", &Language::new("rust"))
-            .unwrap();
+        let result = repo.exists("abc001", "a", "main").unwrap();
         assert!(result);
     }
 

@@ -331,13 +331,7 @@ mod tests {
             Ok(vec![])
         }
 
-        fn exists(
-            &self,
-            _contest_id: &str,
-            _problem_code: &str,
-            _name: &str,
-            _lang: &Language,
-        ) -> Result<bool> {
+        fn exists(&self, _contest_id: &str, _problem_code: &str, _name: &str) -> Result<bool> {
             Ok(false)
         }
 

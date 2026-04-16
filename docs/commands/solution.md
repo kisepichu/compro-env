@@ -20,7 +20,7 @@
 ## シグネチャ
 
 ```
-ce solution add <contest_id> <problem_code> [solution_name] --lang <lang>
+ce solution add <contest_id> <problem_code> [solution_name] [--lang <lang>]
 ```
 
 - `contest_id`: コンテスト ID (例: `abc334`)
@@ -30,11 +30,14 @@ ce solution add <contest_id> <problem_code> [solution_name] --lang <lang>
 
 ## 挙動
 
-1. `ContestRepository::get(contest_id)` で `Contest` を取得する
-2. `SolutionRepository::create(&solution)` を呼ぶ
+1. `contest_id`、`problem_code`、`solution_name` を小文字に正規化する (`ce init` / `ce test` と同様)
+2. `ContestRepository::exists(contest_id)` でコンテストが存在するか確認する
+3. `ContestRepository::list_problem_codes(contest_id)` で `problem_code` が存在するか確認する
+4. `SolutionRepository::exists(contest_id, problem_code, solution_name)` で既存チェックを行い、存在すればエラー
+5. `ContestRepository::get_samples(contest_id, problem_code)` でサンプルを取得する
+6. `SolutionRepository::create(&solution, &samples)` を呼ぶ
    - `templates/{lang}/` を `solutions/{contest_id}/{problem_code}/{solution_name}/` として展開
-   - 既に同名ディレクトリが存在する場合はエラー
-3. 作成したパスを表示する
+7. 作成したパス (プロジェクトルートからの相対パス) を表示する
 
 ## 出力形式
 
@@ -42,11 +45,14 @@ ce solution add <contest_id> <problem_code> [solution_name] --lang <lang>
 Created solutions/abc334/a/sol2 (rust)
 ```
 
+パスはプロジェクトルートからの相対パス。
+
 ## エラーケース
 
 - 対象ディレクトリが既に存在する: エラーメッセージを表示して終了
 - `contest_id` に対応するコンテストがない: `ce init` を先に実行するよう促す
-- `lang` に対応するテンプレートが存在しない: テンプレートパスを示してエラー終了
+- `problem_code` に対応する問題がない: 利用可能な問題コード一覧を表示してエラー終了
+- `lang` に対応するテンプレートが存在しない: 利用可能な言語一覧を表示してエラー終了
 
 ## 未決事項
 
