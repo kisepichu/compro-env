@@ -51,7 +51,7 @@
   - `resolve_new_solution_args` (cfg(test)) ヘルパーでテストカバレッジを確保
   - テスト: 正常系・パストラバーサル・スラッシュ含む problem_code・不明言語
 
-- [x] `commands::Commands::New` のハンドラを `new_solution_with_io` 呼び出しに切り替える
+- [x] `Commands::Solution { subcommand: SolutionSubcommand::Add { .. } }` のハンドラを `new_solution_with_io` 呼び出しに切り替える (`Commands::New` を削除して `SolutionSubcommand` に置き換え)
 
 ### フォーマット・静的解析
 

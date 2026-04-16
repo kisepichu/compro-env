@@ -28,7 +28,7 @@
 ### usecases/ — 呼び出し側修正
 
 - [x] `service/init.rs`: `solution_repo.create(solution, &problem.samples)` に更新
-- [ ] `service/new_solution.rs`: `contest_repo.get_samples()` を追加し `create(solution, &samples)` に更新 (new_solution は todo!() のまま — TASK-009 以降で対応)
+- [x] `service/new_solution.rs`: `contest_repo.get_samples()` を追加し `create(solution, &samples)` に更新 (TASK-009 で対応済み)
 
 ### templates/
 

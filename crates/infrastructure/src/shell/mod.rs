@@ -115,8 +115,7 @@ pub fn run() -> Result<()> {
                     lang,
                 } => {
                     let solution_name = solution.as_deref().unwrap_or("main");
-                    match new_solution_with_io(&contest, &problem, solution_name, lang.as_deref())
-                    {
+                    match new_solution_with_io(&contest, &problem, solution_name, lang.as_deref()) {
                         Ok(()) => {}
                         Err(e) => {
                             eprintln!("{e}");
@@ -426,7 +425,8 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
 
 /// Creates a new solution directory from CLI arguments.
 ///
-/// Validates inputs, resolves language, calls the controller, and prints the result.
+/// Validates inputs, resolves language (falling back to interactive prompt if needed),
+/// calls the controller, and prints the result.
 pub fn new_solution_with_io(
     contest: &str,
     problem: &str,
@@ -435,35 +435,17 @@ pub fn new_solution_with_io(
 ) -> Result<()> {
     let root = find_project_root()?;
 
-    if !is_safe_path_component(contest) {
-        anyhow::bail!("invalid contest ID \"{contest}\": must be a single path component");
-    }
-    if !is_safe_path_component(problem) {
-        anyhow::bail!("invalid problem code \"{problem}\": must be a single path component");
-    }
-    if !is_safe_path_component(solution_name) {
-        anyhow::bail!("invalid solution name \"{solution_name}\": must be a single path component");
-    }
-
-    let contest_id = contest.to_lowercase();
-    let problem_code = problem.to_lowercase();
-    let solution_name = solution_name.to_lowercase();
-
-    let language = if let Some(lang) = lang_override {
-        let language = lang
-            .parse::<domain::entity::Language>()
-            .map_err(|e| anyhow::anyhow!(e))?;
-        validate_language(&language, &root)?;
-        language
-    } else {
-        match ConfigImpl.default_language() {
-            Ok(lang) => {
-                validate_language(&lang, &root)?;
-                lang
-            }
-            Err(_) => prompt_language(&root)?,
-        }
+    // Resolve language before path validation so interactive prompting happens first.
+    let resolved_lang = match lang_override {
+        Some(l) => l.to_string(),
+        None => match ConfigImpl.default_language() {
+            Ok(l) => l.as_str().to_string(),
+            Err(_) => prompt_language(&root)?.as_str().to_string(),
+        },
     };
+
+    let (contest_id, problem_code, solution_name, language) =
+        resolve_new_solution_args(contest, problem, solution_name, Some(&resolved_lang), &root)?;
 
     build_controller()?.new_solution(&commands::NewCommand {
         contest_id: contest_id.clone(),
@@ -480,12 +462,10 @@ pub fn new_solution_with_io(
     Ok(())
 }
 
-/// Pure resolution helper used only in tests.
+/// Validates path safety, normalises inputs to lowercase, and validates the language
+/// against `templates/` under `root`.
 ///
-/// Validates path safety, normalises to lowercase, and resolves/validates the language
-/// against `templates/` under `root`. Does not perform any I/O beyond reading the
-/// filesystem for `validate_language`.
-#[cfg(test)]
+/// Used by both `new_solution_with_io` (production) and tests.
 fn resolve_new_solution_args(
     contest: &str,
     problem: &str,
