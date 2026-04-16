@@ -42,14 +42,10 @@ pub enum Commands {
         #[arg(long)]
         lang: Option<String>,
     },
-    /// Add a solution directory
-    New {
-        contest: String,
-        problem: String,
-        /// Solution name (default: main)
-        solution: Option<String>,
-        #[arg(long)]
-        lang: Option<String>,
+    /// Manage solution directories
+    Solution {
+        #[command(subcommand)]
+        subcommand: SolutionSubcommand,
     },
     /// Run sample tests
     Test {
@@ -62,6 +58,19 @@ pub enum Commands {
     Submit {
         contest: String,
         problem: String,
+        solution: Option<String>,
+        #[arg(long)]
+        lang: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SolutionSubcommand {
+    /// Add a solution directory
+    Add {
+        contest: String,
+        problem: String,
+        /// Solution name (default: main)
         solution: Option<String>,
         #[arg(long)]
         lang: Option<String>,

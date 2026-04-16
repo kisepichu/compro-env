@@ -62,14 +62,15 @@ mod tests {
         config::Config,
         online_judge::{ContestMeta, OnlineJudge},
         repository::{
-            contest_repository::ContestRepository,
-            session_repository::SessionRepository,
+            contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
         },
         service::Service,
     };
     use anyhow::Result;
-    use domain::entity::{Contest, Language, OJKind, Problem, Sample, Session, Solution, SubmitResult};
+    use domain::entity::{
+        Contest, Language, OJKind, Problem, Sample, Session, Solution, SubmitResult,
+    };
     use std::path::PathBuf;
 
     // ── Minimal stubs ────────────────────────────────────────────────────────
@@ -93,14 +94,7 @@ mod tests {
         ) -> Result<Vec<Problem>> {
             todo!()
         }
-        fn submit(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &Session,
-        ) -> Result<SubmitResult> {
+        fn submit(&self, _: &str, _: &str, _: &str, _: &str, _: &Session) -> Result<SubmitResult> {
             todo!()
         }
     }
@@ -174,7 +168,7 @@ mod tests {
         fn list(&self, _: &str, _: &str) -> Result<Vec<Solution>> {
             Ok(vec![])
         }
-        fn exists(&self, _: &str, _: &str, _: &str, _: &Language) -> Result<bool> {
+        fn exists(&self, _: &str, _: &str, _: &str) -> Result<bool> {
             Ok(false)
         }
         fn create(&self, _: &Solution, _: &[Sample]) -> Result<()> {

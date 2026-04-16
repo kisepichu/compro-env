@@ -200,23 +200,18 @@ trait ContestRepository {
     fn get_oj_kind(&self, contest_id: &str) -> Result<OJKind>;
     // .ce.toml から OJKind を読み取る
     fn get_samples(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Sample>>;
+    // testcases/{problem_code}/ が存在しない場合はエラー。存在するがファイルがない場合は空 Vec を返す
     fn list_problem_codes(&self, contest_id: &str) -> Result<Vec<String>>;
     // testcases/ 以下のディレクトリ名から問題コード一覧を返す
 }
 
 trait SolutionRepository {
     fn list(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Solution>>;
-    fn exists(
-        &self,
-        contest_id: &str,
-        problem_code: &str,
-        name: &str,
-        lang: &Language,
-    ) -> Result<bool>;
+    fn exists(&self, contest_id: &str, problem_code: &str, name: &str) -> Result<bool>;
     fn create(&self, solution: &Solution, samples: &[Sample]) -> Result<()>;
     // templates/{lang}/ を solutions/{contest_id}/{problem_code}/{solution_name}/ に展開
     // Tera コンテキスト: contest.id, problem.code, problem.title, solution.name, samples
-    // 既存ディレクトリはスキップ (冪等)
+    // 既存ディレクトリはスキップ (冪等)。ce solution add では呼び出し前にユースケース層が exists() でチェックする
     fn get_source(&self, solution: &Solution) -> Result<String>;
 }
 
@@ -298,8 +293,7 @@ usecases/
     whoami.rs     OnlineJudge::whoami()
     init.rs       OnlineJudge::get_contest_meta() + 待機ループ + OnlineJudge::get_problems_detail()
                   + ContestRepository::create() + SolutionRepository::create(solution, samples) × N
-    solution/
-      add.rs      ContestRepository::exists() + ContestRepository::get_samples() + SolutionRepository::create(solution, samples)
+    new_solution.rs  ContestRepository::exists() + ContestRepository::list_problem_codes() + SolutionRepository::exists() + ContestRepository::get_samples() + SolutionRepository::create(solution, samples)
     test.rs       解法ディレクトリの ce.toml を読み test_command を sh -c 実行。exit code をそのまま返す
     submit.rs     SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::submit() を担う想定。
                   test.rs を呼んで exit 0 の場合のみ submit するフローは未実装

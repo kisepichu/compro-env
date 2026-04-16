@@ -10,7 +10,7 @@
    - エンティティ・値オブジェクト・集約を確定 (spec.md のモデルをベースに)
 3. **ディレクトリ骨格 + `todo!()` 実装**
 4. **MVP 機能を順に実装**
-   - login → init → test → submit
+   - login → init → test → solution add → submit
 5. **仕様と実装の同期を保ちながら拡張**
 
 ## 確定事項
@@ -19,7 +19,7 @@
 |------|----------|
 | ツール名 | `compro-env` / コマンド `ce` |
 | 実装言語 | Rust |
-| MVP スコープ | login, init, test, submit |
+| MVP スコープ | login, init, test, solution add, submit |
 | AtCoder ログイン | `REVEL_SESSION` 手動コピー (aclogin 方式を自前実装) |
 | oj 連携 | なし (Cloudflare Turnstile で破綻中) |
 | ディレクトリ構造 | `solutions/{contest_id}/{problem_code}/{solution_name}/` |
