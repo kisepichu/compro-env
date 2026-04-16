@@ -2,7 +2,7 @@ pub mod commands;
 
 use anyhow::Result;
 use clap::Parser;
-use commands::{Cli, InitCommand, LoginCommand, LogoutCommand, WhoamiCommand};
+use commands::{Cli, InitCommand, LoginCommand, LogoutCommand, TestCommand, WhoamiCommand};
 use domain::entity::OJKind;
 
 use crate::{
@@ -116,13 +116,35 @@ pub fn run() -> Result<()> {
             todo!()
         }
         commands::Commands::Test {
-            contest: _,
-            problem: _,
-            solution: _,
-            lang: _,
+            contest,
+            problem,
+            solution,
         } => {
-            let _controller = build_controller()?;
-            todo!()
+            if !is_safe_path_component(&contest) {
+                anyhow::bail!(
+                    "invalid contest ID \"{contest}\": must be a single path component"
+                );
+            }
+            if !is_safe_path_component(&problem) {
+                anyhow::bail!(
+                    "invalid problem code \"{problem}\": must be a single path component"
+                );
+            }
+            let contest = contest.to_lowercase();
+            let problem = problem.to_lowercase();
+            let solution_name = solution.as_deref().unwrap_or("main");
+            if !is_safe_path_component(solution_name) {
+                anyhow::bail!(
+                    "invalid solution name \"{solution_name}\": must be a single path component"
+                );
+            }
+            let controller = build_controller()?;
+            let exit_code = controller.test(&TestCommand {
+                contest_id: contest,
+                problem_code: problem,
+                solution_name: solution_name.to_string(),
+            })?;
+            std::process::exit(exit_code);
         }
         commands::Commands::Submit {
             contest: _,

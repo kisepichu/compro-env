@@ -5,11 +5,6 @@ pub trait Config {
     fn default_language(&self) -> Result<Language>;
     fn default_online_judge(&self) -> OJKind;
 
-    /// Test command template. Placeholders {problem}, {solution}, {file} are substituted.
-    fn test_command(&self, lang: &Language) -> String;
-
-    fn run_command(&self, lang: &Language) -> String;
-
     /// Path of the file to submit (e.g. "src/main.rs").
     fn submit_file(&self, lang: &Language) -> String;
 

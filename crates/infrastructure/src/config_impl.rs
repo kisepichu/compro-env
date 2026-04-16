@@ -56,14 +56,6 @@ impl Config for ConfigImpl {
         OJKind::AtCoder
     }
 
-    fn test_command(&self, _lang: &Language) -> String {
-        todo!()
-    }
-
-    fn run_command(&self, _lang: &Language) -> String {
-        todo!()
-    }
-
     fn submit_file(&self, _lang: &Language) -> String {
         todo!()
     }

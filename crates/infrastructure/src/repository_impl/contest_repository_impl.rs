@@ -157,6 +157,14 @@ impl ContestRepository for ContestRepositoryImpl {
         codes.sort();
         Ok(codes)
     }
+
+    fn testcases_dir(&self, contest_id: &str, problem_code: &str) -> std::path::PathBuf {
+        self.root
+            .join("solutions")
+            .join(contest_id)
+            .join("testcases")
+            .join(problem_code)
+    }
 }
 
 #[cfg(test)]

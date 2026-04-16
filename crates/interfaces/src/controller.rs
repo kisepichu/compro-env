@@ -50,16 +50,12 @@ impl Controller {
         self.service.new_solution(solution)
     }
 
-    pub fn test(&self, args: &dyn TestInput) -> Result<usecases::service::test::TestResult> {
-        use domain::entity::Solution;
-        let solution = Solution {
-            contest_id: args.contest_id(),
-            problem_code: args.problem_code(),
-            problem_title: String::new(),
-            name: args.solution_name(),
-            language: args.language(),
-        };
-        self.service.test(&solution)
+    pub fn test(&self, args: &dyn TestInput) -> Result<i32> {
+        self.service.test(
+            &args.contest_id(),
+            &args.problem_code(),
+            &args.solution_name(),
+        )
     }
 
     pub fn submit(&self, args: &dyn SubmitInput) -> Result<domain::entity::SubmitResult> {

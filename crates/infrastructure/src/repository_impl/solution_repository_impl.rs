@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use domain::entity::{Language, Solution};
+use domain::entity::{Language, Sample, Solution};
 use usecases::repository::solution_repository::SolutionRepository;
 
 pub struct SolutionRepositoryImpl {
@@ -33,7 +33,7 @@ impl SolutionRepository for SolutionRepositoryImpl {
         Ok(solution_dir.is_dir())
     }
 
-    fn create(&self, solution: &Solution) -> Result<()> {
+    fn create(&self, solution: &Solution, samples: &[Sample]) -> Result<()> {
         let solution_dir = self
             .root
             .join("solutions")
@@ -55,7 +55,7 @@ impl SolutionRepository for SolutionRepositoryImpl {
 
         // Expand templates; clean up the newly created dir if anything fails
         // to prevent future runs from silently skipping a broken solution dir.
-        let result = expand_templates(&solution_dir, solution, self);
+        let result = expand_templates(&solution_dir, solution, samples, self);
         if result.is_err() {
             let _ = std::fs::remove_dir_all(&solution_dir);
         }
@@ -65,11 +65,25 @@ impl SolutionRepository for SolutionRepositoryImpl {
     fn get_source(&self, _solution: &Solution) -> Result<String> {
         todo!()
     }
+
+    fn solution_dir(
+        &self,
+        contest_id: &str,
+        problem_code: &str,
+        solution_name: &str,
+    ) -> std::path::PathBuf {
+        self.root
+            .join("solutions")
+            .join(contest_id)
+            .join(problem_code)
+            .join(solution_name)
+    }
 }
 
 fn expand_templates(
     solution_dir: &std::path::Path,
     solution: &Solution,
+    samples: &[Sample],
     repo: &SolutionRepositoryImpl,
 ) -> Result<()> {
     let lang_dir = solution.language.dir_name();
@@ -83,12 +97,21 @@ fn expand_templates(
 
     // Build Tera context
     let mut ctx = tera::Context::new();
-    ctx.insert("contest", &serde_json::json!({"id": solution.contest_id}));
+    ctx.insert("contest", &serde_json::json!({"id": &solution.contest_id}));
     ctx.insert(
         "problem",
-        &serde_json::json!({"code": solution.problem_code, "title": solution.problem_title}),
+        &serde_json::json!({"code": &solution.problem_code, "title": &solution.problem_title}),
     );
-    ctx.insert("solution", &serde_json::json!({"name": solution.name}));
+    ctx.insert("solution", &serde_json::json!({"name": &solution.name}));
+    ctx.insert(
+        "samples",
+        &serde_json::json!(
+            samples
+                .iter()
+                .map(|s| serde_json::json!({"input": &s.input, "output": &s.output}))
+                .collect::<Vec<_>>()
+        ),
+    );
 
     // Walk the template directory recursively
     for entry in walkdir::WalkDir::new(&template_dir) {
@@ -212,7 +235,7 @@ mod tests {
         let repo = SolutionRepositoryImpl::new(root.to_path_buf());
 
         let solution = make_solution("abc001", "a", "main", Language::new("rust"));
-        repo.create(&solution).unwrap();
+        repo.create(&solution, &[]).unwrap();
 
         let cargo_toml_path = root.join("solutions/abc001/a/main/Cargo.toml");
         assert!(
@@ -232,7 +255,7 @@ mod tests {
         let repo = SolutionRepositoryImpl::new(root.to_path_buf());
 
         let solution = make_solution("abc001", "a", "main", Language::new("rust"));
-        repo.create(&solution).unwrap();
+        repo.create(&solution, &[]).unwrap();
 
         let main_rs_path = root.join("solutions/abc001/a/main/src/main.rs");
         assert!(
@@ -259,7 +282,7 @@ mod tests {
         fs::write(&main_rs, "fn main() { /* user edited */ }").unwrap();
 
         let solution = make_solution("abc001", "a", "main", Language::new("rust"));
-        repo.create(&solution).unwrap();
+        repo.create(&solution, &[]).unwrap();
 
         // User's file must be untouched
         let contents = fs::read_to_string(&main_rs).unwrap();
