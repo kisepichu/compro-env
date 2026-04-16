@@ -28,7 +28,7 @@ mod tests {
     fn test_samples() {
         for (i, &(input, expected)) in CASES.iter().enumerate() {
             let src = &mut OnceSource::from(input);
-            assert_eq!(solve(src).trim(), expected.trim(), "case {}", i + 1);
+            assert_eq!(solve(src).trim(), expected.trim(), "case {}\n--- input ---\n{}", i + 1, input);
         }
     }
 }

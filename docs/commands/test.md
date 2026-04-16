@@ -17,8 +17,9 @@ ce test <contest_id> <problem_code> [solution_name]
 
 ## 挙動
 
-1. `solutions/{contest_id}/{problem_code}/{solution_name}/ce.toml` を読む
-2. `test_command` を `sh -c` 経由で実行する
+1. `contest_id` と `problem_code` を小文字に正規化する (`ce init` と同様)
+2. `solutions/{contest_id}/{problem_code}/{solution_name}/ce.toml` を読む
+3. `test_command` を `sh -c` 経由で実行する
    - 作業ディレクトリ: 解法ディレクトリ (`solutions/{contest_id}/{problem_code}/{solution_name}/`)
    - 環境変数 `CE_TESTCASES_DIR` に `solutions/{contest_id}/testcases/{problem_code}/` の絶対パスをセット
 3. 標準出力・標準エラーはそのまま端末に流す
@@ -107,7 +108,7 @@ mod tests {
 `templates/cpp/ce.toml.tera`:
 ```toml
 test_command = """
-g++ -O2 -o a.out main.cpp || exit 1
+g++ -std=gnu++17 -O2 -o a.out main.cpp || exit 1
 set -- "$CE_TESTCASES_DIR"/*.in
 if [ ! -e "$1" ]; then echo "no testcases found in $CE_TESTCASES_DIR"; exit 1; fi
 result=0
