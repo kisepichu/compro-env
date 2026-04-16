@@ -425,7 +425,7 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
 
 /// Creates a new solution directory from CLI arguments.
 ///
-/// Validates inputs, resolves language (falling back to interactive prompt if needed),
+/// Validates inputs, resolves language (falling back to interactive prompt when config is absent),
 /// calls the controller, and prints the result.
 pub fn new_solution_with_io(
     contest: &str,

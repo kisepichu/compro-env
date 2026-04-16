@@ -236,7 +236,7 @@ mod tests {
         let err = service.new_solution(solution).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains('a') && msg.contains('b'),
+            msg.contains("Available: a, b"),
             "expected available problem codes in error, got: {msg}"
         );
     }
