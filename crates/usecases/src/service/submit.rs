@@ -19,7 +19,7 @@ impl Service {
 
         let ce_toml_path = solution_dir.join("ce.toml");
         let ce_toml_contents = std::fs::read_to_string(&ce_toml_path)
-            .with_context(|| format!("ce.toml not found: {ce_toml_path:?}"))?;
+            .with_context(|| format!("failed to read ce.toml: {ce_toml_path:?}"))?;
         let ce_table: toml::Table = toml::from_str(&ce_toml_contents)
             .with_context(|| format!("failed to parse {ce_toml_path:?}"))?;
         let lang_str = ce_table
@@ -52,7 +52,18 @@ impl Service {
             )
         })?;
 
-        // 5. Build the browser submit URL.
+        // 5. Guard against source files too large for a browser URL.
+        // Base64 expands by ~4/3; most browsers/OS URL-launchers cap at ~32 KB.
+        const MAX_SOURCE_BYTES: usize = 24 * 1024; // 24 KB → ~32 KB after base64
+        if source.len() > MAX_SOURCE_BYTES {
+            anyhow::bail!(
+                "source file is too large to submit via URL fragment ({} bytes, max {})",
+                source.len(),
+                MAX_SOURCE_BYTES,
+            );
+        }
+
+        // 6. Build the browser submit URL.
         let url = self
             .online_judge
             .build_submit_url(contest_id, &problem.id, &lang_id, &source);
