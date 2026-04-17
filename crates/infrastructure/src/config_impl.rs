@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use domain::entity::{Language, OJKind};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -58,18 +58,30 @@ impl Config for ConfigImpl {
     }
 
     fn submit_file(&self, lang: &Language) -> String {
-        if let Ok(table) = Self::config_toml_path()
-            .and_then(|p| std::fs::read_to_string(&p).map_err(Into::into))
-            .and_then(|s| toml::from_str::<toml::Table>(&s).map_err(Into::into))
-            && let Some(val) = table
+        let result: Result<Option<String>> = (|| {
+            let path = Self::config_toml_path()?;
+            if !path.exists() {
+                return Ok(None);
+            }
+            let contents = std::fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            let table: toml::Table = toml::from_str(&contents)
+                .with_context(|| format!("failed to parse {}", path.display()))?;
+            Ok(table
                 .get("language")
                 .and_then(|v| v.get(lang.as_str()))
                 .and_then(|v| v.get("solution_file"))
                 .and_then(|v| v.as_str())
-        {
-            return val.to_string();
+                .map(|s| s.to_string()))
+        })();
+        match result {
+            Ok(Some(val)) => val,
+            Ok(None) => "src/main.rs".to_string(),
+            Err(e) => {
+                eprintln!("warning: {e}");
+                "src/main.rs".to_string()
+            }
         }
-        "src/main.rs".to_string()
     }
 
     fn submit_preprocess(&self, _lang: &Language) -> String {
@@ -77,9 +89,15 @@ impl Config for ConfigImpl {
     }
 
     fn lang_id(&self, lang: &Language, oj: &OJKind) -> Option<String> {
-        let table = Self::config_toml_path()
-            .and_then(|p| std::fs::read_to_string(&p).map_err(Into::into))
-            .and_then(|s| toml::from_str::<toml::Table>(&s).map_err(Into::into))
+        let path = Self::config_toml_path().ok()?;
+        if !path.exists() {
+            return None;
+        }
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|e| eprintln!("warning: failed to read {}: {e}", path.display()))
+            .ok()?;
+        let table: toml::Table = toml::from_str(&contents)
+            .map_err(|e| eprintln!("warning: failed to parse {}: {e}", path.display()))
             .ok()?;
         table
             .get("language")

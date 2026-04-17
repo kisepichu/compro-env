@@ -33,8 +33,10 @@
   5. `config.submit_file(&language)` → file_path; ソースファイルの存在確認
   6. `solution_repo.get_source(&solution, &file_path)` → source
   7. `config.lang_id(&language, &oj_kind)` → lang_id (None はエラー)
-  8. `session_repo.get(&oj_kind)` → Session (None は "Run 'ce login' first." エラー)
-  9. `oj.submit(contest_id, &problem.id, &lang_id, &source, &session)` → SubmitResult
+  8. `oj.build_submit_url(contest_id, &problem.id, &lang_id, &source)` → URL 文字列
+     - AtCoder の Cloudflare Turnstile 回避のためブラウザ提出を採用 (HTTP POST 提出は廃止)
+     - ペイロード `{lang_id, source}` を URL-safe base64 JSON で `#ce=` フラグメントに埋め込む
+  9. URL を stdout に表示し OS デフォルトブラウザで開く
 
 ### infrastructure/
 
@@ -47,11 +49,10 @@
   - `[language.{lang}].solution_file` を読む。未設定なら `"src/main.rs"` をデフォルトとする
 - [x] `Config::lang_id(lang, oj)` を実装する:
   - `[language.{lang}.{oj_name}].lang_id` を読む。未設定なら `None` を返す
-- [x] `AtCoder::submit(...)` を実装する:
-  1. GET `https://atcoder.jp/contests/{contest_id}/submit` で CSRF トークンを抽出
-  2. POST (フォームデータ: csrf_token, data.TaskScreenName, data.LanguageId, sourceCode, クッキー: REVEL_SESSION)
-  3. redirect を follow せず `Location` ヘッダーを提出 URL として `SubmitResult` に格納
-  4. 非 302 はステータスコードとボディを含むエラーを返す
+- [x] `AtCoder::build_submit_url(...)` を実装する (HTTP POST 提出は廃止、ブラウザ提出に変更):
+  - `{lang_id, source}` を URL-safe base64 JSON でエンコードして `#ce=` フラグメントに埋め込む
+  - `?taskScreenName={problem_id}` クエリパラメータで問題を事前選択
+  - Tampermonkey userscript (`userscripts/atcoder-submit-helper.user.js`) がフォームを自動入力する
 - [x] Shell Submit handler を実装する:
   - `SubmitCommand` から `language` フィールドと `lang` CLI arg を削除する
   - `contest_id` と `problem_code` を lowercase 正規化する

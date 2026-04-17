@@ -29,7 +29,7 @@ ce sub <contest_id> <problem_code> [solution_name]
 2. `.ce.toml` から `OJKind` と `problem_id` を取得する:
    - `ContestRepository::get_oj_kind(contest_id)` で `OJKind` を得る
    - `ContestRepository::get_problem(contest_id, problem_code)` で `problem_id` を得る
-3. config の `language.{language}.solution_file` からファイルパスを決定し、`SolutionRepository::get_source(solution)` でソースを読む:
+3. config の `language.{language}.solution_file` からファイルパスを決定し、`SolutionRepository::get_source(solution, file_path)` でソースを読む:
    ```
    solutions/{contest_id}/{problem_code}/{solution_name}/{solution_file}
    ```

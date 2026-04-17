@@ -268,7 +268,7 @@ fn open_browser(url: &str) {
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd").args(["/c", "start", url]).spawn();
+    let _ = std::process::Command::new("cmd").args(["/c", "start", "", url]).spawn();
 }
 
 fn is_safe_path_component(s: &str) -> bool {

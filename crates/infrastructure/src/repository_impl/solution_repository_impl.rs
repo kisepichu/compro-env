@@ -57,6 +57,15 @@ impl SolutionRepository for SolutionRepositoryImpl {
     }
 
     fn get_source(&self, solution: &Solution, file_path: &str) -> Result<String> {
+        // Reject absolute paths and any `..` components to prevent path traversal.
+        let rel = std::path::Path::new(file_path);
+        if rel.is_absolute()
+            || rel.components().any(|c| {
+                !matches!(c, std::path::Component::Normal(_))
+            })
+        {
+            anyhow::bail!("invalid solution_file path: {file_path:?}");
+        }
         let path = self
             .solution_dir(&solution.contest_id, &solution.problem_code, &solution.name)
             .join(file_path);
