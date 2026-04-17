@@ -53,13 +53,18 @@ impl Service {
         })?;
 
         // 5. Guard against source files too large for a browser URL.
-        // Base64 expands by ~4/3; most browsers/OS URL-launchers cap at ~32 KB.
-        const MAX_SOURCE_BYTES: usize = 24 * 1024; // 24 KB → ~32 KB after base64
-        if source.len() > MAX_SOURCE_BYTES {
+        // Compute an upper bound on the base64 fragment length:
+        //   JSON payload = overhead (~30 + lang_id.len()) + source (×2 worst-case JSON escaping)
+        //   base64 expansion = ceil(json_bytes / 3) × 4
+        let json_upper = source.len() * 2 + lang_id.len() + 30;
+        let fragment_upper = (json_upper + 2) / 3 * 4;
+        const MAX_FRAGMENT_BYTES: usize = 32 * 1024;
+        if fragment_upper > MAX_FRAGMENT_BYTES {
             anyhow::bail!(
-                "source file is too large to submit via URL fragment ({} bytes, max {})",
-                source.len(),
-                MAX_SOURCE_BYTES,
+                "source file is too large to submit via URL fragment \
+                 (estimated fragment {} bytes, max {})",
+                fragment_upper,
+                MAX_FRAGMENT_BYTES,
             );
         }
 

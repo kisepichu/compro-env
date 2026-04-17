@@ -57,7 +57,7 @@ https://atcoder.jp/contests/{contest_id}/submit?taskScreenName={problem_id}#ce={
 ブラウザで URL を開く際は OS のデフォルトブラウザを使用する:
 - Linux: `xdg-open <url>`
 - macOS: `open <url>`
-- Windows: `cmd /c start <url>`
+- Windows: `explorer.exe <url>`
 
 ## エラーケース
 
