@@ -69,7 +69,7 @@ mod tests {
     };
     use anyhow::Result;
     use domain::entity::{
-        Contest, Language, OJKind, Problem, Sample, Session, Solution, SubmitResult,
+        Contest, Language, OJKind, Problem, Sample, Session, Solution,
     };
     use std::path::PathBuf;
 
@@ -94,7 +94,9 @@ mod tests {
         ) -> Result<Vec<Problem>> {
             todo!()
         }
-        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String { todo!() }
+        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
+            todo!()
+        }
     }
 
     struct StubSession;

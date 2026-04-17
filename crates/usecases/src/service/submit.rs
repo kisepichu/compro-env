@@ -57,7 +57,7 @@ impl Service {
         //   JSON payload = overhead (~30 + lang_id.len()) + source (×2 worst-case JSON escaping)
         //   base64 expansion = ceil(json_bytes / 3) × 4
         let json_upper = source.len() * 2 + lang_id.len() + 30;
-        let fragment_upper = (json_upper + 2) / 3 * 4;
+        let fragment_upper = json_upper.div_ceil(3) * 4;
         const MAX_FRAGMENT_BYTES: usize = 32 * 1024;
         if fragment_upper > MAX_FRAGMENT_BYTES {
             anyhow::bail!(
@@ -257,7 +257,8 @@ mod tests {
     fn submit_happy_path_returns_submission_url() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("ce.toml"), "language = \"rust\"\n").unwrap();
-        let expected_url = "https://atcoder.jp/contests/abc001/submit?taskScreenName=abc001_a#ce=XXX".to_string();
+        let expected_url =
+            "https://atcoder.jp/contests/abc001/submit?taskScreenName=abc001_a#ce=XXX".to_string();
         let service = make_service(
             dir.path().to_path_buf(),
             Some("fn main() {}".to_string()),
@@ -279,14 +280,21 @@ mod tests {
             "https://example.com".to_string(),
         );
         let err = service.submit("abc001", "a", "main").unwrap_err();
-        assert!(err.to_string().contains("ce.toml"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("ce.toml"),
+            "unexpected error: {err}"
+        );
     }
 
     /// ce.toml has no `language` key => error message contains "language".
     #[test]
     fn submit_errors_when_language_key_missing_in_ce_toml() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("ce.toml"), "test_command = \"cargo test\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            "test_command = \"cargo test\"\n",
+        )
+        .unwrap();
         let service = make_service(
             dir.path().to_path_buf(),
             Some("fn main() {}".to_string()),
@@ -294,7 +302,10 @@ mod tests {
             "https://example.com".to_string(),
         );
         let err = service.submit("abc001", "a", "main").unwrap_err();
-        assert!(err.to_string().contains("language"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("language"),
+            "unexpected error: {err}"
+        );
     }
 
     /// get_source returns an error => error is propagated.
@@ -327,6 +338,9 @@ mod tests {
             "https://example.com".to_string(),
         );
         let err = service.submit("abc001", "a", "main").unwrap_err();
-        assert!(err.to_string().contains("lang_id"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("lang_id"),
+            "unexpected error: {err}"
+        );
     }
 }
