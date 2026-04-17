@@ -143,8 +143,11 @@ pub fn run() -> Result<()> {
             }
             let contest = contest.to_lowercase();
             let problem = problem.to_lowercase();
-            let solution_name = solution.as_deref().unwrap_or("main");
-            if !is_safe_path_component(solution_name) {
+            let solution_name = solution
+                .as_deref()
+                .unwrap_or("main")
+                .to_lowercase();
+            if !is_safe_path_component(&solution_name) {
                 anyhow::bail!(
                     "invalid solution name \"{solution_name}\": must be a single path component"
                 );
@@ -153,7 +156,7 @@ pub fn run() -> Result<()> {
             let exit_code = controller.test(&TestCommand {
                 contest_id: contest,
                 problem_code: problem,
-                solution_name: solution_name.to_string(),
+                solution_name,
             })?;
             std::process::exit(exit_code);
         }
@@ -172,8 +175,11 @@ pub fn run() -> Result<()> {
             }
             let contest = contest.to_lowercase();
             let problem = problem.to_lowercase();
-            let solution_name = solution.as_deref().unwrap_or("main");
-            if !is_safe_path_component(solution_name) {
+            let solution_name = solution
+                .as_deref()
+                .unwrap_or("main")
+                .to_lowercase();
+            if !is_safe_path_component(&solution_name) {
                 anyhow::bail!(
                     "invalid solution name \"{solution_name}\": must be a single path component"
                 );
@@ -182,7 +188,7 @@ pub fn run() -> Result<()> {
             match controller.submit(&SubmitCommand {
                 contest_id: contest,
                 problem_code: problem,
-                solution_name: solution_name.to_string(),
+                solution_name,
             }) {
                 Ok(result) => {
                     let url = &result.submission_url;
@@ -255,7 +261,6 @@ pub fn logout_with_io(oj: domain::entity::OJKind) -> Result<bool> {
     build_controller_no_root()?.logout(&input)
 }
 
-/// Returns true if `s` is a single safe filesystem path component (no separators, no `.`/`..`).
 /// Opens `url` in the OS default browser. Errors are ignored (best-effort).
 fn open_browser(url: &str) {
     #[cfg(target_os = "linux")]

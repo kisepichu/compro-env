@@ -34,8 +34,8 @@ ce sub <contest_id> <problem_code> [solution_name]
    solutions/{contest_id}/{problem_code}/{solution_name}/{solution_file}
    ```
 4. config の `language.{language}.{oj}.lang_id` を取得する
-5. 提出ページ URL を生成してブラウザで開く (詳細: 次節)
-6. 提出ページ URL を標準出力に表示する
+5. 提出ページ URL を生成して標準出力に表示する
+6. 提出ページ URL をブラウザで開く (詳細: 次節)
 
 ステップ 5 の URL を開いた後、Tampermonkey userscript が問題選択・ソースコード注入を行う (詳細: `docs/userscript.md`)。
 
@@ -57,6 +57,7 @@ https://atcoder.jp/contests/{contest_id}/submit?taskScreenName={problem_id}#ce={
 ブラウザで URL を開く際は OS のデフォルトブラウザを使用する:
 - Linux: `xdg-open <url>`
 - macOS: `open <url>`
+- Windows: `cmd /c start <url>`
 
 ## エラーケース
 

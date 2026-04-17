@@ -43,7 +43,7 @@
 ```js
 // @name         ce submit helper
 // @namespace    https://github.com/kisepichu/compro-env
-// @version      1.0
+// @version      1.1
 // @description  Auto-fill AtCoder submit form from ce submit URL fragment
 // @author       kisepichu
 // @match        https://atcoder.jp/contests/*/submit*
@@ -56,11 +56,15 @@
 1. `location.hash` が `#ce=` で始まるか確認する。始まらない場合は何もしない
 2. `#ce=` 以降を URL-safe base64 デコードして JSON をパースする
 3. `location.search` から `taskScreenName` パラメータを取得する
-4. ページの `select#select-task` select2 ウィジェットで `taskScreenName` を選択し、`change` イベントを発火する
+4. URL フラグメントを消去する (`history.replaceState` で `#` なし URL に変更)
+   - ソースコードがブラウザ履歴に残らないよう、DOM 操作前に即時消去する
+5. `select#select-task` select2 ウィジェットで `taskScreenName` を選択し `change` イベントを発火する
    - これにより `div#select-lang-{taskScreenName}` が表示される
-5. `div#select-lang-{taskScreenName}` 内の `<select>` で `lang_id` を選択し、`change` イベントを発火する
-6. `textarea[name=sourceCode]` に `source` を注入する
-7. URL フラグメントを消去する (`history.replaceState` で `#` なし URL に変更)
+   - select2 の初期化を待つため `setInterval` でリトライする (最大 20 回 × 300ms)
+6. `div#select-lang-{taskScreenName}` 内の `<select>` で `lang_id` を選択し `change` イベントを発火する
+7. ソースコードを注入する:
+   - Ace エディタ (`ace.edit('editor').setValue(source, -1)`) を優先する
+   - Ace が存在しない場合は `#plain-textarea` にフォールバックする
 
 ### select2 の操作
 
@@ -81,4 +85,4 @@ $(selectEl).val(langId).trigger('change');
 2. Tampermonkey ダッシュボード → 新しいスクリプトを追加
 3. 上記仕様に基づいたスクリプトを貼り付けて保存する
 
-実際のスクリプトコードは `scripts/atcoder-submit-helper.user.js` にある。
+実際のスクリプトコードは `userscripts/atcoder-submit-helper.user.js` にある。
