@@ -297,7 +297,7 @@ usecases/
     new_solution.rs  ContestRepository::exists() + ContestRepository::list_problem_codes() + SolutionRepository::exists() + ContestRepository::get_samples() + SolutionRepository::create(solution, samples)
     test.rs       解法ディレクトリの ce.toml を読み test_command を sh -c 実行。exit code をそのまま返す
     submit.rs     solution の ce.toml から language 取得 + ContestRepository::get_problem() で problem_id 取得
-                  + SolutionRepository::get_source() + Config (lang_id) + SessionRepository::get() + OnlineJudge::submit()
+                  + SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::build_submit_url() → ブラウザ起動
 
 interfaces/
   controller/

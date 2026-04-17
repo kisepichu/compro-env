@@ -293,7 +293,10 @@ mod tests {
             "https://example.com".to_string(),
         );
         let err = service.submit("abc001", "a", "main").unwrap_err();
-        let _ = err;
+        assert!(
+            !err.to_string().is_empty(),
+            "expected a non-empty error when source file is missing, got: {err}"
+        );
     }
 
     /// config.lang_id returns None => error contains "lang_id".
