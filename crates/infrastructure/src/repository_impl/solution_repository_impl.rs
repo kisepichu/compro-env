@@ -56,8 +56,12 @@ impl SolutionRepository for SolutionRepositoryImpl {
         result
     }
 
-    fn get_source(&self, _solution: &Solution) -> Result<String> {
-        todo!()
+    fn get_source(&self, solution: &Solution, file_path: &str) -> Result<String> {
+        let path = self
+            .solution_dir(&solution.contest_id, &solution.problem_code, &solution.name)
+            .join(file_path);
+        std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read source file: {path:?}"))
     }
 
     fn solution_dir(
@@ -255,6 +259,28 @@ mod tests {
 
         let contents = fs::read_to_string(&main_rs_path).unwrap();
         assert_eq!(contents, "fn main() {}");
+    }
+
+    #[test]
+    #[serial]
+    fn get_source_returns_file_contents_at_given_path() {
+        let dir = setup_temp_root();
+        let root = dir.path();
+        let repo = SolutionRepositoryImpl::new(root.to_path_buf());
+
+        // Create solution directory with a source file
+        let solution_dir = root.join("solutions/abc001/a/main");
+        let src_dir = solution_dir.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(
+            src_dir.join("main.rs"),
+            "fn main() { println!(\"hello\"); }",
+        )
+        .unwrap();
+
+        let solution = make_solution("abc001", "a", "main", Language::new("rust"));
+        let content = repo.get_source(&solution, "src/main.rs").unwrap();
+        assert_eq!(content, "fn main() { println!(\"hello\"); }");
     }
 
     #[test]

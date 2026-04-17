@@ -1,6 +1,7 @@
 use anyhow::Result;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use chrono::{DateTime, Utc};
-use domain::entity::{Problem, Session, SubmitResult};
+use domain::entity::{Problem, Session};
 use usecases::online_judge::{ContestMeta, OnlineJudge};
 
 pub struct AtCoder {
@@ -81,15 +82,25 @@ impl OnlineJudge for AtCoder {
         Ok(problems)
     }
 
-    fn submit(
+    fn build_submit_url(
         &self,
-        _contest_id: &str,
-        _problem_id: &str,
-        _lang_id: &str,
-        _source: &str,
-        _session: &Session,
-    ) -> Result<SubmitResult> {
-        todo!()
+        contest_id: &str,
+        problem_id: &str,
+        lang_id: &str,
+        source: &str,
+    ) -> String {
+        // Encode {lang_id, source} as URL-safe base64 JSON and embed in the fragment.
+        // The Tampermonkey userscript reads this fragment and auto-fills the submit form.
+        // See docs/userscript.md for the full protocol.
+        let payload = serde_json::json!({
+            "lang_id": lang_id,
+            "source": source,
+        })
+        .to_string();
+        let fragment = URL_SAFE.encode(payload.as_bytes());
+        format!(
+            "https://atcoder.jp/contests/{contest_id}/submit?taskScreenName={problem_id}#ce={fragment}"
+        )
     }
 }
 
@@ -226,6 +237,8 @@ fn decode_pre_content(s: &str) -> String {
         out = decoded;
     }
 }
+
+
 
 fn parse_username_from_html(html: &str) -> Option<String> {
     // AtCoder injects the logged-in username as a JavaScript variable near the
@@ -480,4 +493,5 @@ var userScreenName = "";
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], "N\nA B\n");
     }
+
 }

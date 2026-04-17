@@ -2,7 +2,9 @@ pub mod commands;
 
 use anyhow::Result;
 use clap::Parser;
-use commands::{Cli, InitCommand, LoginCommand, LogoutCommand, TestCommand, WhoamiCommand};
+use commands::{
+    Cli, InitCommand, LoginCommand, LogoutCommand, SubmitCommand, TestCommand, WhoamiCommand,
+};
 use domain::entity::OJKind;
 
 use crate::{
@@ -156,13 +158,43 @@ pub fn run() -> Result<()> {
             std::process::exit(exit_code);
         }
         commands::Commands::Submit {
-            contest: _,
-            problem: _,
-            solution: _,
-            lang: _,
+            contest,
+            problem,
+            solution,
         } => {
-            let _controller = build_controller()?;
-            todo!()
+            if !is_safe_path_component(&contest) {
+                anyhow::bail!("invalid contest ID \"{contest}\": must be a single path component");
+            }
+            if !is_safe_path_component(&problem) {
+                anyhow::bail!(
+                    "invalid problem code \"{problem}\": must be a single path component"
+                );
+            }
+            let contest = contest.to_lowercase();
+            let problem = problem.to_lowercase();
+            let solution_name = solution.as_deref().unwrap_or("main");
+            if !is_safe_path_component(solution_name) {
+                anyhow::bail!(
+                    "invalid solution name \"{solution_name}\": must be a single path component"
+                );
+            }
+            let controller = build_controller()?;
+            match controller.submit(&SubmitCommand {
+                contest_id: contest,
+                problem_code: problem,
+                solution_name: solution_name.to_string(),
+            }) {
+                Ok(result) => {
+                    let url = &result.submission_url;
+                    println!("{url}");
+                    open_browser(url);
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
@@ -224,6 +256,16 @@ pub fn logout_with_io(oj: domain::entity::OJKind) -> Result<bool> {
 }
 
 /// Returns true if `s` is a single safe filesystem path component (no separators, no `.`/`..`).
+/// Opens `url` in the OS default browser. Errors are ignored (best-effort).
+fn open_browser(url: &str) {
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd").args(["/c", "start", url]).spawn();
+}
+
 fn is_safe_path_component(s: &str) -> bool {
     let mut components = std::path::Path::new(s).components();
     matches!(

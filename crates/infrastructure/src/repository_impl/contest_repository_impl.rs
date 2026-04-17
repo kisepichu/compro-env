@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use domain::entity::{Contest, OJKind, Sample};
+use domain::entity::{Contest, OJKind, Problem, Sample};
 use serde::{Deserialize, Serialize};
 use usecases::repository::contest_repository::ContestRepository;
 
@@ -21,6 +21,15 @@ struct CeTomlProblem<'a> {
 #[derive(Deserialize)]
 struct CeTomlOwned {
     online_judge: String,
+    #[serde(default)]
+    problems: Vec<CeTomlProblemOwned>,
+}
+
+#[derive(Deserialize)]
+struct CeTomlProblemOwned {
+    id: String,
+    code: String,
+    title: String,
 }
 
 impl ContestRepositoryImpl {
@@ -164,6 +173,26 @@ impl ContestRepository for ContestRepositoryImpl {
             .join(contest_id)
             .join("testcases")
             .join(problem_code)
+    }
+
+    fn get_problem(&self, contest_id: &str, problem_code: &str) -> Result<Problem> {
+        let data = self.read_ce_toml(contest_id)?;
+        data.problems
+            .into_iter()
+            .find(|p| p.code == problem_code)
+            .map(|p| Problem {
+                id: p.id,
+                code: p.code,
+                title: p.title,
+                samples: vec![],
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "problem code {:?} not found in .ce.toml for contest {:?}",
+                    problem_code,
+                    contest_id
+                )
+            })
     }
 }
 
@@ -325,6 +354,31 @@ mod tests {
 
         let samples = repo.get_samples("abc334", "a").unwrap();
         assert!(samples.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn get_problem_returns_problem_matching_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(dir.path());
+        let contest = make_contest();
+        repo.create(&contest).unwrap();
+
+        let problem = repo.get_problem("abc334", "a").unwrap();
+        assert_eq!(problem.id, "abc334_a");
+        assert_eq!(problem.title, "Spoiler");
+    }
+
+    #[test]
+    #[serial]
+    fn get_problem_returns_error_when_code_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(dir.path());
+        let contest = make_contest();
+        repo.create(&contest).unwrap();
+
+        let result = repo.get_problem("abc334", "z");
+        assert!(result.is_err());
     }
 
     #[test]
