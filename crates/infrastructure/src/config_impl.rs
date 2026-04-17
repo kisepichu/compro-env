@@ -34,7 +34,7 @@ impl Config for ConfigImpl {
         let path = Self::config_toml_path()?;
         if !path.exists() {
             return Err(anyhow::anyhow!(
-                "default language is not set. Add `[default]\\nlanguage = \"...\"` to {}",
+                "default language is not set. Add the following to {}:\n  [default]\n  language = \"...\"",
                 path.display()
             ));
         }
@@ -46,7 +46,7 @@ impl Config for ConfigImpl {
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "default language is not set. Add `[default]\\nlanguage = \"...\"` to {}",
+                    "default language is not set. Add the following to {}:\n  [default]\n  language = \"...\"",
                     path.display()
                 )
             })?;

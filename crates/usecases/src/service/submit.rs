@@ -26,7 +26,7 @@ impl Service {
             .get("language")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("`language` key not found in {ce_toml_path:?}"))?;
-        let language = Language::new(lang_str);
+        let language = Language::new(lang_str.trim().to_lowercase().as_str());
 
         // 2. Get OJKind and problem_id from .ce.toml.
         let oj_kind = self.contest_repo.get_oj_kind(contest_id)?;

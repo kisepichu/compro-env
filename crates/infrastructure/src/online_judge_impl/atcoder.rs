@@ -97,10 +97,21 @@ impl OnlineJudge for AtCoder {
             "source": source,
         })
         .to_string();
-        let fragment = URL_SAFE.encode(payload.as_bytes());
-        format!(
-            "https://atcoder.jp/contests/{contest_id}/submit?taskScreenName={problem_id}#ce={fragment}"
-        )
+        let fragment = format!("ce={}", URL_SAFE.encode(payload.as_bytes()));
+
+        // Build the URL via reqwest::Url so that contest_id and problem_id are
+        // percent-encoded, producing a well-formed URL even if they contain
+        // URL-reserved characters.
+        let mut url = reqwest::Url::parse("https://atcoder.jp/").expect("base URL is valid");
+        url.path_segments_mut()
+            .expect("base URL is cannot-be-a-base")
+            .push("contests")
+            .push(contest_id)
+            .push("submit");
+        url.query_pairs_mut()
+            .append_pair("taskScreenName", problem_id);
+        url.set_fragment(Some(&fragment));
+        url.to_string()
     }
 }
 
@@ -237,8 +248,6 @@ fn decode_pre_content(s: &str) -> String {
         out = decoded;
     }
 }
-
-
 
 fn parse_username_from_html(html: &str) -> Option<String> {
     // AtCoder injects the logged-in username as a JavaScript variable near the
@@ -493,5 +502,4 @@ var userScreenName = "";
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], "N\nA B\n");
     }
-
 }
