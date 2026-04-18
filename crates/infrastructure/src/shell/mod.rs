@@ -143,10 +143,7 @@ pub fn run() -> Result<()> {
             }
             let contest = contest.to_lowercase();
             let problem = problem.to_lowercase();
-            let solution_name = solution
-                .as_deref()
-                .unwrap_or("main")
-                .to_lowercase();
+            let solution_name = solution.as_deref().unwrap_or("main").to_lowercase();
             if !is_safe_path_component(&solution_name) {
                 anyhow::bail!(
                     "invalid solution name \"{solution_name}\": must be a single path component"
@@ -175,10 +172,7 @@ pub fn run() -> Result<()> {
             }
             let contest = contest.to_lowercase();
             let problem = problem.to_lowercase();
-            let solution_name = solution
-                .as_deref()
-                .unwrap_or("main")
-                .to_lowercase();
+            let solution_name = solution.as_deref().unwrap_or("main").to_lowercase();
             if !is_safe_path_component(&solution_name) {
                 anyhow::bail!(
                     "invalid solution name \"{solution_name}\": must be a single path component"

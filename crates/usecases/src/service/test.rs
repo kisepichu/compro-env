@@ -68,9 +68,7 @@ mod tests {
         service::Service,
     };
     use anyhow::Result;
-    use domain::entity::{
-        Contest, Language, OJKind, Problem, Sample, Session, Solution,
-    };
+    use domain::entity::{Contest, Language, OJKind, Problem, Sample, Session, Solution};
     use std::path::PathBuf;
 
     // ── Minimal stubs ────────────────────────────────────────────────────────
