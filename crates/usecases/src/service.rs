@@ -20,7 +20,6 @@ pub struct Service {
     pub(crate) contest_repo: Box<dyn ContestRepository>,
     pub(crate) solution_repo: Box<dyn SolutionRepository>,
     pub(crate) session_repo: Box<dyn SessionRepository>,
-    #[allow(dead_code)]
     pub(crate) config: Box<dyn Config>,
 }
 

@@ -59,8 +59,6 @@ pub enum Commands {
         contest: String,
         problem: String,
         solution: Option<String>,
-        #[arg(long)]
-        lang: Option<String>,
     },
 }
 
@@ -171,7 +169,6 @@ pub struct SubmitCommand {
     pub contest_id: String,
     pub problem_code: String,
     pub solution_name: String,
-    pub language: Language,
 }
 impl SubmitInput for SubmitCommand {
     fn contest_id(&self) -> String {
@@ -182,8 +179,5 @@ impl SubmitInput for SubmitCommand {
     }
     fn solution_name(&self) -> String {
         self.solution_name.clone()
-    }
-    fn language(&self) -> Language {
-        self.language.clone()
     }
 }

@@ -11,8 +11,8 @@ pub trait SolutionRepository {
     /// Tera context includes: contest.id, problem.code, problem.title, solution.name, samples
     fn create(&self, solution: &Solution, samples: &[Sample]) -> Result<()>;
 
-    /// Reads the source code for submission.
-    fn get_source(&self, solution: &Solution) -> Result<String>;
+    /// Reads the source code for submission from the given file path relative to the solution dir.
+    fn get_source(&self, solution: &Solution, file_path: &str) -> Result<String>;
 
     /// Returns the path to the solution directory (does not check existence).
     fn solution_dir(
