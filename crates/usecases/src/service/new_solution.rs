@@ -63,7 +63,7 @@ mod tests {
     };
     use anyhow::Result;
     use domain::entity::{
-        Contest, Language, OJKind, Problem, Sample, Session, Solution, SubmitResult,
+        Contest, Language, OJKind, Problem, Sample, Session, Solution,
     };
     use std::path::PathBuf;
 
@@ -88,7 +88,7 @@ mod tests {
         ) -> Result<Vec<Problem>> {
             todo!()
         }
-        fn submit(&self, _: &str, _: &str, _: &str, _: &str, _: &Session) -> Result<SubmitResult> {
+        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
             todo!()
         }
     }
@@ -157,6 +157,9 @@ mod tests {
         fn testcases_dir(&self, _: &str, _: &str) -> PathBuf {
             PathBuf::from("/tmp/testcases")
         }
+        fn get_problem(&self, _: &str, _: &str) -> Result<domain::entity::Problem> {
+            todo!()
+        }
     }
 
     struct StubSolutionRepo {
@@ -172,7 +175,7 @@ mod tests {
         fn create(&self, _: &Solution, _: &[Sample]) -> Result<()> {
             Ok(())
         }
-        fn get_source(&self, _: &Solution) -> Result<String> {
+        fn get_source(&self, _: &Solution, _: &str) -> Result<String> {
             Ok(String::new())
         }
         fn solution_dir(&self, _: &str, _: &str, _: &str) -> PathBuf {

@@ -59,14 +59,10 @@ impl Controller {
     }
 
     pub fn submit(&self, args: &dyn SubmitInput) -> Result<domain::entity::SubmitResult> {
-        use domain::entity::Solution;
-        let solution = Solution {
-            contest_id: args.contest_id(),
-            problem_code: args.problem_code(),
-            problem_title: String::new(),
-            name: args.solution_name(),
-            language: args.language(),
-        };
-        self.service.submit(&solution)
+        self.service.submit(
+            &args.contest_id(),
+            &args.problem_code(),
+            &args.solution_name(),
+        )
     }
 }

@@ -22,7 +22,7 @@ compro-env/                         ← リポジトリルート
           1.in  1.out  2.in  2.out
       {problem_code}/
         {solution_name}/            ← [ユーザー作業領域] templates/{lang}/ を展開したもの。以降はユーザーが自由に編集
-          ce.toml                   ← templates/{lang}/ce.toml.tera から展開。test_command 等を定義
+          ce.toml                   ← templates/{lang}/ce.toml.tera から展開。language, test_command 等を定義
           Cargo.toml                ← templates/rust/Cargo.toml.tera から展開
           src/main.rs               ← templates/rust/src/main.rs.tera から展開
 ```
@@ -65,10 +65,9 @@ language = "rust"
 
 [language.rust]
 solution_file = "src/main.rs"
-submit_preprocess = ""
 
 [language.rust.atcoder]
-lang_id = "5054"
+lang_id = "6088"
 ```
 
 言語はユーザーが自由に追加できる。`templates/{lang}/` ディレクトリを追加するだけで `ce` がその言語名を認識する。`[language.{name}]` セクションは提出コマンドの設定に使用する (省略した場合はデフォルト設定のみ)。
@@ -123,7 +122,7 @@ revel_session = "xxxxxxxx"
 
 詳細: `docs/commands/test.md`
 
-### `ce sub <contest_id> <problem_code> [solution_name] [--lang <lang>]`
+### `ce sub <contest_id> <problem_code> [solution_name]`
 
 詳細: `docs/commands/submit.md`
 
@@ -203,6 +202,8 @@ trait ContestRepository {
     // testcases/{problem_code}/ が存在しない場合、または存在するがファイルがない場合は空 Vec を返す
     fn list_problem_codes(&self, contest_id: &str) -> Result<Vec<String>>;
     // testcases/ 以下のディレクトリ名から問題コード一覧を返す
+    fn get_problem(&self, contest_id: &str, problem_code: &str) -> Result<Problem>;
+    // .ce.toml の [[problems]] から problem_code 一致エントリを返す。見つからない場合はエラー
 }
 
 trait SolutionRepository {
@@ -295,8 +296,8 @@ usecases/
                   + ContestRepository::create() + SolutionRepository::create(solution, samples) × N
     new_solution.rs  ContestRepository::exists() + ContestRepository::list_problem_codes() + SolutionRepository::exists() + ContestRepository::get_samples() + SolutionRepository::create(solution, samples)
     test.rs       解法ディレクトリの ce.toml を読み test_command を sh -c 実行。exit code をそのまま返す
-    submit.rs     SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::submit() を担う想定。
-                  test.rs を呼んで exit 0 の場合のみ submit するフローは未実装
+    submit.rs     solution の ce.toml から language 取得 + ContestRepository::get_problem() で problem_id 取得
+                  + SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::build_submit_url() → ブラウザ起動
 
 interfaces/
   controller/

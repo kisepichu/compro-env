@@ -191,7 +191,7 @@ mod tests {
 
     use anyhow::Result;
     use chrono::{DateTime, Utc};
-    use domain::entity::{Contest, Language, OJKind, Problem, Sample, Session, SubmitResult};
+    use domain::entity::{Contest, Language, OJKind, Problem, Sample, Session};
 
     use crate::{
         config::Config,
@@ -249,14 +249,7 @@ mod tests {
             Ok(self.problems.clone())
         }
 
-        fn submit(
-            &self,
-            _contest_id: &str,
-            _problem_id: &str,
-            _lang_id: &str,
-            _source: &str,
-            _session: &Session,
-        ) -> Result<SubmitResult> {
+        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
             todo!()
         }
     }
@@ -316,6 +309,10 @@ mod tests {
         fn testcases_dir(&self, _contest_id: &str, _problem_code: &str) -> std::path::PathBuf {
             std::path::PathBuf::new()
         }
+
+        fn get_problem(&self, _: &str, _: &str) -> Result<domain::entity::Problem> {
+            todo!()
+        }
     }
 
     struct StubSolutionRepo {
@@ -344,7 +341,7 @@ mod tests {
             Ok(())
         }
 
-        fn get_source(&self, _solution: &domain::entity::Solution) -> Result<String> {
+        fn get_source(&self, _solution: &domain::entity::Solution, _: &str) -> Result<String> {
             Ok(String::new())
         }
 
@@ -554,6 +551,10 @@ mod tests {
 
             fn testcases_dir(&self, _contest_id: &str, _problem_code: &str) -> std::path::PathBuf {
                 std::path::PathBuf::new()
+            }
+
+            fn get_problem(&self, _: &str, _: &str) -> Result<domain::entity::Problem> {
+                todo!()
             }
         }
 
