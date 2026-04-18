@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use domain::entity::{Language, OJKind};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -34,19 +34,18 @@ impl Config for ConfigImpl {
         let path = Self::config_toml_path()?;
         if !path.exists() {
             return Err(anyhow::anyhow!(
-                "default language is not set. Add the following to {}:\n  [default]\n  language = \"...\"",
+                "default language is not set. Add `language = \"...\"` to {}",
                 path.display()
             ));
         }
         let contents = std::fs::read_to_string(&path)?;
         let table: toml::Table = toml::from_str(&contents)?;
         let lang_str = table
-            .get("default")
-            .and_then(|v| v.get("language"))
+            .get("language")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "default language is not set. Add the following to {}:\n  [default]\n  language = \"...\"",
+                    "default language is not set. Add `language = \"...\"` to {}",
                     path.display()
                 )
             })?;
@@ -57,55 +56,16 @@ impl Config for ConfigImpl {
         OJKind::AtCoder
     }
 
-    fn submit_file(&self, lang: &Language) -> String {
-        let result: Result<Option<String>> = (|| {
-            let path = Self::config_toml_path()?;
-            if !path.exists() {
-                return Ok(None);
-            }
-            let contents = std::fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?;
-            let table: toml::Table = toml::from_str(&contents)
-                .with_context(|| format!("failed to parse {}", path.display()))?;
-            Ok(table
-                .get("language")
-                .and_then(|v| v.get(lang.as_str()))
-                .and_then(|v| v.get("solution_file"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()))
-        })();
-        match result {
-            Ok(Some(val)) => val,
-            Ok(None) => "src/main.rs".to_string(),
-            Err(e) => {
-                eprintln!("warning: {e}");
-                "src/main.rs".to_string()
-            }
-        }
+    fn submit_file(&self, _lang: &Language) -> String {
+        todo!()
     }
 
     fn submit_preprocess(&self, _lang: &Language) -> String {
-        String::new()
+        todo!()
     }
 
-    fn lang_id(&self, lang: &Language, oj: &OJKind) -> Option<String> {
-        let path = Self::config_toml_path().ok()?;
-        if !path.exists() {
-            return None;
-        }
-        let contents = std::fs::read_to_string(&path)
-            .map_err(|e| eprintln!("warning: failed to read {}: {e}", path.display()))
-            .ok()?;
-        let table: toml::Table = toml::from_str(&contents)
-            .map_err(|e| eprintln!("warning: failed to parse {}: {e}", path.display()))
-            .ok()?;
-        table
-            .get("language")
-            .and_then(|v| v.get(lang.as_str()))
-            .and_then(|v| v.get(oj.as_str()))
-            .and_then(|v| v.get("lang_id"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+    fn lang_id(&self, _lang: &Language, _oj: &OJKind) -> Option<String> {
+        todo!()
     }
 }
 
@@ -145,16 +105,13 @@ mod tests {
         assert_eq!(config.default_online_judge(), OJKind::AtCoder);
     }
 
-    /// When config.toml contains `[default]\nlanguage = "rust"`, default_language() returns Ok(Language::new("rust")).
+    /// When config.toml contains `language = "rust"`, default_language() returns Ok(Language::new("rust")).
     #[test]
     #[serial]
     fn default_language_returns_rust_when_config_has_rust() {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
-        std::fs::write(
-            tmp.path().join("config.toml"),
-            "[default]\nlanguage = \"rust\"\n",
-        )
-        .expect("failed to write config.toml");
+        std::fs::write(tmp.path().join("config.toml"), "language = \"rust\"\n")
+            .expect("failed to write config.toml");
         let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         let result = ConfigImpl.default_language();
@@ -195,87 +152,5 @@ mod tests {
             "expected Err when config.toml is missing, got: {:?}",
             result,
         );
-    }
-
-    /// submit_file returns the configured value when [language.rust].solution_file is set.
-    #[test]
-    #[serial]
-    fn submit_file_returns_configured_value() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("config.toml"),
-            "[language.rust]\nsolution_file = \"src/lib.rs\"\n",
-        )
-        .unwrap();
-        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
-
-        let result = ConfigImpl.submit_file(&Language::new("rust"));
-        assert_eq!(result, "src/lib.rs");
-    }
-
-    /// submit_file returns "src/main.rs" when [language.rust].solution_file is absent.
-    #[test]
-    #[serial]
-    fn submit_file_returns_default_when_not_configured() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("config.toml"),
-            "[default]\nlanguage = \"rust\"\n",
-        )
-        .unwrap();
-        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
-
-        let result = ConfigImpl.submit_file(&Language::new("rust"));
-        assert_eq!(result, "src/main.rs");
-    }
-
-    /// submit_file returns "src/main.rs" when config.toml does not exist.
-    #[test]
-    #[serial]
-    fn submit_file_returns_default_when_no_config() {
-        let tmp = tempfile::tempdir().unwrap();
-        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
-
-        let result = ConfigImpl.submit_file(&Language::new("rust"));
-        assert_eq!(result, "src/main.rs");
-    }
-
-    /// lang_id returns the configured lang_id when [language.rust.atcoder].lang_id is set.
-    #[test]
-    #[serial]
-    fn lang_id_returns_configured_value() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("config.toml"),
-            "[language.rust.atcoder]\nlang_id = \"5054\"\n",
-        )
-        .unwrap();
-        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
-
-        let result = ConfigImpl.lang_id(&Language::new("rust"), &OJKind::AtCoder);
-        assert_eq!(result, Some("5054".to_string()));
-    }
-
-    /// lang_id returns None when [language.rust.atcoder].lang_id is absent.
-    #[test]
-    #[serial]
-    fn lang_id_returns_none_when_not_configured() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("config.toml"), "language = \"rust\"\n").unwrap();
-        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
-
-        let result = ConfigImpl.lang_id(&Language::new("rust"), &OJKind::AtCoder);
-        assert_eq!(result, None);
-    }
-
-    /// lang_id returns None when config.toml does not exist.
-    #[test]
-    #[serial]
-    fn lang_id_returns_none_when_no_config() {
-        let tmp = tempfile::tempdir().unwrap();
-        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
-
-        let result = ConfigImpl.lang_id(&Language::new("rust"), &OJKind::AtCoder);
-        assert_eq!(result, None);
     }
 }

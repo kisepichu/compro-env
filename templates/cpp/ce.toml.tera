@@ -1,4 +1,3 @@
-language = "cpp"
 test_command = """
 g++ -std=gnu++17 -O2 -o a.out main.cpp || exit 1
 set -- "$CE_TESTCASES_DIR"/*.in

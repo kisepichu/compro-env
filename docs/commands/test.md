@@ -62,7 +62,6 @@ ce test <contest_id> <problem_code> [solution_name]
 
 `templates/rust/ce.toml.tera`:
 ```toml
-language = "rust"
 test_command = "cargo test"
 ```
 
