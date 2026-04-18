@@ -482,6 +482,24 @@ var userScreenName = "";
     }
 
     #[test]
+    fn build_submit_url_encodes_payload_in_fragment() {
+        use usecases::online_judge::OnlineJudge as _;
+        let oj = AtCoder::new().expect("AtCoder::new");
+        let url = oj.build_submit_url("abc001", "abc001_a", "4026", "fn main() {}");
+        // URL structure: https://atcoder.jp/contests/abc001/submit?taskScreenName=abc001_a#ce=<base64>
+        assert!(url.starts_with("https://atcoder.jp/contests/abc001/submit?"));
+        assert!(url.contains("taskScreenName=abc001_a"));
+        let fragment = url.split('#').nth(1).expect("fragment present");
+        let encoded = fragment
+            .strip_prefix("ce=")
+            .expect("fragment starts with ce=");
+        let decoded = URL_SAFE.decode(encoded).expect("valid base64");
+        let payload: serde_json::Value = serde_json::from_slice(&decoded).expect("valid JSON");
+        assert_eq!(payload["lang_id"], "4026");
+        assert_eq!(payload["source"], "fn main() {}");
+    }
+
+    #[test]
     #[serial]
     fn extract_pre_texts_decodes_html_entities() {
         let html = r#"<h3>Sample Input 1</h3><pre>3 &lt; 5

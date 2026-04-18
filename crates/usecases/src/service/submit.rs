@@ -26,7 +26,10 @@ impl Service {
             .get("language")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("`language` key not found in {ce_toml_path:?}"))?;
-        let language = Language::new(lang_str.trim().to_lowercase().as_str());
+        let normalized = lang_str.trim().to_lowercase();
+        let language = normalized.parse::<Language>().map_err(|e| {
+            anyhow::anyhow!("invalid `language` value `{lang_str}` in {ce_toml_path:?}: {e}")
+        })?;
 
         // 2. Get OJKind and problem_id from .ce.toml.
         let oj_kind = self.contest_repo.get_oj_kind(contest_id)?;
@@ -46,7 +49,8 @@ impl Service {
         // 4. Get lang_id from config.
         let lang_id = self.config.lang_id(&language, &oj_kind).ok_or_else(|| {
             anyhow::anyhow!(
-                "lang_id not configured for language `{}` on `{}`",
+                "lang_id not configured for language `{}` on `{}` \
+                (check config.toml; config parse errors also produce this)",
                 language,
                 oj_kind
             )
