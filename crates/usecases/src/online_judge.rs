@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use domain::entity::{Problem, Session};
+use domain::entity::{Problem, Session, SubmitResult};
 
 pub struct ContestMeta {
     pub start_time: Option<DateTime<Utc>>,
@@ -25,14 +25,13 @@ pub trait OnlineJudge {
         problem_id_hints: &[(String, String)],
     ) -> Result<Vec<Problem>>;
 
-    /// Builds a URL to open in the browser for submitting a solution.
-    /// The URL encodes the source and language ID so that the Tampermonkey userscript
-    /// can auto-fill the submission form. See docs/userscript.md.
-    fn build_submit_url(
+    /// Submits a solution to the OJ.
+    fn submit(
         &self,
         contest_id: &str,
         problem_id: &str,
         lang_id: &str,
         source: &str,
-    ) -> String;
+        session: &Session,
+    ) -> Result<SubmitResult>;
 }

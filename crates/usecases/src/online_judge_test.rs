@@ -2,7 +2,7 @@
 mod tests {
     use anyhow::Result;
     use chrono::{DateTime, TimeZone, Utc};
-    use domain::entity::{Problem, Session};
+    use domain::entity::{Problem, Session, SubmitResult};
 
     use crate::online_judge::{ContestMeta, OnlineJudge};
 
@@ -36,7 +36,14 @@ mod tests {
             Ok(vec![])
         }
 
-        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
+        fn submit(
+            &self,
+            _contest_id: &str,
+            _problem_id: &str,
+            _lang_id: &str,
+            _source: &str,
+            _session: &Session,
+        ) -> Result<SubmitResult> {
             todo!()
         }
     }

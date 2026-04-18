@@ -1,7 +1,6 @@
 use anyhow::Result;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use chrono::{DateTime, Utc};
-use domain::entity::{Problem, Session};
+use domain::entity::{Problem, Session, SubmitResult};
 use usecases::online_judge::{ContestMeta, OnlineJudge};
 
 pub struct AtCoder {
@@ -82,36 +81,15 @@ impl OnlineJudge for AtCoder {
         Ok(problems)
     }
 
-    fn build_submit_url(
+    fn submit(
         &self,
-        contest_id: &str,
-        problem_id: &str,
-        lang_id: &str,
-        source: &str,
-    ) -> String {
-        // Encode {lang_id, source} as URL-safe base64 JSON and embed in the fragment.
-        // The Tampermonkey userscript reads this fragment and auto-fills the submit form.
-        // See docs/userscript.md for the full protocol.
-        let payload = serde_json::json!({
-            "lang_id": lang_id,
-            "source": source,
-        })
-        .to_string();
-        let fragment = format!("ce={}", URL_SAFE.encode(payload.as_bytes()));
-
-        // Build the URL via reqwest::Url so that contest_id and problem_id are
-        // percent-encoded, producing a well-formed URL even if they contain
-        // URL-reserved characters.
-        let mut url = reqwest::Url::parse("https://atcoder.jp/").expect("base URL is valid");
-        url.path_segments_mut()
-            .expect("base URL is cannot-be-a-base")
-            .push("contests")
-            .push(contest_id)
-            .push("submit");
-        url.query_pairs_mut()
-            .append_pair("taskScreenName", problem_id);
-        url.set_fragment(Some(&fragment));
-        url.to_string()
+        _contest_id: &str,
+        _problem_id: &str,
+        _lang_id: &str,
+        _source: &str,
+        _session: &Session,
+    ) -> Result<SubmitResult> {
+        todo!()
     }
 }
 

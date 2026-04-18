@@ -1,5 +1,5 @@
 use anyhow::Result;
-use domain::entity::{Contest, OJKind, Problem, Sample};
+use domain::entity::{Contest, OJKind, Sample};
 use std::path::PathBuf;
 
 pub trait ContestRepository {
@@ -26,8 +26,4 @@ pub trait ContestRepository {
 
     /// Returns the absolute path to testcases/{problem_code}/ under the contest directory.
     fn testcases_dir(&self, contest_id: &str, problem_code: &str) -> PathBuf;
-
-    /// Returns the Problem whose `code` matches `problem_code` from .ce.toml.
-    /// Returns an error if the problem is not found.
-    fn get_problem(&self, contest_id: &str, problem_code: &str) -> Result<Problem>;
 }
