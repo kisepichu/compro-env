@@ -16,8 +16,14 @@ impl Service {
         let solution_dir = self
             .solution_repo
             .solution_dir(contest_id, problem_code, solution_name);
+        if !solution_dir.is_dir() {
+            anyhow::bail!("solution directory not found: {solution_dir:?}");
+        }
 
         let ce_toml_path = solution_dir.join("ce.toml");
+        if !ce_toml_path.is_file() {
+            anyhow::bail!("ce.toml not found: {ce_toml_path:?}");
+        }
         let ce_toml_contents = std::fs::read_to_string(&ce_toml_path)
             .with_context(|| format!("failed to read ce.toml: {ce_toml_path:?}"))?;
         let ce_table: toml::Table = toml::from_str(&ce_toml_contents)

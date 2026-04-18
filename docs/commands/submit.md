@@ -70,3 +70,8 @@ https://atcoder.jp/contests/{contest_id}/submit?taskScreenName={problem_id}#ce={
 - リアルタイムモード: `ce sub a` (cwd から `contest_id` を自動検出)
 - 提出後の結果をポーリングして表示 (ブラウザから提出 URL を受け取る方法が別途必要)
 - `submit_preprocess`: バンドル等を実行して stdout を提出内容とする
+
+## 既知の技術的負債
+
+- **`Config` trait の戻り値**: `lang_id()` / `submit_file()` は設定読み込み失敗時に `eprintln!` して `None`/デフォルト値にフォールバックする。`Result` を返して呼び出し側でハンドリングすべき。変更には `usecases/src/config.rs` の trait 定義と 4 サービスのテストスタブ変更が必要。
+- **`submit_file()` のデフォルト値**: 言語問わず `"src/main.rs"` にフォールバックする。C++ テンプレートは `main.cpp` を使うため不整合。言語ごとのデフォルトパスを持つべき。
