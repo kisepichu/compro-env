@@ -234,7 +234,7 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   - 例: `N` → `name: "n"`, `math: "N"`
 - **衝突時**: 同じコンテキスト内に `N` と `n` が別変数として登場する場合は、大文字の方をそのまま残す
   - 例: `N` と `n` が両方出現 → `name: "N"`, `name: "n"` (小文字化しない)
-- 複合添字スカラー (`S_X`, `S_Y`) は `sx`, `sy` (アンダースコア除去 + 小文字化)
+- 非数値の添字を持つ表記 (`S_X`, `S_Y` など) は現状未対応で、パースは失敗する (`ok: false`)
 
 #### ループのインデックス正規化
 
@@ -246,13 +246,13 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
 
 ```json
 [
-  { "name": "n",  "math": "N",  "type": "int", "dim": 0, "size": [] },
-  { "name": "k",  "math": "K",  "type": "int", "dim": 0, "size": [] },
-  { "name": "a",  "math": "A",  "type": "int", "dim": 1, "size": ["k"] }
+  { "name": "n",  "math": "N",  "var_type": "int", "dim": 0, "size": [] },
+  { "name": "k",  "math": "K",  "var_type": "int", "dim": 0, "size": [] },
+  { "name": "a",  "math": "A",  "var_type": "int", "dim": 1, "size": ["k"] }
 ]
 ```
 
-- `type`: `"int"` | `"str"` | `"unknown"`
+- `var_type`: `"int"` | `"str"` | `"unknown"`
 - `dim`: `0` = スカラー, `1` = 1D配列 (Phase 1 上限)
 - `size`: dim ごとのサイズ式 (小文字化済み変数名)
 

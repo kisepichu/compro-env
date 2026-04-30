@@ -323,9 +323,7 @@ usecases/
   config.rs
   input_format/             ← 入力形式パーサー (OJ 非依存の純粋ロジック)
     mod.rs                  parse(raw: &str, constraints: &str) -> InputSpec
-    lexer.rs                トークナイザ
-    parser.rs               行パターンマッチ → InputNode 列
-    semantic.rs             変数テーブル構築・型推定・loop_var 解決
+                            トークナイズ・行パターンマッチ・変数テーブル構築・型推定・loop_var 解決を集約
   service/
     login.rs      SessionRepository::save()
     whoami.rs     OnlineJudge::whoami()

@@ -46,15 +46,12 @@ impl Service {
 
         let problem = self
             .contest_repo
-            .get_problem(&solution.contest_id, &solution.problem_code)
-            .ok();
-        let input_format_raw = problem
-            .as_ref()
-            .and_then(|p| p.input_format_raw.as_deref())
-            .unwrap_or("");
+            .get_problem(&solution.contest_id, &solution.problem_code)?;
+        let input_format_raw = problem.input_format_raw.as_deref().unwrap_or("");
+        let constraints_raw = problem.constraints_raw.as_deref().unwrap_or("");
 
         self.solution_repo
-            .create(&solution, &samples, input_format_raw)?;
+            .create(&solution, &samples, input_format_raw, constraints_raw)?;
 
         Ok(())
     }
@@ -187,7 +184,7 @@ mod tests {
         fn exists(&self, _: &str, _: &str, _: &str) -> Result<bool> {
             Ok(self.solution_exists)
         }
-        fn create(&self, _: &Solution, _: &[Sample], _: &str) -> Result<()> {
+        fn create(&self, _: &Solution, _: &[Sample], _: &str, _: &str) -> Result<()> {
             Ok(())
         }
         fn get_source(&self, _: &Solution, _: &str) -> Result<String> {

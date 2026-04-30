@@ -16,6 +16,7 @@ struct CeTomlProblem<'a> {
     code: &'a str,
     title: &'a str,
     input_format_raw: &'a str,
+    constraints_raw: &'a str,
 }
 
 /// Owned version for deserialization.
@@ -33,6 +34,8 @@ struct CeTomlProblemOwned {
     title: String,
     #[serde(default)]
     input_format_raw: String,
+    #[serde(default)]
+    constraints_raw: String,
 }
 
 impl ContestRepositoryImpl {
@@ -97,6 +100,7 @@ impl ContestRepository for ContestRepositoryImpl {
                         code: &p.code,
                         title: &p.title,
                         input_format_raw: p.input_format_raw.as_deref().unwrap_or(""),
+                        constraints_raw: p.constraints_raw.as_deref().unwrap_or(""),
                     })
                     .collect(),
             };
@@ -194,7 +198,11 @@ impl ContestRepository for ContestRepositoryImpl {
                 } else {
                     Some(p.input_format_raw)
                 },
-                constraints_raw: None,
+                constraints_raw: if p.constraints_raw.is_empty() {
+                    None
+                } else {
+                    Some(p.constraints_raw)
+                },
             })
             .ok_or_else(|| {
                 anyhow::anyhow!(

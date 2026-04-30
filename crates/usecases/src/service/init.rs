@@ -171,6 +171,7 @@ fn build_result(
             &solution,
             &problem.samples,
             problem.input_format_raw.as_deref().unwrap_or(""),
+            problem.constraints_raw.as_deref().unwrap_or(""),
         )?;
         created_solutions.push(solution);
     }
@@ -343,6 +344,7 @@ mod tests {
             solution: &domain::entity::Solution,
             _samples: &[domain::entity::Sample],
             _input_format_raw: &str,
+            _constraints_raw: &str,
         ) -> Result<()> {
             self.created.borrow_mut().push(solution.clone());
             Ok(())
