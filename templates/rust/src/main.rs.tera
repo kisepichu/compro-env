@@ -15,7 +15,14 @@ fn solve<R: std::io::BufRead>(src: &mut impl proconio::source::Source<R>) -> Str
         {{ v.name }}: {% if is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
         {% elif v.dim == 1 -%}
         {% if v.size -%}
+        {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first %}
+        {% if vd.var_type == "str" -%}
+        {{ v.name }}: [String; {{ v.size }}],
+        {% elif vd.var_type == "int" -%}
         {{ v.name }}: [i64; {{ v.size }}],
+        {% else -%}
+        // TODO: unsupported typed 1-D read for {{ v.name }} (var_type={{ vd.var_type }}) — write manually
+        {% endif -%}
         {% elif v.index -%}
         // TODO: per-element read {{ v.name }}[{{ v.index }}] — write manually
         {% else -%}

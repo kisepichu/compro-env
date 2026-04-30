@@ -530,22 +530,11 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
                 // Vdots not part of a loop block — skip
                 i += 1;
             }
-            RawLine::LoopRow(vars) => {
-                // LoopRow not matched to a vdots block.
-                // If any subscript is alphabetic (non-numeric), this is a phase2 pattern.
-                let has_alpha_sub = vars.iter().any(|v| {
-                    v.subscript
-                        .as_ref()
-                        .is_some_and(|s| s.chars().all(|c: char| c.is_ascii_alphabetic()))
-                });
-                if has_alpha_sub {
-                    return Err(ParseError::NonNumericSubscript);
-                }
-                // Otherwise emit as plain scalars (shouldn't normally happen)
-                ops.push(IntermOp::ReadScalars(
-                    vars.iter().map(|v| v.math.clone()).collect(),
-                ));
-                i += 1;
+            RawLine::LoopRow(_) => {
+                // LoopRow not matched to a vdots block — unsupported fixed enumeration
+                // (e.g. "A_1 A_2" without \vdots). Silently degrading to scalars would
+                // produce duplicate variable names; treat as unsupported.
+                return Err(ParseError::NonNumericSubscript);
             }
         }
     }
