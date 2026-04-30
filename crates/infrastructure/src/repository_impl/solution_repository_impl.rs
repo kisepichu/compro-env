@@ -55,8 +55,14 @@ impl SolutionRepository for SolutionRepositoryImpl {
 
         // Expand templates; clean up the newly created dir if anything fails
         // to prevent future runs from silently skipping a broken solution dir.
-        let result =
-            expand_templates(&solution_dir, solution, samples, input_format_raw, constraints_raw, self);
+        let result = expand_templates(
+            &solution_dir,
+            solution,
+            samples,
+            input_format_raw,
+            constraints_raw,
+            self,
+        );
         if result.is_err() {
             let _ = std::fs::remove_dir_all(&solution_dir);
         }
