@@ -503,7 +503,7 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
         }
 
         // Check if this line is inside any vdots block range (shouldn't happen after above)
-        if vdots_blocks.iter().any(|&(bs, ae, _)| i > bs && i <= ae) {
+        if vdots_blocks.iter().any(|&(bs, _, ae)| i > bs && i < ae) {
             i += 1;
             continue;
         }
@@ -1157,18 +1157,9 @@ mod tests {
         // Both names must be distinct; the uppercase one keeps its math token
         let names: Vec<&str> = spec.vars.iter().map(|v| v.name.as_str()).collect();
         assert!(
-            names.contains(&"N") || names.contains(&"n"),
-            "expected at least one of N or n in {:?}",
+            names.contains(&"N") && names.contains(&"n"),
+            "expected both N and n preserved, got {:?}",
             names
-        );
-        assert_eq!(
-            names[0],
-            names[0], // trivially true; real check: no duplicates
-        );
-        assert_ne!(
-            names[0], names[1],
-            "collision: both vars got name {:?}",
-            names[0]
         );
 
         // math tokens must match original case

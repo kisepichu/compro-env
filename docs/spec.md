@@ -240,10 +240,10 @@ trait ContestRepository {
 trait SolutionRepository {
     fn list(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Solution>>;
     fn exists(&self, contest_id: &str, problem_code: &str, name: &str) -> Result<bool>;
-    fn create(&self, solution: &Solution, samples: &[Sample], input_format_raw: &str) -> Result<()>;
+    fn create(&self, solution: &Solution, samples: &[Sample], input_format_raw: &str, constraints_raw: &str) -> Result<()>;
     // templates/{lang}/ を solutions/{contest_id}/{problem_code}/{solution_name}/ に展開
     // Tera コンテキスト: contest.id, problem.code, problem.title, solution.name, samples, input_format
-    //   input_format は input_format_raw を usecases/input_format/ でパースして生成
+    //   input_format は input_format_raw + constraints_raw を usecases/input_format/ でパースして生成
     // 既存ディレクトリはスキップ (冪等)。ce solution add では呼び出し前にユースケース層が exists() でチェックする
     fn get_source(&self, solution: &Solution) -> Result<String>;
 }
@@ -328,8 +328,8 @@ usecases/
     login.rs      SessionRepository::save()
     whoami.rs     OnlineJudge::whoami()
     init.rs       OnlineJudge::get_contest_meta() + 待機ループ + OnlineJudge::get_problems_detail()
-                  + ContestRepository::create() + SolutionRepository::create(solution, samples, input_format_raw) × N
-    new_solution.rs  ContestRepository::exists() + ContestRepository::list_problem_codes() + SolutionRepository::exists() + ContestRepository::get_samples() + ContestRepository::get_problem() + SolutionRepository::create(solution, samples, input_format_raw)
+                  + ContestRepository::create() + SolutionRepository::create(solution, samples, input_format_raw, constraints_raw) × N
+    new_solution.rs  ContestRepository::exists() + ContestRepository::list_problem_codes() + SolutionRepository::exists() + ContestRepository::get_samples() + ContestRepository::get_problem() + SolutionRepository::create(solution, samples, input_format_raw, constraints_raw)
     test.rs       解法ディレクトリの ce.toml を読み test_command を sh -c 実行。exit code をそのまま返す
     submit.rs     solution の ce.toml から language 取得 + ContestRepository::get_problem() で problem_id 取得
                   + SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::build_submit_url() → ブラウザ起動
