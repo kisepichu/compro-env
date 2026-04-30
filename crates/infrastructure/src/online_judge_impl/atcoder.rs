@@ -170,6 +170,14 @@ fn parse_tasks_print_from_html(
             .map(|(input, output)| domain::entity::Sample { input, output })
             .collect();
 
+        // Extract input_format_raw
+        let input_format_raw =
+            extract_section_pre_blocks(chunk, &["<h3>入力</h3>", "<h3>Input</h3>"]);
+
+        // Extract constraints_raw
+        let constraints_raw =
+            extract_section_text(chunk, &["<h3>制約</h3>", "<h3>Constraints</h3>"]);
+
         // Determine problem_id: look up in hints or infer
         let problem_id = problem_id_hints
             .iter()
@@ -182,6 +190,8 @@ fn parse_tasks_print_from_html(
             code: problem_code,
             title,
             samples,
+            input_format_raw,
+            constraints_raw,
         });
     }
 
@@ -213,6 +223,77 @@ fn extract_pre_texts_after(html: &str, heading_marker: &str) -> Vec<String> {
     }
 
     results
+}
+
+/// Find the first matching section heading and collect all `<pre>` blocks until the next `<h3>`.
+/// Returns `Some(joined)` if at least one block is found, or `None`.
+fn extract_section_pre_blocks(html: &str, headings: &[&str]) -> Option<String> {
+    // Find the first matching heading
+    let (heading_end, heading_len) = headings
+        .iter()
+        .find_map(|h| html.find(h).map(|pos| (pos, h.len())))?;
+
+    let after_heading = &html[heading_end + heading_len..];
+
+    // Determine the end of this section: the next <h3> tag
+    let section = match after_heading.find("<h3>") {
+        Some(next_h3) => &after_heading[..next_h3],
+        None => after_heading,
+    };
+
+    // Extract all <pre>...</pre> blocks from section
+    let mut blocks = Vec::new();
+    let mut search_from = 0;
+    while let Some(pre_pos) = section[search_from..].find("<pre>") {
+        let content_start = search_from + pre_pos + "<pre>".len();
+        if let Some(end_pos) = section[content_start..].find("</pre>") {
+            let raw = &section[content_start..content_start + end_pos];
+            blocks.push(decode_pre_content(raw));
+            search_from = content_start + end_pos + "</pre>".len();
+        } else {
+            break;
+        }
+    }
+
+    if blocks.is_empty() {
+        None
+    } else {
+        // Join blocks with "\n\n". Each block may already end with "\n",
+        // so insert only "\n" between blocks to produce a clean "\n\n" boundary.
+        let mut result = String::new();
+        for (i, block) in blocks.iter().enumerate() {
+            if i > 0 {
+                if result.ends_with('\n') {
+                    result.push('\n');
+                } else {
+                    result.push_str("\n\n");
+                }
+            }
+            result.push_str(block);
+        }
+        Some(result)
+    }
+}
+
+/// Find the first matching section heading and extract the text content (HTML tags stripped)
+/// until the next `<h3>`. Returns `Some(text)` if non-empty, or `None`.
+fn extract_section_text(html: &str, headings: &[&str]) -> Option<String> {
+    let (heading_end, heading_len) = headings
+        .iter()
+        .find_map(|h| html.find(h).map(|pos| (pos, h.len())))?;
+
+    let after_heading = &html[heading_end + heading_len..];
+
+    let section = match after_heading.find("<h3>") {
+        Some(next_h3) => &after_heading[..next_h3],
+        None => after_heading,
+    };
+
+    // Strip HTML tags (reuse the same tag-stripping logic as decode_pre_content)
+    let stripped = decode_pre_content(section);
+    let text = stripped.trim().to_string();
+
+    if text.is_empty() { None } else { Some(text) }
 }
 
 /// Strip inline HTML tags and decode common HTML entities from `<pre>` content.
@@ -519,5 +600,146 @@ var userScreenName = "";
         let result = extract_pre_texts_after(html, "<h3>Sample Input");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], "N\nA B\n");
+    }
+
+    // ── input_format_raw / constraints_raw extraction ─────────────────────────
+
+    fn single_block_html() -> String {
+        r#"<span class="h2">A - Title</span>
+<h3>入力</h3>
+<pre>N M
+A_1 A_2 \ldots A_N
+</pre>
+<h3>制約</h3>
+<p>1 \leq N \leq 10^5</p>
+<h3>Sample Input 1</h3><pre>3 2
+1 2 3
+</pre>
+<h3>Sample Output 1</h3><pre>6
+</pre>"#
+            .to_string()
+    }
+
+    fn multiple_blocks_html() -> String {
+        r#"<span class="h2">D - Query</span>
+<h3>入力</h3>
+<pre>Q
+query_1
+\vdots
+query_Q
+</pre>
+<p>各クエリは以下の形式</p>
+<pre>1 x
+</pre>
+<pre>2 x k
+</pre>
+<h3>制約</h3>
+<p>1 \leq Q \leq 10^5</p>
+<h3>Sample Input 1</h3><pre>3
+1 5
+2 3 1
+1 7
+</pre>
+<h3>Sample Output 1</h3><pre>...</pre>"#
+            .to_string()
+    }
+
+    fn ul_constraints_html() -> String {
+        r#"<span class="h2">B - Problem</span>
+<h3>入力</h3>
+<pre>N
+</pre>
+<h3>制約</h3>
+<ul>
+<li>1 \leq N \leq 100</li>
+<li>N は整数</li>
+</ul>
+<h3>Sample Input 1</h3><pre>5</pre><h3>Sample Output 1</h3><pre>25</pre>"#
+            .to_string()
+    }
+
+    fn no_input_section_html() -> String {
+        r#"<span class="h2">A - Old</span>
+<h3>Sample Input 1</h3><pre>1</pre>
+<h3>Sample Output 1</h3><pre>2</pre>"#
+            .to_string()
+    }
+
+    #[test]
+    #[serial]
+    fn parse_input_format_raw_single_block() {
+        let html = single_block_html();
+        let result = parse_tasks_print_from_html(&html, "abc001", &[]);
+        assert_eq!(result.len(), 1);
+        let p = &result[0];
+        assert_eq!(
+            p.input_format_raw,
+            Some("N M\nA_1 A_2 \\ldots A_N\n".to_string())
+        );
+        assert!(
+            p.constraints_raw.is_some(),
+            "constraints_raw should be Some"
+        );
+        let constraints = p.constraints_raw.as_ref().unwrap();
+        // Should contain the constraint text stripped of tags
+        assert!(
+            constraints.contains("1 \\leq N \\leq 10^5"),
+            "constraints_raw should contain constraint text, got: {:?}",
+            constraints
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn parse_input_format_raw_multiple_blocks() {
+        let html = multiple_blocks_html();
+        let result = parse_tasks_print_from_html(&html, "abc001", &[]);
+        assert_eq!(result.len(), 1);
+        let p = &result[0];
+        assert_eq!(
+            p.input_format_raw,
+            Some("Q\nquery_1\n\\vdots\nquery_Q\n\n1 x\n\n2 x k\n".to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn parse_constraints_raw_strips_tags() {
+        let html = ul_constraints_html();
+        let result = parse_tasks_print_from_html(&html, "abc001", &[]);
+        assert_eq!(result.len(), 1);
+        let p = &result[0];
+        let constraints = p
+            .constraints_raw
+            .as_ref()
+            .expect("constraints_raw should be Some");
+        // Should not contain any HTML tags
+        assert!(
+            !constraints.contains('<'),
+            "constraints_raw should not contain HTML tags, got: {:?}",
+            constraints
+        );
+        assert!(
+            !constraints.contains('>'),
+            "constraints_raw should not contain HTML tags, got: {:?}",
+            constraints
+        );
+        // Should contain the text content
+        assert!(
+            constraints.contains("1 \\leq N \\leq 100") || constraints.contains("N"),
+            "constraints_raw should contain constraint text, got: {:?}",
+            constraints
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn parse_input_format_raw_none_when_no_input_section() {
+        let html = no_input_section_html();
+        let result = parse_tasks_print_from_html(&html, "abc001", &[]);
+        assert_eq!(result.len(), 1);
+        let p = &result[0];
+        assert_eq!(p.input_format_raw, None);
+        assert_eq!(p.constraints_raw, None);
     }
 }

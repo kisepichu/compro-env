@@ -41,16 +41,19 @@ contest_id = "abc334"
 id = "abc334_a"
 code = "a"
 title = "Product"
+input_format_raw = "A B\n"
 
 [[problems]]
-id = "abc334_b"
-code = "b"
-title = "ABC"
+id = "abc334_c"
+code = "c"
+title = "Socks 2"
+input_format_raw = "N K\nA_1 A_2 \\dots A_K\n"
 ```
 
 `ce test` / `ce sub` 時に OJ を特定するために必須。プレフィックス判定だけでは `xyz999` 等に対応不可。
 `problems` は `ce solution add` 等で問題コード一覧を参照するために保存する。
 `ce init` 時に生成し、以降は上書きしない。samples は testcases/ にファイルとして保存するため `.ce.toml` には含まない。
+`input_format_raw` は `SolutionRepository::create` 時に都度パースして Tera コンテキストに注入する (パース結果は保存しない)。取得できなかった場合は空文字 `""` を保存する。
 
 ---
 
@@ -159,10 +162,39 @@ Problem                             ← Entity (Contest 配下)
   code: String                      ディレクトリ名に使用 ("a", "ex", "practice_2")
   title: String
   samples: Vec<Sample>
+  input_format_raw: Option<String>  入力形式の生テキスト (<pre> 内容)。取得できなければ None
+  constraints_raw: Option<String>   制約の生テキスト。型推定に使用。取得できなければ None
 
 Sample                              ← Value Object
   input: String
   output: String
+
+InputSpec                           ← Value Object (usecases/input_format/ でパース生成)
+  raw: String                       生テキスト (常に設定)
+  ok: bool                          パース成功フラグ
+  vars: Vec<VarDecl>                変数宣言リスト (ok=false のとき空)
+  ops: Vec<InputOp>                 読み取り命令列 (ok=false のとき空)
+
+VarDecl                             ← Value Object
+  name: String                      コード用変数名 (小文字化、衝突時は大文字のまま)
+  math: String                      数学表記の変数名 ("N", "A", "S_X" 等)
+  var_type: VarType                 Int | Str | Unknown
+  dim: u8                           0=スカラー, 1=1D配列
+  size: Vec<String>                 各次元のサイズ式 (小文字化済み変数名)
+
+InputOp                             ← Value Object
+  tag: OpTag                        ReadLine | LoopBegin | LoopEnd
+  depth: u8                         ネスト深さ
+  vars: Vec<VarRef>                 ReadLine 時のみ有効
+  loop_var: Option<String>          LoopBegin 時のみ有効
+  begin: Option<String>             LoopBegin 時のみ有効 (常に "0")
+  end: Option<String>               LoopBegin 時のみ有効 (小文字化済み変数名)
+
+VarRef                              ← Value Object
+  name: String
+  dim: u8
+  size: Option<String>              dim==1 かつ一括読み (水平 cdots) のとき有効
+  index: Option<String>             dim==1 かつ要素読み (ループ内) のとき有効
 
 Solution                            ← Entity (独立 Aggregate)
   contest_id: String
@@ -182,8 +214,7 @@ Language                            ← Value Object (String の newtype)
   検証: templates/{lang}/ が存在するかで判断する。
 ```
 
-`Solution.path` は `SolutionRepository` がプロジェクトルートを保持し、そこからの相対で導出。  
-`IOSpec` は MVP スコープ外。
+`Solution.path` は `SolutionRepository` がプロジェクトルートを保持し、そこからの相対で導出。
 
 ---
 
@@ -209,9 +240,10 @@ trait ContestRepository {
 trait SolutionRepository {
     fn list(&self, contest_id: &str, problem_code: &str) -> Result<Vec<Solution>>;
     fn exists(&self, contest_id: &str, problem_code: &str, name: &str) -> Result<bool>;
-    fn create(&self, solution: &Solution, samples: &[Sample]) -> Result<()>;
+    fn create(&self, solution: &Solution, samples: &[Sample], input_format_raw: &str) -> Result<()>;
     // templates/{lang}/ を solutions/{contest_id}/{problem_code}/{solution_name}/ に展開
-    // Tera コンテキスト: contest.id, problem.code, problem.title, solution.name, samples
+    // Tera コンテキスト: contest.id, problem.code, problem.title, solution.name, samples, input_format
+    //   input_format は input_format_raw を usecases/input_format/ でパースして生成
     // 既存ディレクトリはスキップ (冪等)。ce solution add では呼び出し前にユースケース層が exists() でチェックする
     fn get_source(&self, solution: &Solution) -> Result<String>;
 }
@@ -289,12 +321,17 @@ usecases/
     session_repository.rs
   online_judge.rs
   config.rs
+  input_format/             ← 入力形式パーサー (OJ 非依存の純粋ロジック)
+    mod.rs                  parse(raw: &str, constraints: &str) -> InputSpec
+    lexer.rs                トークナイザ
+    parser.rs               行パターンマッチ → InputNode 列
+    semantic.rs             変数テーブル構築・型推定・loop_var 解決
   service/
     login.rs      SessionRepository::save()
     whoami.rs     OnlineJudge::whoami()
     init.rs       OnlineJudge::get_contest_meta() + 待機ループ + OnlineJudge::get_problems_detail()
-                  + ContestRepository::create() + SolutionRepository::create(solution, samples) × N
-    new_solution.rs  ContestRepository::exists() + ContestRepository::list_problem_codes() + SolutionRepository::exists() + ContestRepository::get_samples() + SolutionRepository::create(solution, samples)
+                  + ContestRepository::create() + SolutionRepository::create(solution, samples, input_format_raw) × N
+    new_solution.rs  ContestRepository::exists() + ContestRepository::list_problem_codes() + SolutionRepository::exists() + ContestRepository::get_samples() + ContestRepository::get_problem() + SolutionRepository::create(solution, samples, input_format_raw)
     test.rs       解法ディレクトリの ce.toml を読み test_command を sh -c 実行。exit code をそのまま返す
     submit.rs     solution の ce.toml から language 取得 + ContestRepository::get_problem() で problem_id 取得
                   + SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::build_submit_url() → ブラウザ起動
@@ -315,6 +352,24 @@ infrastructure/
 ```
 
 **エラー設計**: `anyhow::Error` をデフォルトとし、matchable なドメインエラーは `thiserror` で定義。`E: Error + 'static` 型パラメータは使わない。
+
+---
+
+## 入力形式パース 未対応パターン (Phase 2)
+
+以下は Phase 1 非対応。パース失敗時は `ok: false` にフォールバックする。  
+実際の AtCoder 問題 (ac/test/data/test_problems.yml 収録) で確認済み。
+
+| 非対応パターン | 確認問題 |
+| --- | --- |
+| クエリ型: `\text{query}_i` / `\mathrm{Query}_i` | abc241-D, abc248-D |
+| クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 | abc241-D, typical90-L |
+| T-testcases 型: pre[0]=`T` 単独 + pre[1]=ケース形式 | abc238-D |
+| 空白なし文字グリッド: `S_{11}...S_{1W}` | abc151-D, abc176-D |
+| 可変長行: `T_i K_i A_{i,1} \ldots A_{i,K_i}` | abc226-C |
+| 斜め・上三角行列: 行ごとに長さが異なる | abc236-D |
+| 非数値添字スカラー: `A_x`, `C_h` | abc246-E, abc176-D |
+| ネストループ 2段以上 | — |
 
 ---
 

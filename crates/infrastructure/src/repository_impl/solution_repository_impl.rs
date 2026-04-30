@@ -27,7 +27,12 @@ impl SolutionRepository for SolutionRepositoryImpl {
         Ok(solution_dir.is_dir())
     }
 
-    fn create(&self, solution: &Solution, samples: &[Sample]) -> Result<()> {
+    fn create(
+        &self,
+        solution: &Solution,
+        samples: &[Sample],
+        input_format_raw: &str,
+    ) -> Result<()> {
         let solution_dir = self
             .root
             .join("solutions")
@@ -49,7 +54,7 @@ impl SolutionRepository for SolutionRepositoryImpl {
 
         // Expand templates; clean up the newly created dir if anything fails
         // to prevent future runs from silently skipping a broken solution dir.
-        let result = expand_templates(&solution_dir, solution, samples, self);
+        let result = expand_templates(&solution_dir, solution, samples, input_format_raw, self);
         if result.is_err() {
             let _ = std::fs::remove_dir_all(&solution_dir);
         }
@@ -91,6 +96,7 @@ fn expand_templates(
     solution_dir: &std::path::Path,
     solution: &Solution,
     samples: &[Sample],
+    input_format_raw: &str,
     repo: &SolutionRepositoryImpl,
 ) -> Result<()> {
     let lang_dir = solution.language.dir_name();
@@ -119,6 +125,10 @@ fn expand_templates(
                 .collect::<Vec<_>>()
         ),
     );
+    let input_format_spec = usecases::input_format::parse(input_format_raw, "");
+    let input_format_json =
+        serde_json::to_value(&input_format_spec).unwrap_or(serde_json::Value::Null);
+    ctx.insert("input_format", &input_format_json);
 
     // Walk the template directory recursively
     for entry in walkdir::WalkDir::new(&template_dir) {
@@ -238,7 +248,7 @@ mod tests {
         let repo = SolutionRepositoryImpl::new(root.to_path_buf());
 
         let solution = make_solution("abc001", "a", "main", Language::new("rust"));
-        repo.create(&solution, &[]).unwrap();
+        repo.create(&solution, &[], "").unwrap();
 
         let cargo_toml_path = root.join("solutions/abc001/a/main/Cargo.toml");
         assert!(
@@ -258,7 +268,7 @@ mod tests {
         let repo = SolutionRepositoryImpl::new(root.to_path_buf());
 
         let solution = make_solution("abc001", "a", "main", Language::new("rust"));
-        repo.create(&solution, &[]).unwrap();
+        repo.create(&solution, &[], "").unwrap();
 
         let main_rs_path = root.join("solutions/abc001/a/main/src/main.rs");
         assert!(
@@ -292,6 +302,64 @@ mod tests {
         assert_eq!(content, "fn main() { println!(\"hello\"); }");
     }
 
+    /// Set up a temp root with a Tera template that references input_format.ok
+    fn setup_temp_root_with_input_format_template() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        let tmpl_rust = root.join("templates/rust");
+        fs::create_dir_all(&tmpl_rust).unwrap();
+
+        // Template that renders input_format.ok (true/false)
+        fs::write(tmpl_rust.join("result.txt.tera"), "{{input_format.ok}}").unwrap();
+
+        dir
+    }
+
+    #[test]
+    #[serial]
+    fn create_injects_input_format_into_tera_context() {
+        let dir = setup_temp_root_with_input_format_template();
+        let root = dir.path();
+        let repo = SolutionRepositoryImpl::new(root.to_path_buf());
+
+        let solution = make_solution("abc001", "a", "main", Language::new("rust"));
+        // "N M\n" is a valid input format — parse should succeed → ok = true
+        repo.create(&solution, &[], "N M\n").unwrap();
+
+        let result_path = root.join("solutions/abc001/a/main/result.txt");
+        assert!(result_path.exists(), "result.txt should be generated");
+        let contents = fs::read_to_string(&result_path).unwrap();
+        assert_eq!(
+            contents.trim(),
+            "true",
+            "input_format.ok should be true for valid input, got: {:?}",
+            contents
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn create_injects_input_format_ok_false_when_empty() {
+        let dir = setup_temp_root_with_input_format_template();
+        let root = dir.path();
+        let repo = SolutionRepositoryImpl::new(root.to_path_buf());
+
+        let solution = make_solution("abc001", "b", "main", Language::new("rust"));
+        // Empty string → parse fails → ok = false
+        repo.create(&solution, &[], "").unwrap();
+
+        let result_path = root.join("solutions/abc001/b/main/result.txt");
+        assert!(result_path.exists(), "result.txt should be generated");
+        let contents = fs::read_to_string(&result_path).unwrap();
+        assert_eq!(
+            contents.trim(),
+            "false",
+            "input_format.ok should be false for empty input, got: {:?}",
+            contents
+        );
+    }
+
     #[test]
     #[serial]
     fn create_is_noop_when_solution_dir_already_exists() {
@@ -307,7 +375,7 @@ mod tests {
         fs::write(&main_rs, "fn main() { /* user edited */ }").unwrap();
 
         let solution = make_solution("abc001", "a", "main", Language::new("rust"));
-        repo.create(&solution, &[]).unwrap();
+        repo.create(&solution, &[], "").unwrap();
 
         // User's file must be untouched
         let contents = fs::read_to_string(&main_rs).unwrap();

@@ -172,7 +172,7 @@ mod tests {
         fn exists(&self, _: &str, _: &str, _: &str) -> Result<bool> {
             Ok(false)
         }
-        fn create(&self, _: &Solution, _: &[Sample]) -> Result<()> {
+        fn create(&self, _: &Solution, _: &[Sample], _: &str) -> Result<()> {
             Ok(())
         }
         fn get_source(&self, _: &Solution, _: &str) -> Result<String> {
