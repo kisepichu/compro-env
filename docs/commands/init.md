@@ -268,7 +268,7 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
 ]
 ```
 
-ループあり (abc334-F 相当):
+ループあり (abc334-F 相当) — **注意: `loop_begin` を含む場合 `ok=false` になるため `vars`/`ops` は空になる。下記は parse 内部の中間表現の例であり、Tera コンテキストには渡されない。**
 
 ```json
 [
@@ -287,7 +287,7 @@ VarRef フィールド:
 
 #### 型推定 (制約テキストから)
 
-制約テキストを走査し、以下のヒューリスティックで `vars[*].type` を設定する:
+制約テキストを走査し、以下のヒューリスティックで `vars[*].var_type` を設定する:
 
 | 制約テキストのパターン | 結果 |
 | --- | --- |
@@ -306,12 +306,10 @@ VarRef フィールド:
 | --- | --- | --- |
 | スカラー列 | `N M K` | abc334-A,B |
 | 1D 配列 (水平 cdots) | `A_1 A_2 \ldots A_N` | abc334-C, abc360-C |
-| 1D 配列 (垂直 vdots) | `A_1` / `\vdots` / `A_N` | — |
-| 複数変数ループ | `t_1 k_1` / `\hspace{}\vdots` / `t_Q k_Q` | abc242-D |
 | 複数配列 (水平) | `A_1 \ldots A_N` + `W_1 \ldots W_N` | abc360-C |
 | 単独文字列 | `S` (型推定で `str`) | abc360-A |
 
-`\hspace{0.4cm}\vdots` は前処理で `\vdots` に正規化するため abc242-D 相当のパターンは Phase 1 対応。
+**注意**: `\vdots` 系のパターン (垂直 1D 配列・複数変数ループ) は parse 内部でループ構造 (`loop_begin`) を生成するが、proconio が `input!` マクロでループをサポートしないため、これらは現在 `ok=false` にフォールバックする。`\hspace{0.4cm}\vdots` は前処理で `\vdots` に正規化されるが結果は同じ。
 
 #### Phase 1 非対応 → `ok: false` にフォールバック
 
@@ -319,6 +317,8 @@ VarRef フィールド:
 
 | 非対応パターン | 例 | 確認問題 |
 | --- | --- | --- |
+| 垂直 vdots 1D 配列 | `A_1` / `\vdots` / `A_N` | — |
+| 複数変数ループ (`\vdots`) | `t_1 k_1` / `\vdots` / `t_Q k_Q` | abc242-D |
 | クエリ型 (複数 pre ブロック + `\text{query}`) | `Q\nquery_1\n\vdots` | abc241-D, typical90-L |
 | クエリ型 (`\mathrm{Query}`) | `\mathrm{Query}_1` | abc248-D |
 | T-testcases 型 (pre[0]=`T`, pre[1]=形式) | `T\n\n a s` | abc238-D |

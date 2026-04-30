@@ -1,6 +1,6 @@
+{% if input_format.ok -%}
 use proconio::input;
 
-{% if input_format.ok -%}
 fn solve(
     {%- for vd in input_format.vars %}
     {% if vd.dim == 0 -%}
