@@ -241,6 +241,7 @@ fn try_parse_array1d(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
     let mut base_name: Option<String> = None;
     let mut last_subscript: Option<String> = None;
     let mut has_alpha_subscript = false;
+    let mut has_numeric_subscript = false;
 
     let mut i = 0;
     while i < tokens.len() {
@@ -266,6 +267,8 @@ fn try_parse_array1d(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
                     // Check subscript type
                     if sub.chars().all(|c: char| c.is_ascii_alphabetic()) {
                         has_alpha_subscript = true;
+                    } else {
+                        has_numeric_subscript = true;
                     }
                     last_subscript = Some(sub);
                 } else {
@@ -280,13 +283,10 @@ fn try_parse_array1d(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
     let base = base_name?;
     let size = last_subscript?;
 
-    if has_alpha_subscript {
-        // The last subscript might be the size variable (alphabetic is OK for size)
-        // But if ALL subscripts are alphabetic (like A_x A_y ...), that's non-numeric
-        // For array case, alphabetic last subscript = size variable = OK
-        // We need to check: is this a legit array (A_1 A_2 ... A_N) or non-numeric (A_x A_y)?
-        // If there's a Cdots, assume it's an array with alphabetic size
-        Some(Ok(RawLine::Array1D { name: base, size }))
+    if has_alpha_subscript && !has_numeric_subscript {
+        // All subscripts are alphabetic (e.g. A_x A_y ... A_z) — non-numeric subscript
+        // pattern, not a supported 1D array
+        Some(Err(ParseError::NonNumericSubscript))
     } else {
         Some(Ok(RawLine::Array1D { name: base, size }))
     }

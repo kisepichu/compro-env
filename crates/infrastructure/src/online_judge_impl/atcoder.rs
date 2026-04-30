@@ -289,11 +289,55 @@ fn extract_section_text(html: &str, headings: &[&str]) -> Option<String> {
         None => after_heading,
     };
 
-    // Strip HTML tags (reuse the same tag-stripping logic as decode_pre_content)
-    let stripped = decode_pre_content(section);
+    let stripped = decode_section_content(section);
     let text = stripped.trim().to_string();
 
     if text.is_empty() { None } else { Some(text) }
+}
+
+/// Strip HTML tags from non-`<pre>` section content while preserving token
+/// boundaries for block-level tags so that adjacent items such as
+/// `</li><li>` do not collapse into one token.
+fn decode_section_content(s: &str) -> String {
+    // Replace block-closing tags with newlines before stripping all tags.
+    let normalized = s
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n")
+        .replace("</p>", "\n")
+        .replace("</li>", "\n")
+        .replace("</ul>", "\n")
+        .replace("</ol>", "\n")
+        .replace("</div>", "\n");
+
+    let mut out = String::with_capacity(normalized.len());
+    let mut chars = normalized.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '<' {
+            for c2 in chars.by_ref() {
+                if c2 == '>' {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+
+    // Decode HTML entities; loop until stable for double-encoded sequences.
+    loop {
+        let decoded = out
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&nbsp;", " ");
+        if decoded == out {
+            return out;
+        }
+        out = decoded;
+    }
 }
 
 /// Strip inline HTML tags and decode common HTML entities from `<pre>` content.
