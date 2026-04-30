@@ -182,6 +182,8 @@ VarDecl                             ← Value Object
   var_type: VarType                 Int | Str | Unknown
   dim: u8                           0=スカラー, 1=1D配列
   size: Vec<String>                 各次元のサイズ式 (小文字化済み変数名)
+  is_size: bool                     他の var の size または LoopBegin の end に自分の name が現れるなら true
+                                    (テンプレートで usize/Vec<T> 等の型決定に使用)
 
 InputOp                             ← Value Object
   tag: OpTag                        ReadLine | LoopBegin | LoopEnd

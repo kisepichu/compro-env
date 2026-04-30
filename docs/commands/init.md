@@ -246,15 +246,16 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
 
 ```json
 [
-  { "name": "n",  "math": "N",  "var_type": "int", "dim": 0, "size": [] },
-  { "name": "k",  "math": "K",  "var_type": "int", "dim": 0, "size": [] },
-  { "name": "a",  "math": "A",  "var_type": "int", "dim": 1, "size": ["k"] }
+  { "name": "n",  "math": "N",  "var_type": "int", "dim": 0, "size": [],    "is_size": true  },
+  { "name": "k",  "math": "K",  "var_type": "int", "dim": 0, "size": [],    "is_size": false },
+  { "name": "a",  "math": "A",  "var_type": "int", "dim": 1, "size": ["n"], "is_size": false }
 ]
 ```
 
 - `var_type`: `"int"` | `"str"` | `"unknown"`
 - `dim`: `0` = スカラー, `1` = 1D配列 (Phase 1 上限)
 - `size`: dim ごとのサイズ式 (小文字化済み変数名)
+- `is_size`: 他の var の `size` または `loop_begin` の `end` に自分の `name` が現れるなら `true`。テンプレートで `usize` / `Vec<T>` の型決定に使用する
 
 #### `ops` の形式 (JSON 例)
 
@@ -344,32 +345,69 @@ edition = "2021"
 ```
 
 `src/main.rs.tera` 例 (proconio 使用):
-```rust
+
+`ok=true` のとき: `solve` を純粋な引数関数として生成し、`main` で `input!` → `solve(args...)` と呼ぶ。
+`ok=false` のとき: フォールバックとして `solve` が `src` を受け取る従来スタイルを生成する。
+
+```tera
 use proconio::input;
 
-fn main() {
-    {% if input_format.ok %}
-    {%- for op in input_format.ops %}
-    {%- if op.tag == "read_line" %}
-    {%- if op.vars | length == 1 and op.vars[0].dim == 1 %}
-    input! { {{ op.vars[0].name }}: [i64; {{ op.vars[0].size }}] }
-    {%- elif op.vars | length == 1 and op.vars[0].dim == 0 %}
-    input! { {{ op.vars[0].name }}: i64 }
-    {%- else %}
-    input! { {% for v in op.vars %}{{ v.name }}: i64, {% endfor %} }
-    {%- endif %}
-    {%- elif op.tag == "loop_begin" %}
-    for {{ op.loop_var }} in {{ op.begin }}..{{ op.end }} {
-    {%- elif op.tag == "loop_end" %}
-    }
-    {%- endif %}
-    {%- endfor %}
-    {% else %}
-    // TODO: write input code
-    // {{ input_format.raw }}
-    {% endif %}
+{% if input_format.ok -%}
+fn solve(
+    {% for v in input_format.vars -%}
+    {{ v.name }}: {% if v.is_size %}usize{% elif v.dim == 1 %}Vec<{% if v.var_type == "str" %}String{% else %}i64{% endif %}>{% elif v.var_type == "str" %}String{% else %}i64{% endif %},
+    {% endfor -%}
+) -> String {
+    todo!()
 }
+
+fn main() {
+    input! {
+        {% for op in input_format.ops -%}
+        {% if op.tag == "read_line" -%}
+        {% for v in op.vars -%}
+        {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
+        {% if v.dim == 0 -%}
+        {{ v.name }}: {% if vd.is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
+        {% elif v.size -%}
+        {{ v.name }}: [{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ v.size }}],
+        {% endif -%}
+        {% endfor -%}
+        {% elif op.tag == "loop_begin" -%}
+        // TODO: loop {{ op.loop_var }} in {{ op.begin }}..{{ op.end }} — write manually
+        {% endif -%}
+        {% endfor -%}
+    }
+    print!("{}", solve({{ input_format.vars | map(attribute="name") | join(sep=", ") }}));
+}
+{% else -%}
+fn solve<R: std::io::BufRead>(src: &mut impl proconio::source::Source<R>) -> String {
+    // TODO: input_format.ok = false — write input manually
+    // raw: {{ input_format.raw }}
+    todo!()
+}
+
+fn main() {
+    use proconio::source::line::LineSource;
+    use std::io::BufReader;
+    let src = &mut LineSource::new(BufReader::new(std::io::stdin()));
+    print!("{}", solve(src));
+}
+{% endif -%}
+
+#[cfg(test)]
+mod tests { ... }
 ```
+
+**型対応表** (テンプレート内の判定ロジック):
+
+| `dim` | `is_size` | `var_type` | Rust 型 |
+|-------|-----------|------------|---------|
+| 0 | true | any | `usize` |
+| 0 | false | `"str"` | `String` |
+| 0 | false | other | `i64` |
+| 1 | false | `"str"` | `Vec<String>` |
+| 1 | false | other | `Vec<i64>` |
 
 ## エラーケース
 

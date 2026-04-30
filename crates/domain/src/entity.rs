@@ -124,6 +124,7 @@ pub struct VarDecl {
     pub var_type: VarType,
     pub dim: u8,
     pub size: Vec<String>,
+    pub is_size: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -246,6 +247,7 @@ mod input_spec_tests {
                     var_type: VarType::Int,
                     dim: 0,
                     size: vec![],
+                    is_size: false,
                 },
                 VarDecl {
                     name: "a".to_string(),
@@ -253,6 +255,7 @@ mod input_spec_tests {
                     var_type: VarType::Int,
                     dim: 1,
                     size: vec!["n".to_string()],
+                    is_size: false,
                 },
             ],
             ops: vec![

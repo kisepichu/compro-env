@@ -369,6 +369,85 @@ mod tests {
         );
     }
 
+    /// Set up a temp root whose `templates/rust/src/main.rs.tera` is the real template
+    /// from the workspace root, so we test the actual template rendering.
+    fn setup_temp_root_with_real_main_template() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Real template content embedded at compile time so the path is always relative
+        // to the infrastructure crate, then we climb up to the workspace root.
+        let template_content = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../templates/rust/src/main.rs.tera"
+        ));
+
+        let tmpl_src = root.join("templates/rust/src");
+        fs::create_dir_all(&tmpl_src).unwrap();
+        fs::write(tmpl_src.join("main.rs.tera"), template_content).unwrap();
+
+        dir
+    }
+
+    #[test]
+    #[serial]
+    fn create_generates_solve_with_args_when_ok_true() {
+        let dir = setup_temp_root_with_real_main_template();
+        let root = dir.path();
+        let repo = SolutionRepositoryImpl::new(root.to_path_buf());
+
+        let solution = make_solution("abc001", "a", "main", Language::new("rust"));
+        // "N\nA_1 A_2 \ldots A_N\n" → ok=true, n scalar + a array
+        repo.create(&solution, &[], "N\nA_1 A_2 \\ldots A_N\n", "")
+            .unwrap();
+
+        let main_rs = root.join("solutions/abc001/a/main/src/main.rs");
+        assert!(main_rs.exists(), "src/main.rs should be generated");
+        let contents = fs::read_to_string(&main_rs).unwrap();
+
+        assert!(
+            contents.contains("fn solve("),
+            "expected plain 'fn solve(' (no generic), got:\n{contents}"
+        );
+        assert!(
+            !contents.contains("fn solve<R"),
+            "expected NO 'fn solve<R' (no BufRead generic) in ok=true path, got:\n{contents}"
+        );
+        assert!(
+            contents.contains("n: usize"),
+            "expected 'n: usize' in solve signature, got:\n{contents}"
+        );
+        assert!(
+            contents.contains("Vec<i64>"),
+            "expected 'Vec<i64>' in solve signature, got:\n{contents}"
+        );
+        assert!(
+            contents.contains("solve(n, a)"),
+            "expected 'solve(n, a)' call in main, got:\n{contents}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn create_generates_fallback_when_ok_false() {
+        let dir = setup_temp_root_with_real_main_template();
+        let root = dir.path();
+        let repo = SolutionRepositoryImpl::new(root.to_path_buf());
+
+        let solution = make_solution("abc001", "b", "main", Language::new("rust"));
+        // Empty input_format_raw → ok=false → fallback template path
+        repo.create(&solution, &[], "", "").unwrap();
+
+        let main_rs = root.join("solutions/abc001/b/main/src/main.rs");
+        assert!(main_rs.exists(), "src/main.rs should be generated");
+        let contents = fs::read_to_string(&main_rs).unwrap();
+
+        assert!(
+            contents.contains("fn solve<R"),
+            "expected 'fn solve<R' (BufRead generic fallback) for ok=false, got:\n{contents}"
+        );
+    }
+
     #[test]
     #[serial]
     fn create_is_noop_when_solution_dir_already_exists() {

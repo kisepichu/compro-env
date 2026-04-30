@@ -874,6 +874,21 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     // Type inference
     infer_types(&mut var_decls, constraints);
 
+    // Compute is_size: a var is a size var if its name appears in any other VarDecl's size,
+    // or if it is the `end` of any LoopBegin op.
+    let size_names: std::collections::HashSet<String> = var_decls
+        .iter()
+        .flat_map(|v| v.size.iter().cloned())
+        .chain(
+            ops.iter()
+                .filter(|o| o.tag == OpTag::LoopBegin)
+                .filter_map(|o| o.end.clone()),
+        )
+        .collect();
+    for v in &mut var_decls {
+        v.is_size = size_names.contains(&v.name);
+    }
+
     InputSpec {
         raw: raw.to_string(),
         ok: true,
@@ -894,7 +909,7 @@ fn preprocess(raw: &str) -> String {
         if let Some(close) = after.find('}') {
             let after_close = &after[close + 1..];
             // Check if followed by \vdots
-            let trimmed = after_close.trim_start_matches(|c: char| c == ' ' || c == '\t');
+            let trimmed = after_close.trim_start_matches([' ', '\t']);
             if trimmed.starts_with("\\vdots") {
                 result.push_str("\\vdots");
                 rest = trimmed.strip_prefix("\\vdots").unwrap_or("");
@@ -949,6 +964,7 @@ fn ensure_var_decl(decls: &mut Vec<VarDecl>, name: &str, math: &str, dim: u8, si
             var_type: VarType::Unknown,
             dim,
             size,
+            is_size: false,
         });
     }
 }
@@ -1171,6 +1187,98 @@ mod tests {
             .expect("var s not found");
         assert_eq!(n_var.var_type, VarType::Int);
         assert_eq!(s_var.var_type, VarType::Str);
+    }
+
+    // ── is_size field ─────────────────────────────────────────────────────────
+
+    /// "N M\n" — neither N nor M is used as a size, so both have is_size=false
+    #[test]
+    fn scalars_only_is_size_false() {
+        let spec = scalar_ok("N M\n");
+        assert!(spec.ok);
+        assert_eq!(spec.vars.len(), 2);
+        let n = &spec.vars[0];
+        assert_eq!(n.name, "n");
+        assert!(!n.is_size, "n should have is_size=false");
+        let m = &spec.vars[1];
+        assert_eq!(m.name, "m");
+        assert!(!m.is_size, "m should have is_size=false");
+    }
+
+    /// "N\nA_1 A_2 \\ldots A_N\n" — N is the array size so is_size=true; a is not
+    #[test]
+    fn array_size_var_is_size_true() {
+        let spec = scalar_ok("N\nA_1 A_2 \\ldots A_N\n");
+        assert!(spec.ok);
+        assert_eq!(spec.vars.len(), 2);
+        let n = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "n")
+            .expect("n not found");
+        assert!(n.is_size, "n should have is_size=true (it is A's size)");
+        let a = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "a")
+            .expect("a not found");
+        assert!(!a.is_size, "a should have is_size=false");
+    }
+
+    /// "Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n" — Q is the LoopBegin end, so is_size=true
+    #[test]
+    fn loop_end_var_is_size_true() {
+        let spec = scalar_ok("Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n");
+        assert!(spec.ok);
+        let q = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "q")
+            .expect("q not found");
+        assert!(
+            q.is_size,
+            "q should have is_size=true (it is the LoopBegin end)"
+        );
+        let t = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "t")
+            .expect("t not found");
+        assert!(!t.is_size, "t should have is_size=false");
+        let k = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "k")
+            .expect("k not found");
+        assert!(!k.is_size, "k should have is_size=false");
+    }
+
+    /// "N\nA_1 \\ldots A_N\nB_1 \\ldots B_N\n" — N is size of both A and B, so is_size=true
+    #[test]
+    fn multiple_arrays_size_var_is_size_true() {
+        let spec = scalar_ok("N\nA_1 \\ldots A_N\nB_1 \\ldots B_N\n");
+        assert!(spec.ok);
+        let n = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "n")
+            .expect("n not found");
+        assert!(
+            n.is_size,
+            "n should have is_size=true (size of both A and B)"
+        );
+        let a = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "a")
+            .expect("a not found");
+        assert!(!a.is_size, "a should have is_size=false");
+        let b = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "b")
+            .expect("b not found");
+        assert!(!b.is_size, "b should have is_size=false");
     }
 
     // ── case-collision: N and n on same line ──────────────────────────────────
