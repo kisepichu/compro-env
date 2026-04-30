@@ -167,7 +167,12 @@ fn build_result(
             name: "main".to_string(),
             language: lang.clone(),
         };
-        solution_repo.create(&solution, &problem.samples)?;
+        solution_repo.create(
+            &solution,
+            &problem.samples,
+            problem.input_format_raw.as_deref().unwrap_or(""),
+            problem.constraints_raw.as_deref().unwrap_or(""),
+        )?;
         created_solutions.push(solution);
     }
     // Write .ce.toml and test-case files only after all solutions succeed.
@@ -214,6 +219,8 @@ mod tests {
                 input: "1\n".to_string(),
                 output: "1\n".to_string(),
             }],
+            input_format_raw: None,
+            constraints_raw: None,
         }
     }
 
@@ -336,6 +343,8 @@ mod tests {
             &self,
             solution: &domain::entity::Solution,
             _samples: &[domain::entity::Sample],
+            _input_format_raw: &str,
+            _constraints_raw: &str,
         ) -> Result<()> {
             self.created.borrow_mut().push(solution.clone());
             Ok(())

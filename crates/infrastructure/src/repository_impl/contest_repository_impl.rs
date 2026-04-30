@@ -15,6 +15,8 @@ struct CeTomlProblem<'a> {
     id: &'a str,
     code: &'a str,
     title: &'a str,
+    input_format_raw: &'a str,
+    constraints_raw: &'a str,
 }
 
 /// Owned version for deserialization.
@@ -30,6 +32,10 @@ struct CeTomlProblemOwned {
     id: String,
     code: String,
     title: String,
+    #[serde(default)]
+    input_format_raw: String,
+    #[serde(default)]
+    constraints_raw: String,
 }
 
 impl ContestRepositoryImpl {
@@ -93,6 +99,8 @@ impl ContestRepository for ContestRepositoryImpl {
                         id: &p.id,
                         code: &p.code,
                         title: &p.title,
+                        input_format_raw: p.input_format_raw.as_deref().unwrap_or(""),
+                        constraints_raw: p.constraints_raw.as_deref().unwrap_or(""),
                     })
                     .collect(),
             };
@@ -185,6 +193,16 @@ impl ContestRepository for ContestRepositoryImpl {
                 code: p.code,
                 title: p.title,
                 samples: vec![],
+                input_format_raw: if p.input_format_raw.is_empty() {
+                    None
+                } else {
+                    Some(p.input_format_raw)
+                },
+                constraints_raw: if p.constraints_raw.is_empty() {
+                    None
+                } else {
+                    Some(p.constraints_raw)
+                },
             })
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -278,6 +296,8 @@ mod tests {
                     input: "1\n".to_string(),
                     output: "2\n".to_string(),
                 }],
+                input_format_raw: None,
+                constraints_raw: None,
             }],
         }
     }
@@ -379,6 +399,108 @@ mod tests {
 
         let result = repo.get_problem("abc334", "z");
         assert!(result.is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn ce_toml_includes_input_format_raw() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(dir.path());
+
+        // Problem with input_format_raw = Some("N M\n")
+        let contest = Contest {
+            id: "abc001".to_string(),
+            online_judge: OJKind::AtCoder,
+            problems: vec![Problem {
+                id: "abc001_a".to_string(),
+                code: "a".to_string(),
+                title: "Prob".to_string(),
+                samples: vec![],
+                input_format_raw: Some("N M\n".to_string()),
+                constraints_raw: None,
+            }],
+        };
+        repo.create(&contest).unwrap();
+
+        let toml_path = dir.path().join("solutions").join("abc001").join(".ce.toml");
+        let contents = fs::read_to_string(&toml_path).unwrap();
+        assert!(
+            contents.contains("input_format_raw"),
+            ".ce.toml should contain input_format_raw, got: {:?}",
+            contents
+        );
+        assert!(
+            contents.contains("N M\\n") || contents.contains("N M\n"),
+            ".ce.toml should contain the input_format_raw value, got: {:?}",
+            contents
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn ce_toml_includes_input_format_raw_empty_when_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(dir.path());
+
+        // Problem with input_format_raw = None → should write empty string
+        let contest = Contest {
+            id: "abc002".to_string(),
+            online_judge: OJKind::AtCoder,
+            problems: vec![Problem {
+                id: "abc002_a".to_string(),
+                code: "a".to_string(),
+                title: "Prob".to_string(),
+                samples: vec![],
+                input_format_raw: None,
+                constraints_raw: None,
+            }],
+        };
+        repo.create(&contest).unwrap();
+
+        let toml_path = dir.path().join("solutions").join("abc002").join(".ce.toml");
+        let contents = fs::read_to_string(&toml_path).unwrap();
+        // When None, should write input_format_raw = ""
+        assert!(
+            contents.contains("input_format_raw"),
+            ".ce.toml should contain input_format_raw key even when None, got: {:?}",
+            contents
+        );
+        assert!(
+            contents.contains("input_format_raw = \"\""),
+            ".ce.toml should have empty input_format_raw when None, got: {:?}",
+            contents
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn get_problem_returns_input_format_raw() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(dir.path());
+
+        // Write .ce.toml manually with input_format_raw
+        let contest_dir = dir.path().join("solutions").join("abc003");
+        fs::create_dir_all(&contest_dir).unwrap();
+        fs::write(
+            contest_dir.join(".ce.toml"),
+            r#"online_judge = "atcoder"
+contest_id = "abc003"
+
+[[problems]]
+id = "abc003_a"
+code = "a"
+title = "MyProblem"
+input_format_raw = "N M\n"
+"#,
+        )
+        .unwrap();
+
+        let problem = repo.get_problem("abc003", "a").unwrap();
+        assert_eq!(
+            problem.input_format_raw,
+            Some("N M\n".to_string()),
+            "get_problem should return input_format_raw from .ce.toml"
+        );
     }
 
     #[test]

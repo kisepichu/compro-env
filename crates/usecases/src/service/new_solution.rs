@@ -44,7 +44,14 @@ impl Service {
             .contest_repo
             .get_samples(&solution.contest_id, &solution.problem_code)?;
 
-        self.solution_repo.create(&solution, &samples)?;
+        let problem = self
+            .contest_repo
+            .get_problem(&solution.contest_id, &solution.problem_code)?;
+        let input_format_raw = problem.input_format_raw.as_deref().unwrap_or("");
+        let constraints_raw = problem.constraints_raw.as_deref().unwrap_or("");
+
+        self.solution_repo
+            .create(&solution, &samples, input_format_raw, constraints_raw)?;
 
         Ok(())
     }
@@ -155,8 +162,15 @@ mod tests {
         fn testcases_dir(&self, _: &str, _: &str) -> PathBuf {
             PathBuf::from("/tmp/testcases")
         }
-        fn get_problem(&self, _: &str, _: &str) -> Result<domain::entity::Problem> {
-            todo!()
+        fn get_problem(&self, _: &str, code: &str) -> Result<domain::entity::Problem> {
+            Ok(domain::entity::Problem {
+                id: format!("stub_{code}"),
+                code: code.to_string(),
+                title: code.to_string(),
+                samples: vec![],
+                input_format_raw: None,
+                constraints_raw: None,
+            })
         }
     }
 
@@ -170,7 +184,7 @@ mod tests {
         fn exists(&self, _: &str, _: &str, _: &str) -> Result<bool> {
             Ok(self.solution_exists)
         }
-        fn create(&self, _: &Solution, _: &[Sample]) -> Result<()> {
+        fn create(&self, _: &Solution, _: &[Sample], _: &str, _: &str) -> Result<()> {
             Ok(())
         }
         fn get_source(&self, _: &Solution, _: &str) -> Result<String> {

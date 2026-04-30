@@ -103,6 +103,62 @@ pub struct Problem {
     pub code: String,
     pub title: String,
     pub samples: Vec<Sample>,
+    pub input_format_raw: Option<String>,
+    pub constraints_raw: Option<String>,
+}
+
+// ─── InputSpec types ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VarType {
+    Int,
+    Str,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VarDecl {
+    pub name: String,
+    pub math: String,
+    pub var_type: VarType,
+    pub dim: u8,
+    pub size: Vec<String>,
+    pub is_size: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VarRef {
+    pub name: String,
+    pub dim: u8,
+    pub size: Option<String>,
+    pub index: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpTag {
+    ReadLine,
+    LoopBegin,
+    LoopEnd,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct InputOp {
+    pub tag: OpTag,
+    pub depth: u8,
+    pub vars: Vec<VarRef>,
+    pub loop_var: Option<String>,
+    pub begin: Option<String>,
+    pub end: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct InputSpec {
+    pub raw: String,
+    pub ok: bool,
+    pub vars: Vec<VarDecl>,
+    pub ops: Vec<InputOp>,
 }
 
 /// Sample input/output (Value Object)
@@ -143,6 +199,132 @@ pub struct Session {
 #[derive(Debug, Clone)]
 pub struct SubmitResult {
     pub submission_url: String,
+}
+
+#[cfg(test)]
+mod input_spec_tests {
+    use super::*;
+
+    // 1. Problem can be constructed with input_format_raw: None and constraints_raw: None
+    #[test]
+    fn problem_with_optional_fields_none() {
+        let p = Problem {
+            id: "abc001_a".to_string(),
+            code: "a".to_string(),
+            title: "Test".to_string(),
+            samples: vec![],
+            input_format_raw: None,
+            constraints_raw: None,
+        };
+        assert_eq!(p.input_format_raw, None);
+        assert_eq!(p.constraints_raw, None);
+    }
+
+    // 2. InputSpec { ok: false, raw: "", vars: vec![], ops: vec![] } can be constructed
+    #[test]
+    fn input_spec_empty_can_be_constructed() {
+        let spec = InputSpec {
+            raw: "".to_string(),
+            ok: false,
+            vars: vec![],
+            ops: vec![],
+        };
+        assert!(!spec.ok);
+        assert!(spec.vars.is_empty());
+        assert!(spec.ops.is_empty());
+    }
+
+    // 3. InputSpec with vars and ops can be constructed and serialized to JSON
+    #[test]
+    fn input_spec_with_data_serializes_to_json() {
+        let spec = InputSpec {
+            raw: "N\nA_1 ... A_N".to_string(),
+            ok: true,
+            vars: vec![
+                VarDecl {
+                    name: "n".to_string(),
+                    math: "N".to_string(),
+                    var_type: VarType::Int,
+                    dim: 0,
+                    size: vec![],
+                    is_size: false,
+                },
+                VarDecl {
+                    name: "a".to_string(),
+                    math: "A".to_string(),
+                    var_type: VarType::Int,
+                    dim: 1,
+                    size: vec!["n".to_string()],
+                    is_size: false,
+                },
+            ],
+            ops: vec![
+                InputOp {
+                    tag: OpTag::ReadLine,
+                    depth: 0,
+                    vars: vec![VarRef {
+                        name: "n".to_string(),
+                        dim: 0,
+                        size: None,
+                        index: None,
+                    }],
+                    loop_var: None,
+                    begin: None,
+                    end: None,
+                },
+                InputOp {
+                    tag: OpTag::LoopBegin,
+                    depth: 0,
+                    vars: vec![],
+                    loop_var: Some("i".to_string()),
+                    begin: Some("0".to_string()),
+                    end: Some("n".to_string()),
+                },
+                InputOp {
+                    tag: OpTag::ReadLine,
+                    depth: 1,
+                    vars: vec![VarRef {
+                        name: "a".to_string(),
+                        dim: 1,
+                        size: None,
+                        index: Some("i".to_string()),
+                    }],
+                    loop_var: None,
+                    begin: None,
+                    end: None,
+                },
+                InputOp {
+                    tag: OpTag::LoopEnd,
+                    depth: 0,
+                    vars: vec![],
+                    loop_var: None,
+                    begin: None,
+                    end: None,
+                },
+            ],
+        };
+        assert!(spec.ok);
+        let json = serde_json::to_value(&spec).unwrap();
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["vars"][0]["name"], "n");
+        assert_eq!(json["ops"][1]["tag"], "loop_begin");
+    }
+
+    // 4. VarType::Int serializes to "int"
+    #[test]
+    fn var_type_int_serializes_to_int() {
+        let v = VarType::Int;
+        let json = serde_json::to_value(&v).unwrap();
+        assert_eq!(json, "int");
+    }
+
+    // 5. OpTag::ReadLine serializes to "read_line"
+    #[test]
+    fn op_tag_read_line_serializes_to_read_line() {
+        let t = OpTag::ReadLine;
+        let json = serde_json::to_value(&t).unwrap();
+        assert_eq!(json, "read_line");
+    }
 }
 
 #[cfg(test)]

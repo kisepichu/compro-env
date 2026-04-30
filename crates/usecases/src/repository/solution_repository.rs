@@ -8,8 +8,14 @@ pub trait SolutionRepository {
     fn exists(&self, contest_id: &str, problem_code: &str, name: &str) -> Result<bool>;
 
     /// Creates the solution directory and expands templates.
-    /// Tera context includes: contest.id, problem.code, problem.title, solution.name, samples
-    fn create(&self, solution: &Solution, samples: &[Sample]) -> Result<()>;
+    /// Tera context includes: contest.id, problem.code, problem.title, solution.name, samples, input_format
+    fn create(
+        &self,
+        solution: &Solution,
+        samples: &[Sample],
+        input_format_raw: &str,
+        constraints_raw: &str,
+    ) -> Result<()>;
 
     /// Reads the source code for submission from the given file path relative to the solution dir.
     fn get_source(&self, solution: &Solution, file_path: &str) -> Result<String>;
