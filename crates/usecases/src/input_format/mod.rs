@@ -603,7 +603,41 @@ fn infer_types(vars: &mut [VarDecl], constraints: &str) {
     }
 }
 
-fn constraints_mention_str(constraints: &str, name: &str, math: &str) -> bool {
+/// Returns true if `token` appears in `haystack` as a standalone token
+/// (not adjacent to an alphanumeric character or underscore).
+fn contains_token(haystack: &str, token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    let bytes = haystack.as_bytes();
+    let tlen = token.len();
+    let mut idx = 0;
+    while idx + tlen <= bytes.len() {
+        if let Some(rel) = haystack[idx..].find(token) {
+            let abs = idx + rel;
+            let before_ok = abs == 0
+                || !{
+                    let b = bytes[abs - 1];
+                    b.is_ascii_alphanumeric() || b == b'_'
+                };
+            let after_pos = abs + tlen;
+            let after_ok = after_pos >= bytes.len()
+                || !{
+                    let b = bytes[after_pos];
+                    b.is_ascii_alphanumeric() || b == b'_'
+                };
+            if before_ok && after_ok {
+                return true;
+            }
+            idx = abs + 1;
+        } else {
+            break;
+        }
+    }
+    false
+}
+
+fn constraints_mention_str(constraints: &str, _name: &str, math: &str) -> bool {
     let str_keywords = [
         "文字列",
         "string",
@@ -613,12 +647,10 @@ fn constraints_mention_str(constraints: &str, name: &str, math: &str) -> bool {
         "uppercase",
     ];
 
-    // Check if the variable name appears near string keywords
     for keyword in &str_keywords {
         if constraints.contains(keyword) {
-            // Check if this variable appears in the same constraint line
             for line in constraints.lines() {
-                if line.contains(keyword) && (line.contains(name) || line.contains(math)) {
+                if line.contains(keyword) && contains_token(line, math) {
                     return true;
                 }
             }
@@ -627,24 +659,22 @@ fn constraints_mention_str(constraints: &str, name: &str, math: &str) -> bool {
     false
 }
 
-fn constraints_mention_int(constraints: &str, name: &str, math: &str) -> bool {
-    // Check for \leq or ≤ patterns with the variable
+fn constraints_mention_int(constraints: &str, _name: &str, math: &str) -> bool {
     let int_keywords = ["整数", "integers"];
 
     for keyword in &int_keywords {
         if constraints.contains(keyword) {
             for line in constraints.lines() {
-                if line.contains(keyword) && (line.contains(name) || line.contains(math)) {
+                if line.contains(keyword) && contains_token(line, math) {
                     return true;
                 }
             }
         }
     }
 
-    // Check for \leq / < / ≤ patterns: variable appears with inequality
     for line in constraints.lines() {
         if (line.contains("\\leq") || line.contains("≤") || line.contains('<'))
-            && (line.contains(name) || line.contains(math))
+            && contains_token(line, math)
         {
             return true;
         }
