@@ -889,6 +889,19 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
         v.is_size = size_names.contains(&v.name);
     }
 
+    // Empty result (no vars and no ops) means the raw text produced nothing
+    // meaningful — treat as not_ok so templates use the safe fallback.
+    if var_decls.is_empty() && ops.is_empty() {
+        return not_ok(raw);
+    }
+
+    // proconio does not support loops; any loop_begin op means the input
+    // cannot be read with a flat input! block, so fall back to manual.
+    let has_loop = ops.iter().any(|o| o.tag == OpTag::LoopBegin);
+    if has_loop {
+        return not_ok(raw);
+    }
+
     InputSpec {
         raw: raw.to_string(),
         ok: true,
@@ -1049,44 +1062,14 @@ mod tests {
     /// "Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n"
     #[test]
     fn multi_var_loop_vdots() {
+        // proconio does not support loops, so loop_begin ops → ok=false fallback
         let spec = scalar_ok("Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n");
-        assert!(spec.ok, "expected ok=true for multi-var vdots loop");
-
-        // vars: q, t[q], k[q]
-        assert_eq!(spec.vars.len(), 3);
-        assert_eq!(spec.vars[0].name, "q");
-        assert_eq!(spec.vars[0].dim, 0);
-        let t = &spec.vars[1];
-        assert_eq!(t.name, "t");
-        assert_eq!(t.dim, 1);
-        assert_eq!(t.size, vec!["q".to_string()]);
-        let k = &spec.vars[2];
-        assert_eq!(k.name, "k");
-        assert_eq!(k.dim, 1);
-        assert_eq!(k.size, vec!["q".to_string()]);
-
-        // ops: ReadLine(q), LoopBegin(i,0,q), ReadLine(t_i, k_i), LoopEnd
-        assert_eq!(spec.ops.len(), 4);
-        assert_eq!(spec.ops[0].tag, OpTag::ReadLine);
-        assert_eq!(spec.ops[0].vars[0].name, "q");
-
-        let lb = &spec.ops[1];
-        assert_eq!(lb.tag, OpTag::LoopBegin);
-        assert_eq!(lb.loop_var.as_deref(), Some("i"));
-        assert_eq!(lb.begin.as_deref(), Some("0"));
-        assert_eq!(lb.end.as_deref(), Some("q"));
-
-        let rl = &spec.ops[2];
-        assert_eq!(rl.tag, OpTag::ReadLine);
-        assert_eq!(rl.vars.len(), 2);
-        assert_eq!(rl.vars[0].name, "t");
-        assert_eq!(rl.vars[0].dim, 1);
-        assert_eq!(rl.vars[0].index.as_deref(), Some("i"));
-        assert_eq!(rl.vars[1].name, "k");
-        assert_eq!(rl.vars[1].dim, 1);
-        assert_eq!(rl.vars[1].index.as_deref(), Some("i"));
-
-        assert_eq!(spec.ops[3].tag, OpTag::LoopEnd);
+        assert!(
+            !spec.ok,
+            "expected ok=false for multi-var vdots loop (loop_begin unsupported)"
+        );
+        assert!(spec.vars.is_empty());
+        assert!(spec.ops.is_empty());
     }
 
     // ── \\hspace{} vdots normalisation ────────────────────────────────────────
@@ -1094,16 +1077,20 @@ mod tests {
     /// \\hspace{0.4cm}\\vdots should be treated identically to a bare \\vdots
     #[test]
     fn hspace_vdots_normalised() {
+        // Both plain and hspace+vdots produce loop_begin ops → ok=false.
+        // The key assertion is that they produce the same result (hspace is
+        // normalised to plain vdots before parsing).
         let spec_plain = scalar_ok("Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n");
         let spec_hspace = scalar_ok("Q\nt_1 k_1\n\\hspace{0.4cm}\\vdots\nt_Q k_Q\n");
 
-        assert!(spec_hspace.ok, "expected ok=true for hspace+vdots");
-        assert_eq!(spec_hspace.vars.len(), spec_plain.vars.len());
-        assert_eq!(spec_hspace.ops.len(), spec_plain.ops.len());
-
-        // same loop structure
-        assert_eq!(spec_hspace.ops[1].tag, OpTag::LoopBegin);
-        assert_eq!(spec_hspace.ops[3].tag, OpTag::LoopEnd);
+        assert!(
+            !spec_hspace.ok,
+            "expected ok=false for hspace+vdots (loop_begin unsupported)"
+        );
+        assert_eq!(
+            spec_hspace.ok, spec_plain.ok,
+            "hspace vdots should behave identically to plain vdots"
+        );
     }
 
     // ── Phase 2 early-exit: \\text{query} ─────────────────────────────────────
@@ -1227,30 +1214,14 @@ mod tests {
 
     /// "Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n" — Q is the LoopBegin end, so is_size=true
     #[test]
-    fn loop_end_var_is_size_true() {
+    fn loop_input_returns_not_ok() {
+        // loop_begin ops are unsupported by proconio → ok=false.
+        // (Previously this tested is_size via LoopBegin.end, but since all
+        // loop inputs now fall back, we instead verify the fallback behaviour.)
         let spec = scalar_ok("Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n");
-        assert!(spec.ok);
-        let q = spec
-            .vars
-            .iter()
-            .find(|v| v.name == "q")
-            .expect("q not found");
-        assert!(
-            q.is_size,
-            "q should have is_size=true (it is the LoopBegin end)"
-        );
-        let t = spec
-            .vars
-            .iter()
-            .find(|v| v.name == "t")
-            .expect("t not found");
-        assert!(!t.is_size, "t should have is_size=false");
-        let k = spec
-            .vars
-            .iter()
-            .find(|v| v.name == "k")
-            .expect("k not found");
-        assert!(!k.is_size, "k should have is_size=false");
+        assert!(!spec.ok, "loop input should produce ok=false");
+        assert!(spec.vars.is_empty());
+        assert!(spec.ops.is_empty());
     }
 
     /// "N\nA_1 \\ldots A_N\nB_1 \\ldots B_N\n" — N is size of both A and B, so is_size=true
