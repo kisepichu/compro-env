@@ -100,7 +100,7 @@ problem_id は次の優先順位で決定する:
    - session が `None` のままでも呼ぶ (過去コンテストは公開アクセス可)
    - AtCoder 実装側でログインが必要と判断した場合は `Error: not logged in. Run \`ce login\` first.` を返す
 7. `ContestRepository::create(&contest)` を呼ぶ:
-   - `.ce.toml` を生成する (online_judge, contest_id, problems, input_format_raw)
+   - `.ce.toml` を生成する (online_judge, contest_id, problems, input_format_raw, constraints_raw)
    - `solutions/{contest_id}/testcases/{problem_code}/` にサンプルを保存:
      ```
      1.in, 1.out, 2.in, 2.out, ...

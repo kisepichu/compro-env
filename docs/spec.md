@@ -48,12 +48,13 @@ id = "abc334_c"
 code = "c"
 title = "Socks 2"
 input_format_raw = "N K\nA_1 A_2 \\dots A_K\n"
+constraints_raw = "1 \\leq N \\leq 10^5"
 ```
 
 `ce test` / `ce sub` 時に OJ を特定するために必須。プレフィックス判定だけでは `xyz999` 等に対応不可。
 `problems` は `ce solution add` 等で問題コード一覧を参照するために保存する。
 `ce init` 時に生成し、以降は上書きしない。samples は testcases/ にファイルとして保存するため `.ce.toml` には含まない。
-`input_format_raw` は `SolutionRepository::create` 時に都度パースして Tera コンテキストに注入する (パース結果は保存しない)。取得できなかった場合は空文字 `""` を保存する。
+`input_format_raw` / `constraints_raw` は `SolutionRepository::create` 時に都度パースして Tera コンテキストに注入する (パース結果は保存しない)。取得できなかった場合は空文字 `""` を保存する。既存 `.ce.toml` との後方互換のため `#[serde(default)]` を付与。
 
 ---
 

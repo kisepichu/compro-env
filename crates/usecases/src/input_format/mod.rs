@@ -242,14 +242,21 @@ fn try_parse_array1d(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
     let mut last_subscript: Option<String> = None;
     let mut has_alpha_subscript = false;
     let mut has_numeric_subscript = false;
+    // Track whether the previous element was a subscripted var (requires separator before next var).
+    let mut need_separator = false;
 
     let mut i = 0;
     while i < tokens.len() {
         match &tokens[i] {
             Token::Space | Token::Cdots => {
+                need_separator = false;
                 i += 1;
             }
             Token::Ident(name) => {
+                if need_separator {
+                    // Adjacent subscripted vars with no Space/Cdots between them — unsupported.
+                    return Some(Err(ParseError::Unknown));
+                }
                 // expect Subscript next
                 if i + 1 < tokens.len() && tokens[i + 1] == Token::Subscript {
                     // subscript: could be Num, Ident, or LBrace...RBrace
@@ -271,6 +278,7 @@ fn try_parse_array1d(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
                         has_numeric_subscript = true;
                     }
                     last_subscript = Some(sub);
+                    need_separator = true;
                 } else {
                     // Ident without subscript in an array context — not a 1D array
                     return None;
@@ -886,7 +894,7 @@ fn preprocess(raw: &str) -> String {
         if let Some(close) = after.find('}') {
             let after_close = &after[close + 1..];
             // Check if followed by \vdots
-            let trimmed = after_close.trim_start();
+            let trimmed = after_close.trim_start_matches(|c: char| c == ' ' || c == '\t');
             if trimmed.starts_with("\\vdots") {
                 result.push_str("\\vdots");
                 rest = trimmed.strip_prefix("\\vdots").unwrap_or("");
