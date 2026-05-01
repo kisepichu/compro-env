@@ -895,10 +895,21 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
         return not_ok(raw);
     }
 
-    // proconio does not support loops; any loop_begin op means the input
-    // cannot be read with a flat input! block, so fall back to manual.
-    let has_loop = ops.iter().any(|o| o.tag == OpTag::LoopBegin);
-    if has_loop {
+    // Try to flatten single-variable loops to array reads.
+    // Multi-var loops (or loops that can't be flattened) are kept in ops; the template handles them.
+    ops = flatten_single_var_loops(ops, &mut var_decls);
+
+    // Any remaining LoopBegin ops will be emitted directly by the template, so validate
+    // their bounds before reporting ok=true.
+    let valid_loop_bounds = ops.iter().filter(|o| o.tag == OpTag::LoopBegin).all(|o| {
+        let end = match o.end.as_deref().map(str::trim) {
+            Some(end) if !end.is_empty() => end,
+            _ => return false,
+        };
+        end.chars().all(|c| c.is_ascii_digit())
+            || var_decls.iter().any(|v| v.name == end && v.dim == 0)
+    });
+    if !valid_loop_bounds {
         return not_ok(raw);
     }
 
@@ -940,6 +951,71 @@ fn preprocess(raw: &str) -> String {
         }
     }
     result.push_str(rest);
+    result
+}
+
+/// Attempt to flatten single-variable loops into array reads.
+/// A single-var loop looks like: LoopBegin, ReadLine(1 var with index), LoopEnd.
+/// Each loop is flattened independently; multi-var loops or those with invalid bounds
+/// are left in place so the template can emit loop code for them.
+fn flatten_single_var_loops(ops: Vec<InputOp>, var_decls: &mut [VarDecl]) -> Vec<InputOp> {
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < ops.len() {
+        // Attempt to flatten: LoopBegin, ReadLine(1 var with index), LoopEnd
+        let can_flatten = ops[i].tag == OpTag::LoopBegin
+            && i + 2 < ops.len()
+            && ops[i + 1].tag == OpTag::ReadLine
+            && ops[i + 1].vars.len() == 1
+            && ops[i + 1].vars[0].index.is_some()
+            && ops[i + 2].tag == OpTag::LoopEnd;
+
+        if can_flatten {
+            let loop_end = ops[i].end.as_deref().unwrap_or("").trim().to_string();
+            let v = &ops[i + 1].vars[0];
+
+            // Validate loop_end: must be a numeric literal or a declared scalar.
+            let loop_end_valid = !loop_end.is_empty()
+                && (loop_end.chars().all(|c| c.is_ascii_digit())
+                    || var_decls.iter().any(|d| d.name == loop_end && d.dim == 0));
+
+            // Validate that the VarDecl is compatible (dim=1, consistent size).
+            let decl_compatible = var_decls.iter().any(|d| {
+                d.name == v.name
+                    && d.dim == 1
+                    && (d.size.is_empty() || d.size == vec![loop_end.clone()])
+            });
+
+            if loop_end_valid && decl_compatible {
+                // Mutate the VarDecl size if not yet set.
+                if let Some(decl) = var_decls
+                    .iter_mut()
+                    .find(|d| d.name == v.name && d.size.is_empty())
+                {
+                    decl.size = vec![loop_end.clone()];
+                }
+                result.push(InputOp {
+                    tag: OpTag::ReadLine,
+                    depth: ops[i].depth,
+                    vars: vec![VarRef {
+                        name: v.name.clone(),
+                        dim: 1,
+                        size: Some(loop_end),
+                        index: None,
+                    }],
+                    loop_var: None,
+                    begin: None,
+                    end: None,
+                });
+                i += 3;
+                continue;
+            }
+        }
+
+        // Not flattenable — push as-is; ReadLine/LoopEnd will be pushed in subsequent iterations.
+        result.push(ops[i].clone());
+        i += 1;
+    }
     result
 }
 
@@ -1062,14 +1138,13 @@ mod tests {
     /// "Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n"
     #[test]
     fn multi_var_loop_vdots() {
-        // proconio does not support loops, so loop_begin ops → ok=false fallback
+        // Phase 2: multi-var loops produce ok=true; LoopBegin/LoopEnd ops are kept for template codegen
         let spec = scalar_ok("Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n");
         assert!(
-            !spec.ok,
-            "expected ok=false for multi-var vdots loop (loop_begin unsupported)"
+            spec.ok,
+            "expected ok=true for multi-var vdots loop (Phase 2: template handles loop codegen)"
         );
-        assert!(spec.vars.is_empty());
-        assert!(spec.ops.is_empty());
+        assert!(spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin));
     }
 
     // ── \\hspace{} vdots normalisation ────────────────────────────────────────
@@ -1077,15 +1152,15 @@ mod tests {
     /// \\hspace{0.4cm}\\vdots should be treated identically to a bare \\vdots
     #[test]
     fn hspace_vdots_normalised() {
-        // Both plain and hspace+vdots produce loop_begin ops → ok=false.
+        // Phase 2: both plain and hspace+vdots produce ok=true with LoopBegin ops.
         // The key assertion is that they produce the same result (hspace is
         // normalised to plain vdots before parsing).
         let spec_plain = scalar_ok("Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n");
         let spec_hspace = scalar_ok("Q\nt_1 k_1\n\\hspace{0.4cm}\\vdots\nt_Q k_Q\n");
 
         assert!(
-            !spec_hspace.ok,
-            "expected ok=false for hspace+vdots (loop_begin unsupported)"
+            spec_hspace.ok,
+            "expected ok=true for hspace+vdots (Phase 2: template handles loop codegen)"
         );
         assert_eq!(
             spec_hspace.ok, spec_plain.ok,
@@ -1214,14 +1289,18 @@ mod tests {
 
     /// "Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n" — Q is the LoopBegin end, so is_size=true
     #[test]
-    fn loop_input_returns_not_ok() {
-        // loop_begin ops are unsupported by proconio → ok=false.
-        // (Previously this tested is_size via LoopBegin.end, but since all
-        // loop inputs now fall back, we instead verify the fallback behaviour.)
+    fn multi_var_loop_returns_ok_true_with_loop_ops() {
+        // Phase 2: multi-var loops produce ok=true; LoopBegin ops are kept for template codegen.
+        // Q is is_size=true because it is the loop bound.
         let spec = scalar_ok("Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n");
-        assert!(!spec.ok, "loop input should produce ok=false");
-        assert!(spec.vars.is_empty());
-        assert!(spec.ops.is_empty());
+        assert!(spec.ok, "multi-var loop should produce ok=true in Phase 2");
+        assert!(spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin));
+        let q = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "q")
+            .expect("var q not found");
+        assert!(q.is_size, "q should be is_size=true (loop bound)");
     }
 
     /// "N\nA_1 \\ldots A_N\nB_1 \\ldots B_N\n" — N is size of both A and B, so is_size=true
@@ -1254,6 +1333,128 @@ mod tests {
 
     // ── case-collision: N and n on same line ──────────────────────────────────
 
+    // ── TASK-013: single-variable vdots loop flattening ───────────────────────
+
+    /// "N L\nS_1\n\\vdots\nS_N\n" — single-var vdots loop should flatten to Vec<String>
+    /// Expected: ok=true, vars=[n(is_size=true), l, s(dim=1,size="n")],
+    /// ops=[ReadLine([n,l]), ReadLine([s:dim=1,size="n"])]
+    #[test]
+    fn single_var_loop_flattened_to_array() {
+        let spec = scalar_ok("N L\nS_1\n\\vdots\nS_N\n");
+        assert!(
+            spec.ok,
+            "expected ok=true: single-var vdots loop should flatten to array"
+        );
+
+        assert_eq!(spec.vars.len(), 3, "expected vars: n, l, s");
+
+        let n = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "n")
+            .expect("var n not found");
+        assert_eq!(n.dim, 0);
+        assert!(n.is_size, "n should be is_size=true (loop bound)");
+
+        let l = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "l")
+            .expect("var l not found");
+        assert_eq!(l.dim, 0);
+        assert!(!l.is_size, "l should be is_size=false");
+
+        let s = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "s")
+            .expect("var s not found");
+        assert_eq!(s.dim, 1, "s should be dim=1 (array)");
+        assert_eq!(s.size, vec!["n".to_string()], "s size should be n");
+
+        assert_eq!(spec.ops.len(), 2, "expected 2 ops");
+        assert_eq!(spec.ops[0].tag, OpTag::ReadLine);
+        assert_eq!(spec.ops[0].vars.len(), 2);
+        assert_eq!(spec.ops[0].vars[0].name, "n");
+        assert_eq!(spec.ops[0].vars[1].name, "l");
+
+        assert_eq!(spec.ops[1].tag, OpTag::ReadLine);
+        assert_eq!(spec.ops[1].vars.len(), 1);
+        let sv = &spec.ops[1].vars[0];
+        assert_eq!(sv.name, "s");
+        assert_eq!(sv.dim, 1);
+        assert_eq!(sv.size, Some("n".to_string()));
+    }
+
+    /// Multi-var vdots loop (2 vars per row) cannot be flattened but is kept for template codegen
+    #[test]
+    fn multi_var_loop_kept_for_template_codegen() {
+        // Phase 2: multi-var loops produce ok=true with LoopBegin ops retained so the
+        // template can emit Vec::new() + for-loop + push() code.
+        let spec = scalar_ok("S\nQ\nt_1 k_1\n\\hspace{0.4cm}\\vdots\nt_Q k_Q\n");
+        assert!(
+            spec.ok,
+            "expected ok=true: multi-var loops are handled by template loop codegen"
+        );
+        assert!(
+            spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin),
+            "expected LoopBegin op"
+        );
+    }
+
+    /// "H W\nS_1\n:\nS_H\n" — standalone `:` normalizes to vdots, then single-var loop flattens
+    /// Expected: ok=true, vars=[h(is_size=true), w, s(dim=1,size="h")],
+    /// ops=[ReadLine([h,w]), ReadLine([s:dim=1,size="h"])]
+    #[test]
+    fn colon_vdots_single_var_flattened() {
+        let spec = scalar_ok("H W\nS_1\n:\nS_H\n");
+        assert!(
+            spec.ok,
+            "expected ok=true: colon normalizes to vdots and single-var loop flattens"
+        );
+
+        assert_eq!(spec.vars.len(), 3, "expected vars: h, w, s");
+
+        let h = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "h")
+            .expect("var h not found");
+        assert_eq!(h.dim, 0);
+        assert!(h.is_size, "h should be is_size=true (loop bound)");
+
+        let w = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "w")
+            .expect("var w not found");
+        assert_eq!(w.dim, 0);
+        assert!(!w.is_size, "w should be is_size=false");
+
+        let s = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "s")
+            .expect("var s not found");
+        assert_eq!(s.dim, 1, "s should be dim=1 (array)");
+        assert_eq!(s.size, vec!["h".to_string()], "s size should be h");
+
+        assert_eq!(spec.ops.len(), 2, "expected 2 ops");
+        assert_eq!(spec.ops[0].tag, OpTag::ReadLine);
+        assert_eq!(spec.ops[0].vars.len(), 2);
+        assert_eq!(spec.ops[0].vars[0].name, "h");
+        assert_eq!(spec.ops[0].vars[1].name, "w");
+
+        assert_eq!(spec.ops[1].tag, OpTag::ReadLine);
+        assert_eq!(spec.ops[1].vars.len(), 1);
+        let sv = &spec.ops[1].vars[0];
+        assert_eq!(sv.name, "s");
+        assert_eq!(sv.dim, 1);
+        assert_eq!(sv.size, Some("h".to_string()));
+    }
+
+    // ── case-collision: N and n on same line ──────────────────────────────────
+
     /// When both uppercase and lowercase of the same letter appear,
     /// the names must not collapse to the same identifier.
     #[test]
@@ -1282,5 +1483,47 @@ mod tests {
         // when collision occurs, uppercase name is preserved as-is ("N")
         assert_eq!(n_upper.name, "N");
         assert_eq!(n_lower.name, "n");
+    }
+
+    /// Phase 2: multi-var vdots loop should return ok=true and keep LoopBegin/LoopEnd ops
+    #[test]
+    fn multi_var_loop_produces_ok_true_with_loop_ops() {
+        let spec = scalar_ok("Q\nt_1 k_1\n\\vdots\nt_Q k_Q\n");
+        assert!(
+            spec.ok,
+            "expected ok=true: multi-var vdots loop should be handled in Phase 2"
+        );
+        assert_eq!(spec.vars.len(), 3, "expected vars: q, t, k");
+
+        let q = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "q")
+            .expect("var q not found");
+        assert_eq!(q.dim, 0);
+        assert!(q.is_size, "q should be is_size=true (loop bound)");
+
+        let t = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "t")
+            .expect("var t not found");
+        assert_eq!(t.dim, 1, "t should be dim=1 (array)");
+
+        let k = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "k")
+            .expect("var k not found");
+        assert_eq!(k.dim, 1, "k should be dim=1 (array)");
+
+        assert!(
+            spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin),
+            "expected a LoopBegin op in ops"
+        );
+        assert!(
+            spec.ops.iter().any(|o| o.tag == OpTag::LoopEnd),
+            "expected a LoopEnd op in ops"
+        );
     }
 }
