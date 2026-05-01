@@ -447,12 +447,12 @@ fn read_2d_subscript_row_part(tokens: &[Token]) -> Option<(String, usize, bool)>
         [first, _, ..] => (first.clone(), true),
         // Single token
         [single] => {
-            // A single multi-char token is "2D" only when it mixes letters and digits
+            // A single multi-char token is "2D" only when it contains at least one letter
             // (e.g. {H1}, {1W}, {HW}, {iW}).  Purely-numeric tokens like {10} or {12}
             // are just multi-digit 1D indices and must NOT be treated as 2D.
             let has_letter = single.chars().any(|c| c.is_ascii_alphabetic());
             if has_comma || (single.len() >= 2 && has_letter) {
-                // Comma-separated ({H,W}) or mixed alpha-digit token ({H1}, {HW}, {iW})
+                // Comma-separated ({H,W}) or token with a letter ({H1}, {HW}, {iW})
                 // Row = first character of the token
                 let row = single.chars().next()?.to_string();
                 (row, true)
