@@ -8,7 +8,7 @@
 
 ### usecases/ (パーサー)
 
-- [x] `RawLine::GridRow(Vec<RawVar>)` バリアントを追加
+- [x] `RawLine::GridRow(RawVar)` バリアントを追加
 - [x] `try_parse_grid_row()` 実装: `X_{2D} Cdots X_{2D}` パターン検出、行インデックス抽出
   - 両側の変数名が一致すること
   - 少なくとも一方の添字が「複数部分」(複数トークン or カンマ区切り or 2文字以上の単一トークン)
@@ -24,9 +24,9 @@
 
 ## 完了条件
 
-- [ ] `cargo test --workspace` が全て pass
-- [ ] `cargo fmt --all` / `cargo clippy --workspace` がクリーン
-- [ ] `ce init abc151` で `s: Vec<String>` と `s: [String; h]` が生成される
+- [x] `cargo test --workspace` が全て pass
+- [x] `cargo fmt --all` / `cargo clippy --workspace` がクリーン
+- [x] `ce init abc151` で `s: Vec<String>` と `s: [String; h]` が生成される
 
 ## 作業ログ
 

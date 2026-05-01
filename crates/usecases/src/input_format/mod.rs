@@ -412,10 +412,12 @@ fn read_2d_subscript_row_part(tokens: &[Token]) -> Option<(String, usize, bool)>
     let mut i = 1;
     let mut parts: Vec<String> = Vec::new();
     let mut has_comma = false;
+    let mut found_rbrace = false;
     while i < tokens.len() {
         match &tokens[i] {
             Token::RBrace => {
                 i += 1;
+                found_rbrace = true;
                 break;
             }
             Token::Num(n) => {
@@ -434,6 +436,9 @@ fn read_2d_subscript_row_part(tokens: &[Token]) -> Option<(String, usize, bool)>
                 i += 1;
             }
         }
+    }
+    if !found_rbrace {
+        return None;
     }
 
     let (row_part, is_2d) = match parts.as_slice() {
@@ -626,6 +631,14 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
             // Determine if the loop body is a grid row (→ ReadGridRow) or multi-var (→ ReadLoopRow)
             let is_grid = matches!(raw_lines[block_start], RawLine::GridRow(_));
 
+            // Verify all lines in the block are the same kind (mixing GridRow/LoopRow is unsupported)
+            for idx in (block_start..vdots_idx).chain(vdots_idx + 1..after_end) {
+                let line_is_grid = matches!(raw_lines[idx], RawLine::GridRow(_));
+                if line_is_grid != is_grid {
+                    return Err(ParseError::Unknown);
+                }
+            }
+
             // Get the representative vars from the first "before" row
             let first_before: Vec<String> = match &raw_lines[block_start] {
                 RawLine::LoopRow(vars) => vars.iter().map(|v| v.math.clone()).collect(),
@@ -747,7 +760,10 @@ fn infer_types(vars: &mut [VarDecl], constraints: &str) {
 
     if all_int {
         for v in vars.iter_mut() {
-            v.var_type = VarType::Int;
+            // Only promote Unknown → Int; do not overwrite an explicitly assigned type (e.g. Str).
+            if v.var_type == VarType::Unknown {
+                v.var_type = VarType::Int;
+            }
         }
         return;
     }
