@@ -965,18 +965,35 @@ fn flatten_single_var_loops(
                 {
                     let loop_end = ops[i].end.clone().ok_or_else(|| original.clone())?;
                     let v = &ops[i + 1].vars[0];
+
+                    // Validate loop_end: must be a numeric literal or a declared scalar.
+                    // If it's neither, the generated code would reference an undefined variable.
+                    let loop_end_valid = loop_end.chars().all(|c| c.is_ascii_digit())
+                        || var_decls.iter().any(|d| d.name == loop_end && d.dim == 0);
+                    if !loop_end_valid {
+                        return Err(original);
+                    }
+
                     let flattened_var = VarRef {
                         name: v.name.clone(),
                         dim: 1,
                         size: Some(loop_end.clone()),
                         index: None,
                     };
-                    // Update the VarDecl for this var to dim=1 with size
-                    if let Some(decl) = var_decls.iter_mut().find(|d| d.name == v.name) {
-                        decl.dim = 1;
-                        if decl.size.is_empty() {
-                            decl.size = vec![loop_end];
-                        }
+
+                    // Update the corresponding VarDecl; treat missing or incompatible decl as error
+                    // to avoid producing internally inconsistent InputSpec.
+                    let decl = var_decls
+                        .iter_mut()
+                        .find(|d| d.name == v.name)
+                        .ok_or_else(|| original.clone())?;
+                    if decl.dim != 1 {
+                        return Err(original.clone());
+                    }
+                    if decl.size.is_empty() {
+                        decl.size = vec![loop_end.clone()];
+                    } else if decl.size != vec![loop_end.clone()] {
+                        return Err(original.clone());
                     }
                     result.push(InputOp {
                         tag: OpTag::ReadLine,
