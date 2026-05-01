@@ -41,7 +41,7 @@
 
 ## 完了条件
 
-- [x] `cargo test --workspace` が全て pass (136 tests)
+- [x] `cargo test --workspace` が全て pass
 - [x] `cargo fmt --all` / `cargo clippy --workspace` がクリーン
 - [x] abc246-f 相当で `ok=true`、`s: Vec<String>` 生成
 - [x] abc242-d 相当の2変数ループで `ok=true`、ループコード生成

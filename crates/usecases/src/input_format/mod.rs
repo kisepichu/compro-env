@@ -1561,7 +1561,7 @@ mod tests {
         );
     }
 
-    // ── TASK-014: \dots as vertical separator + type inference fixes ───────────
+    // ── \dots vertical separator + subscripted type inference ────────────────
 
     /// "N L\nS_1\nS_2\n\dots\nS_N\n" — \dots on its own line treated as vdots,
     /// single-var loop flattens to a ReadLine(dim=1) op (abc246-f style)
