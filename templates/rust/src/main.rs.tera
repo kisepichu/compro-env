@@ -92,13 +92,12 @@ mod tests {
     fn test_samples() {
         for (i, &(input, expected)) in CASES.iter().enumerate() {
             {% if input_format.ok -%}
-            use proconio::input;
             let result = {
                 {% if input_format.ops | filter(attribute="tag", value="loop_begin") | length > 0 -%}
                 // TODO: loop input — test harness with loops is not auto-generated; write manually
-                let _ = input;
                 panic!("TODO: loop input sample test harness is not implemented")
                 {% else -%}
+                use proconio::input;
                 input! {
                     from proconio::source::once::OnceSource::from(input),
                     {% for op in input_format.ops -%}

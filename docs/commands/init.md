@@ -268,7 +268,7 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
 ]
 ```
 
-ループあり (abc334-F 相当) — **注意: `loop_begin` を含む場合 `ok=false` になるため `vars`/`ops` は空になる。下記は parse 内部の中間表現の例であり、Tera コンテキストには渡されない。**
+ループあり (abc334-F 相当) — Phase 2 以降は多変数ループも `ok: true` で返し、`loop_begin`/`loop_end` を含む ops がそのまま Tera コンテキストに渡される。テンプレートがループコードを生成する。
 
 ```json
 [
