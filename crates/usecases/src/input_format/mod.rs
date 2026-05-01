@@ -895,6 +895,12 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
         return not_ok(raw);
     }
 
+    // Try to flatten single-variable loops to array reads
+    match flatten_single_var_loops(ops, &mut var_decls) {
+        Ok(flattened) => ops = flattened,
+        Err(_) => return not_ok(raw),
+    }
+
     // proconio does not support loops; any loop_begin op means the input
     // cannot be read with a flat input! block, so fall back to manual.
     let has_loop = ops.iter().any(|o| o.tag == OpTag::LoopBegin);
@@ -941,6 +947,63 @@ fn preprocess(raw: &str) -> String {
     }
     result.push_str(rest);
     result
+}
+
+/// Attempt to flatten single-variable loops into array reads.
+/// A single-var loop looks like: LoopBegin, ReadLine(1 var with index), LoopEnd.
+/// Multi-var loops (ReadLine with 2+ vars) cannot be flattened → return Err(()).
+fn flatten_single_var_loops(
+    ops: Vec<InputOp>,
+    var_decls: &mut [VarDecl],
+) -> Result<Vec<InputOp>, ()> {
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < ops.len() {
+        match ops[i].tag {
+            OpTag::LoopBegin => {
+                // Expect: ops[i] = LoopBegin, ops[i+1] = ReadLine(1 var with index), ops[i+2] = LoopEnd
+                if i + 2 < ops.len()
+                    && ops[i + 1].tag == OpTag::ReadLine
+                    && ops[i + 1].vars.len() == 1
+                    && ops[i + 1].vars[0].index.is_some()
+                    && ops[i + 2].tag == OpTag::LoopEnd
+                {
+                    let loop_end = ops[i].end.clone().ok_or(())?;
+                    let v = &ops[i + 1].vars[0];
+                    let flattened_var = VarRef {
+                        name: v.name.clone(),
+                        dim: 1,
+                        size: Some(loop_end.clone()),
+                        index: None,
+                    };
+                    // Update the VarDecl for this var to dim=1 with size
+                    if let Some(decl) = var_decls.iter_mut().find(|d| d.name == v.name) {
+                        decl.dim = 1;
+                        if decl.size.is_empty() {
+                            decl.size = vec![loop_end];
+                        }
+                    }
+                    result.push(InputOp {
+                        tag: OpTag::ReadLine,
+                        depth: ops[i].depth,
+                        vars: vec![flattened_var],
+                        loop_var: None,
+                        begin: None,
+                        end: None,
+                    });
+                    i += 3;
+                } else {
+                    // Can't flatten (multi-var, nested, etc.)
+                    return Err(());
+                }
+            }
+            _ => {
+                result.push(ops[i].clone());
+                i += 1;
+            }
+        }
+    }
+    Ok(result)
 }
 
 fn not_ok(raw: &str) -> InputSpec {
@@ -1250,6 +1313,124 @@ mod tests {
             .find(|v| v.name == "b")
             .expect("b not found");
         assert!(!b.is_size, "b should have is_size=false");
+    }
+
+    // ── case-collision: N and n on same line ──────────────────────────────────
+
+    // ── TASK-013: single-variable vdots loop flattening ───────────────────────
+
+    /// "N L\nS_1\n\\vdots\nS_N\n" — single-var vdots loop should flatten to Vec<String>
+    /// Expected: ok=true, vars=[n(is_size=true), l, s(dim=1,size="n")],
+    /// ops=[ReadLine([n,l]), ReadLine([s:dim=1,size="n"])]
+    #[test]
+    fn single_var_loop_flattened_to_array() {
+        let spec = scalar_ok("N L\nS_1\n\\vdots\nS_N\n");
+        assert!(
+            spec.ok,
+            "expected ok=true: single-var vdots loop should flatten to array"
+        );
+
+        assert_eq!(spec.vars.len(), 3, "expected vars: n, l, s");
+
+        let n = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "n")
+            .expect("var n not found");
+        assert_eq!(n.dim, 0);
+        assert!(n.is_size, "n should be is_size=true (loop bound)");
+
+        let l = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "l")
+            .expect("var l not found");
+        assert_eq!(l.dim, 0);
+        assert!(!l.is_size, "l should be is_size=false");
+
+        let s = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "s")
+            .expect("var s not found");
+        assert_eq!(s.dim, 1, "s should be dim=1 (array)");
+        assert_eq!(s.size, vec!["n".to_string()], "s size should be n");
+
+        assert_eq!(spec.ops.len(), 2, "expected 2 ops");
+        assert_eq!(spec.ops[0].tag, OpTag::ReadLine);
+        assert_eq!(spec.ops[0].vars.len(), 2);
+        assert_eq!(spec.ops[0].vars[0].name, "n");
+        assert_eq!(spec.ops[0].vars[1].name, "l");
+
+        assert_eq!(spec.ops[1].tag, OpTag::ReadLine);
+        assert_eq!(spec.ops[1].vars.len(), 1);
+        let sv = &spec.ops[1].vars[0];
+        assert_eq!(sv.name, "s");
+        assert_eq!(sv.dim, 1);
+        assert_eq!(sv.size, Some("n".to_string()));
+    }
+
+    /// Multi-var vdots loop (2 vars per row) cannot be flattened — must stay ok=false
+    #[test]
+    fn multi_var_loop_not_flattened_stays_not_ok() {
+        let spec = scalar_ok("S\nQ\nt_1 k_1\n\\hspace{0.4cm}\\vdots\nt_Q k_Q\n");
+        assert!(
+            !spec.ok,
+            "expected ok=false: multi-var vdots loop cannot be flattened"
+        );
+        assert!(spec.vars.is_empty());
+        assert!(spec.ops.is_empty());
+    }
+
+    /// "H W\nS_1\n:\nS_H\n" — standalone `:` normalizes to vdots, then single-var loop flattens
+    /// Expected: ok=true, vars=[h(is_size=true), w, s(dim=1,size="h")],
+    /// ops=[ReadLine([h,w]), ReadLine([s:dim=1,size="h"])]
+    #[test]
+    fn colon_vdots_single_var_flattened() {
+        let spec = scalar_ok("H W\nS_1\n:\nS_H\n");
+        assert!(
+            spec.ok,
+            "expected ok=true: colon normalizes to vdots and single-var loop flattens"
+        );
+
+        assert_eq!(spec.vars.len(), 3, "expected vars: h, w, s");
+
+        let h = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "h")
+            .expect("var h not found");
+        assert_eq!(h.dim, 0);
+        assert!(h.is_size, "h should be is_size=true (loop bound)");
+
+        let w = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "w")
+            .expect("var w not found");
+        assert_eq!(w.dim, 0);
+        assert!(!w.is_size, "w should be is_size=false");
+
+        let s = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "s")
+            .expect("var s not found");
+        assert_eq!(s.dim, 1, "s should be dim=1 (array)");
+        assert_eq!(s.size, vec!["h".to_string()], "s size should be h");
+
+        assert_eq!(spec.ops.len(), 2, "expected 2 ops");
+        assert_eq!(spec.ops[0].tag, OpTag::ReadLine);
+        assert_eq!(spec.ops[0].vars.len(), 2);
+        assert_eq!(spec.ops[0].vars[0].name, "h");
+        assert_eq!(spec.ops[0].vars[1].name, "w");
+
+        assert_eq!(spec.ops[1].tag, OpTag::ReadLine);
+        assert_eq!(spec.ops[1].vars.len(), 1);
+        let sv = &spec.ops[1].vars[0];
+        assert_eq!(sv.name, "s");
+        assert_eq!(sv.dim, 1);
+        assert_eq!(sv.size, Some("h".to_string()));
     }
 
     // ── case-collision: N and n on same line ──────────────────────────────────

@@ -308,8 +308,12 @@ VarRef フィールド:
 | 1D 配列 (水平 cdots) | `A_1 A_2 \ldots A_N` | abc334-C, abc360-C |
 | 複数配列 (水平) | `A_1 \ldots A_N` + `W_1 \ldots W_N` | abc360-C |
 | 単独文字列 | `S` (型推定で `str`) | abc360-A |
+| 1D 配列 (垂直 vdots, 単一変数) | `S_1` / `\vdots` / `S_N` | abc246-F |
+| `:` 区切り (垂直 vdots 等価) | `S_1` / `:` / `S_H` | ukuku09-C |
 
-**注意**: `\vdots` 系のパターン (垂直 1D 配列・複数変数ループ) は parse 内部でループ構造 (`loop_begin`) を生成するが、proconio が `input!` マクロでループをサポートしないため、これらは現在 `ok=false` にフォールバックする。`\hspace{0.4cm}\vdots` は前処理で `\vdots` に正規化されるが結果は同じ。
+**前処理**: `\hspace{0.4cm}\vdots` は `\vdots` に正規化する。また `:` のみの行も `\vdots` と等価に扱う (トークナイザーレベルで正規化)。
+
+**単一変数ループのフラット化**: `\vdots` または `:` で囲まれたブロックが「1行1変数」の繰り返しのみで構成される場合、`[T; N]` の一括読み込みに変換して `ok=true` にする (`flatten_single_var_loops`)。複数変数を1行で読む繰り返しはフラット化できず `ok=false` のまま。
 
 #### Phase 1 非対応 → `ok: false` にフォールバック
 
@@ -317,7 +321,6 @@ VarRef フィールド:
 
 | 非対応パターン | 例 | 確認問題 |
 | --- | --- | --- |
-| 垂直 vdots 1D 配列 | `A_1` / `\vdots` / `A_N` | — |
 | 複数変数ループ (`\vdots`) | `t_1 k_1` / `\vdots` / `t_Q k_Q` | abc242-D |
 | クエリ型 (複数 pre ブロック + `\text{query}`) | `Q\nquery_1\n\vdots` | abc241-D, typical90-L |
 | クエリ型 (`\mathrm{Query}`) | `\mathrm{Query}_1` | abc248-D |
