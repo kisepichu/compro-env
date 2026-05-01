@@ -896,11 +896,22 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     }
 
     // Try to flatten single-variable loops to array reads.
-    // Multi-var loops are kept in ops; the template handles them.
-    ops = match flatten_single_var_loops(ops, &mut var_decls) {
-        Ok(flattened) => flattened,
-        Err(original) => original, // keep loop ops; template will generate loop code
-    };
+    // Multi-var loops (or loops that can't be flattened) are kept in ops; the template handles them.
+    ops = flatten_single_var_loops(ops, &mut var_decls);
+
+    // Any remaining LoopBegin ops will be emitted directly by the template, so validate
+    // their bounds before reporting ok=true.
+    let valid_loop_bounds = ops.iter().filter(|o| o.tag == OpTag::LoopBegin).all(|o| {
+        let end = match o.end.as_deref().map(str::trim) {
+            Some(end) if !end.is_empty() => end,
+            _ => return false,
+        };
+        end.chars().all(|c| c.is_ascii_digit())
+            || var_decls.iter().any(|v| v.name == end && v.dim == 0)
+    });
+    if !valid_loop_bounds {
+        return not_ok(raw);
+    }
 
     InputSpec {
         raw: raw.to_string(),
@@ -945,77 +956,67 @@ fn preprocess(raw: &str) -> String {
 
 /// Attempt to flatten single-variable loops into array reads.
 /// A single-var loop looks like: LoopBegin, ReadLine(1 var with index), LoopEnd.
-/// Multi-var loops (ReadLine with 2+ vars) cannot be flattened → return Err(original_ops).
-fn flatten_single_var_loops(
-    ops: Vec<InputOp>,
-    var_decls: &mut [VarDecl],
-) -> Result<Vec<InputOp>, Vec<InputOp>> {
-    let original = ops.clone();
+/// Each loop is flattened independently; multi-var loops or those with invalid bounds
+/// are left in place so the template can emit loop code for them.
+fn flatten_single_var_loops(ops: Vec<InputOp>, var_decls: &mut [VarDecl]) -> Vec<InputOp> {
     let mut result = Vec::new();
     let mut i = 0;
     while i < ops.len() {
-        match ops[i].tag {
-            OpTag::LoopBegin => {
-                // Expect: ops[i] = LoopBegin, ops[i+1] = ReadLine(1 var with index), ops[i+2] = LoopEnd
-                if i + 2 < ops.len()
-                    && ops[i + 1].tag == OpTag::ReadLine
-                    && ops[i + 1].vars.len() == 1
-                    && ops[i + 1].vars[0].index.is_some()
-                    && ops[i + 2].tag == OpTag::LoopEnd
+        // Attempt to flatten: LoopBegin, ReadLine(1 var with index), LoopEnd
+        let can_flatten = ops[i].tag == OpTag::LoopBegin
+            && i + 2 < ops.len()
+            && ops[i + 1].tag == OpTag::ReadLine
+            && ops[i + 1].vars.len() == 1
+            && ops[i + 1].vars[0].index.is_some()
+            && ops[i + 2].tag == OpTag::LoopEnd;
+
+        if can_flatten {
+            let loop_end = ops[i].end.as_deref().unwrap_or("").trim().to_string();
+            let v = &ops[i + 1].vars[0];
+
+            // Validate loop_end: must be a numeric literal or a declared scalar.
+            let loop_end_valid = !loop_end.is_empty()
+                && (loop_end.chars().all(|c| c.is_ascii_digit())
+                    || var_decls.iter().any(|d| d.name == loop_end && d.dim == 0));
+
+            // Validate that the VarDecl is compatible (dim=1, consistent size).
+            let decl_compatible = var_decls.iter().any(|d| {
+                d.name == v.name
+                    && d.dim == 1
+                    && (d.size.is_empty() || d.size == vec![loop_end.clone()])
+            });
+
+            if loop_end_valid && decl_compatible {
+                // Mutate the VarDecl size if not yet set.
+                if let Some(decl) = var_decls
+                    .iter_mut()
+                    .find(|d| d.name == v.name && d.size.is_empty())
                 {
-                    let loop_end = ops[i].end.clone().ok_or_else(|| original.clone())?;
-                    let v = &ops[i + 1].vars[0];
-
-                    // Validate loop_end: must be a numeric literal or a declared scalar.
-                    // If it's neither, the generated code would reference an undefined variable.
-                    let loop_end_valid = loop_end.chars().all(|c| c.is_ascii_digit())
-                        || var_decls.iter().any(|d| d.name == loop_end && d.dim == 0);
-                    if !loop_end_valid {
-                        return Err(original);
-                    }
-
-                    let flattened_var = VarRef {
+                    decl.size = vec![loop_end.clone()];
+                }
+                result.push(InputOp {
+                    tag: OpTag::ReadLine,
+                    depth: ops[i].depth,
+                    vars: vec![VarRef {
                         name: v.name.clone(),
                         dim: 1,
-                        size: Some(loop_end.clone()),
+                        size: Some(loop_end),
                         index: None,
-                    };
-
-                    // Update the corresponding VarDecl; treat missing or incompatible decl as error
-                    // to avoid producing internally inconsistent InputSpec.
-                    let decl = var_decls
-                        .iter_mut()
-                        .find(|d| d.name == v.name)
-                        .ok_or_else(|| original.clone())?;
-                    if decl.dim != 1 {
-                        return Err(original.clone());
-                    }
-                    if decl.size.is_empty() {
-                        decl.size = vec![loop_end.clone()];
-                    } else if decl.size != vec![loop_end.clone()] {
-                        return Err(original.clone());
-                    }
-                    result.push(InputOp {
-                        tag: OpTag::ReadLine,
-                        depth: ops[i].depth,
-                        vars: vec![flattened_var],
-                        loop_var: None,
-                        begin: None,
-                        end: None,
-                    });
-                    i += 3;
-                } else {
-                    // Can't flatten (multi-var, nested, etc.) — return original ops
-                    return Err(original);
-                }
-            }
-            _ => {
-                result.push(ops[i].clone());
-                i += 1;
+                    }],
+                    loop_var: None,
+                    begin: None,
+                    end: None,
+                });
+                i += 3;
+                continue;
             }
         }
+
+        // Not flattenable — push as-is; ReadLine/LoopEnd will be pushed in subsequent iterations.
+        result.push(ops[i].clone());
+        i += 1;
     }
-    Ok(result)
+    result
 }
 
 fn not_ok(raw: &str) -> InputSpec {
