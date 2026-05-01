@@ -472,4 +472,38 @@ mod tests {
             "create() must not overwrite existing solution files"
         );
     }
+
+    /// Phase 2: multi-var vdots loop should generate real loop code (Vec::new, for _ in 0.., push)
+    #[test]
+    #[serial]
+    fn create_generates_loop_code_for_multi_var_loop() {
+        let dir = setup_temp_root_with_real_main_template();
+        let root = dir.path();
+        let repo = SolutionRepositoryImpl::new(root.to_path_buf());
+
+        let solution = make_solution("abc001", "c", "main", Language::new("rust"));
+        // 2-variable loop: Q followed by t_i k_i for i in 0..Q
+        repo.create(&solution, &[], "Q\nt_1 k_1\n\\vdots\nt_Q k_Q\n", "")
+            .unwrap();
+
+        let main_rs = root.join("solutions/abc001/c/main/src/main.rs");
+        let contents = fs::read_to_string(&main_rs).unwrap();
+
+        // solve signature should have Vec<i64> params
+        assert!(contents.contains("fn solve("), "expected plain fn solve(");
+        assert!(
+            contents.contains("Vec<i64>"),
+            "expected Vec<i64> in solve signature: {contents}"
+        );
+        // main should have loop code
+        assert!(
+            contents.contains("Vec::new()"),
+            "expected Vec::new() for loop vars: {contents}"
+        );
+        assert!(
+            contents.contains("for _ in 0.."),
+            "expected for loop: {contents}"
+        );
+        assert!(contents.contains(".push("), "expected push: {contents}");
+    }
 }

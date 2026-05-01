@@ -14,9 +14,9 @@ fn solve(
 }
 
 fn main() {
+    {% for op in input_format.ops -%}
+    {% if op.tag == "read_line" and op.depth == 0 -%}
     input! {
-        {% for op in input_format.ops -%}
-        {% if op.tag == "read_line" -%}
         {% for v in op.vars -%}
         {% if v.dim == 0 -%}
         {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
@@ -32,11 +32,33 @@ fn main() {
         {% endif -%}
         {% endif -%}
         {% endfor -%}
-        {% elif op.tag == "loop_begin" -%}
-        // TODO: loop {{ op.loop_var }} in {{ op.begin }}..{{ op.end }} — proconio does not support loops; write manually
-        {% endif -%}
+    }
+    {% elif op.tag == "loop_begin" -%}
+    {% set next_index = loop.index0 + 1 -%}
+    {% set body_op = input_format.ops[next_index] -%}
+    {% for v in body_op.vars -%}
+    {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
+    let mut {{ v.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}> = Vec::new();
+    {% endfor -%}
+    for _ in 0..{{ op.end }} {
+        input! {
+    {% elif op.tag == "read_line" and op.depth > 0 -%}
+            {% for v in op.vars -%}
+            {% if v.index -%}
+            {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
+            __tmp_{{ v.name }}: {% if vd.var_type == "str" %}String{% else %}i64{% endif %},
+            {% endif -%}
+            {% endfor -%}
+    {% elif op.tag == "loop_end" -%}
+        }
+        {% set prev_index = loop.index0 - 1 -%}
+        {% set body_op = input_format.ops[prev_index] -%}
+        {% for v in body_op.vars -%}
+        {{ v.name }}.push(__tmp_{{ v.name }});
         {% endfor -%}
     }
+    {% endif -%}
+    {% endfor -%}
     print!("{}", solve({{ input_format.vars | map(attribute="name") | join(sep=", ") }}));
 }
 {% else -%}
@@ -72,6 +94,11 @@ mod tests {
             {% if input_format.ok -%}
             use proconio::input;
             let result = {
+                {% if input_format.ops | filter(attribute="tag", value="loop_begin") | length > 0 -%}
+                // TODO: loop input — write test harness manually
+                let _ = input;
+                solve({{ input_format.vars | map(attribute="name") | join(sep=", ") }})
+                {% else -%}
                 input! {
                     from proconio::source::once::OnceSource::from(input),
                     {% for op in input_format.ops -%}
@@ -91,12 +118,11 @@ mod tests {
                     {% endif -%}
                     {% endif -%}
                     {% endfor -%}
-                    {% elif op.tag == "loop_begin" -%}
-                    // TODO: loop — write manually
                     {% endif -%}
                     {% endfor -%}
                 }
                 solve({{ input_format.vars | map(attribute="name") | join(sep=", ") }})
+                {% endif -%}
             };
             assert_eq!(result.trim(), expected.trim(), "case {}\n--- input ---\n{}", i + 1, input);
             {% else -%}
