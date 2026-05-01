@@ -184,8 +184,8 @@ fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
     // Strip leading/trailing Space tokens
     let tokens = strip_spaces(tokens);
 
-    // Check if this is a pure Vdots line
-    if tokens.len() == 1 && tokens[0] == Token::Vdots {
+    // Check if this is a pure Vdots line (\vdots or \dots/\cdots used alone as vertical separator)
+    if tokens.len() == 1 && matches!(tokens[0], Token::Vdots | Token::Cdots) {
         return Ok(RawLine::Vdots);
     }
     if tokens.is_empty() {
@@ -634,6 +634,38 @@ fn contains_token(haystack: &str, token: &str) -> bool {
     false
 }
 
+/// Returns true if `line` mentions `math` as a standalone token ("S")
+/// or in subscripted form with a left word boundary ("S_i", "S_1", etc.).
+fn line_mentions_var(line: &str, math: &str) -> bool {
+    contains_token(line, math) || contains_subscripted(line, math)
+}
+
+/// Returns true if `haystack` contains `math` followed immediately by `_`,
+/// with a left word boundary (not preceded by alphanumeric or `_`).
+fn contains_subscripted(haystack: &str, math: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let mlen = math.len();
+    let mut idx = 0;
+    while idx + mlen < bytes.len() {
+        match haystack[idx..].find(math) {
+            Some(rel) => {
+                let abs = idx + rel;
+                let before_ok = abs == 0 || {
+                    let b = bytes[abs - 1];
+                    !(b.is_ascii_alphanumeric() || b == b'_')
+                };
+                let after_is_underscore = abs + mlen < bytes.len() && bytes[abs + mlen] == b'_';
+                if before_ok && after_is_underscore {
+                    return true;
+                }
+                idx = abs + 1;
+            }
+            None => break,
+        }
+    }
+    false
+}
+
 fn constraints_mention_str(constraints: &str, _name: &str, math: &str) -> bool {
     let str_keywords = [
         "文字列",
@@ -642,12 +674,14 @@ fn constraints_mention_str(constraints: &str, _name: &str, math: &str) -> bool {
         "英大文字",
         "lowercase",
         "uppercase",
+        "部分列",
+        "部分文字列",
     ];
 
     for keyword in &str_keywords {
         if constraints.contains(keyword) {
             for line in constraints.lines() {
-                if line.contains(keyword) && contains_token(line, math) {
+                if line.contains(keyword) && line_mentions_var(line, math) {
                     return true;
                 }
             }
@@ -662,7 +696,7 @@ fn constraints_mention_int(constraints: &str, _name: &str, math: &str) -> bool {
     for keyword in &int_keywords {
         if constraints.contains(keyword) {
             for line in constraints.lines() {
-                if line.contains(keyword) && contains_token(line, math) {
+                if line.contains(keyword) && line_mentions_var(line, math) {
                     return true;
                 }
             }
@@ -671,7 +705,7 @@ fn constraints_mention_int(constraints: &str, _name: &str, math: &str) -> bool {
 
     for line in constraints.lines() {
         if (line.contains("\\leq") || line.contains("≤") || line.contains('<'))
-            && contains_token(line, math)
+            && line_mentions_var(line, math)
         {
             return true;
         }
@@ -1524,6 +1558,50 @@ mod tests {
         assert!(
             spec.ops.iter().any(|o| o.tag == OpTag::LoopEnd),
             "expected a LoopEnd op in ops"
+        );
+    }
+
+    // ── \dots vertical separator + subscripted type inference ────────────────
+
+    /// "N L\nS_1\nS_2\n\dots\nS_N\n" — \dots on its own line treated as vdots,
+    /// single-var loop flattens to a ReadLine(dim=1) op (abc246-f style)
+    #[test]
+    fn dots_on_own_line_treated_as_vdots() {
+        let spec = parse("N L\nS_1\nS_2\n\\dots\nS_N\n", "");
+        assert!(
+            spec.ok,
+            "expected ok=true: \\dots should be treated as vdots"
+        );
+        let s_var = spec.vars.iter().find(|v| v.name == "s").expect("var s");
+        assert_eq!(s_var.dim, 1, "s should be 1D array");
+        assert!(
+            !spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin),
+            "loop should be flattened, not kept as LoopBegin ops"
+        );
+        let s_op = spec
+            .ops
+            .iter()
+            .find(|o| o.vars.iter().any(|v| v.name == "s"))
+            .expect("ReadLine op for s");
+        assert_eq!(
+            s_op.vars[0].size.as_deref(),
+            Some("n"),
+            "flattened op should have size=n"
+        );
+    }
+
+    /// Constraint "S_i は abcdefghijklmnopqrstuvwxyz の部分列" → Str type
+    #[test]
+    fn type_inference_subsequence_constraint_is_str() {
+        let spec = with_constraints(
+            "N\nS_1\n\\vdots\nS_N\n",
+            "S_i は abcdefghijklmnopqrstuvwxyz の(連続とは限らない)空でない部分列\n1 \\leq N \\leq 18\n",
+        );
+        let s_var = spec.vars.iter().find(|v| v.name == "s").expect("var s");
+        assert_eq!(
+            s_var.var_type,
+            VarType::Str,
+            "s should be Str from 部分列 constraint"
         );
     }
 }
