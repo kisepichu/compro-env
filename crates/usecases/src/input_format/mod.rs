@@ -654,7 +654,7 @@ fn contains_subscripted(haystack: &str, math: &str) -> bool {
                     let b = bytes[abs - 1];
                     !(b.is_ascii_alphanumeric() || b == b'_')
                 };
-                let after_is_underscore = bytes[abs + mlen] == b'_';
+                let after_is_underscore = abs + mlen < bytes.len() && bytes[abs + mlen] == b'_';
                 if before_ok && after_is_underscore {
                     return true;
                 }
