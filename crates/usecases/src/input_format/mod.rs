@@ -1288,11 +1288,11 @@ mod tests {
 
     /// "Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n" — Q is the LoopBegin end, so is_size=true
     #[test]
-    fn loop_input_returns_not_ok() {
-        // Phase 2: multi-var loops now produce ok=true; LoopBegin ops are kept for template codegen.
+    fn multi_var_loop_returns_ok_true_with_loop_ops() {
+        // Phase 2: multi-var loops produce ok=true; LoopBegin ops are kept for template codegen.
         // Q is is_size=true because it is the loop bound.
         let spec = scalar_ok("Q\nt_1 k_1\nt_2 k_2\n\\vdots\nt_Q k_Q\n");
-        assert!(spec.ok, "loop input should produce ok=true in Phase 2");
+        assert!(spec.ok, "multi-var loop should produce ok=true in Phase 2");
         assert!(spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin));
         let q = spec
             .vars
@@ -1385,10 +1385,11 @@ mod tests {
         assert_eq!(sv.size, Some("n".to_string()));
     }
 
-    /// Multi-var vdots loop (2 vars per row) cannot be flattened — must stay ok=false
+    /// Multi-var vdots loop (2 vars per row) cannot be flattened but is kept for template codegen
     #[test]
-    fn multi_var_loop_not_flattened_stays_not_ok() {
-        // Multi-var loops now produce ok=true with LoopBegin ops kept for template codegen
+    fn multi_var_loop_kept_for_template_codegen() {
+        // Phase 2: multi-var loops produce ok=true with LoopBegin ops retained so the
+        // template can emit Vec::new() + for-loop + push() code.
         let spec = scalar_ok("S\nQ\nt_1 k_1\n\\hspace{0.4cm}\\vdots\nt_Q k_Q\n");
         assert!(
             spec.ok,

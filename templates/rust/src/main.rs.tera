@@ -95,9 +95,9 @@ mod tests {
             use proconio::input;
             let result = {
                 {% if input_format.ops | filter(attribute="tag", value="loop_begin") | length > 0 -%}
-                // TODO: loop input — write test harness manually
+                // TODO: loop input — test harness with loops is not auto-generated; write manually
                 let _ = input;
-                solve({{ input_format.vars | map(attribute="name") | join(sep=", ") }})
+                panic!("TODO: loop input sample test harness is not implemented")
                 {% else -%}
                 input! {
                     from proconio::source::once::OnceSource::from(input),
