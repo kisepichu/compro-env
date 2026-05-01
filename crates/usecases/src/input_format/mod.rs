@@ -403,8 +403,9 @@ fn try_parse_grid_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
 /// Detection rules:
 /// - Multiple separate tokens in braces (`{1 W}` → parts=["1","W"]): 2D, row = first part.
 /// - Comma-separated (`{H,W}`): 2D, row = first part.
-/// - Single token with length ≥ 2 (`{H1}`, `{HW}`, `{11}`, `{iW}`): 2D, row = first char.
-/// - Single token with length 1 (`{N}`, `{i}`): 1D subscript, returns `is_2d = false`.
+/// - Single token that contains a letter AND has length ≥ 2 (`{H1}`, `{HW}`, `{iW}`): 2D, row = first char.
+/// - Single purely-numeric token (`{10}`, `{12}`): 1D subscript (multi-digit index), `is_2d = false`.
+/// - Single token with length 1 (`{N}`, `{i}`): 1D subscript, `is_2d = false`.
 fn read_2d_subscript_row_part(tokens: &[Token]) -> Option<(String, usize, bool)> {
     if tokens.first() != Some(&Token::LBrace) {
         return None;
@@ -446,13 +447,17 @@ fn read_2d_subscript_row_part(tokens: &[Token]) -> Option<(String, usize, bool)>
         [first, _, ..] => (first.clone(), true),
         // Single token
         [single] => {
-            if has_comma || single.len() >= 2 {
-                // Comma-separated ({H,W}) or single multi-char token ({H1}, {HW}, {11})
+            // A single multi-char token is "2D" only when it mixes letters and digits
+            // (e.g. {H1}, {1W}, {HW}, {iW}).  Purely-numeric tokens like {10} or {12}
+            // are just multi-digit 1D indices and must NOT be treated as 2D.
+            let has_letter = single.chars().any(|c| c.is_ascii_alphabetic());
+            if has_comma || (single.len() >= 2 && has_letter) {
+                // Comma-separated ({H,W}) or mixed alpha-digit token ({H1}, {HW}, {iW})
                 // Row = first character of the token
                 let row = single.chars().next()?.to_string();
                 (row, true)
             } else {
-                // Single-char subscript {N} or {i}: 1D, not a grid row
+                // Single-char subscript {N}/{i} or purely-numeric {10}/{12}: 1D, not a grid row
                 (single.clone(), false)
             }
         }
@@ -1864,5 +1869,24 @@ mod tests {
         assert_eq!(s_var.dim, 1);
         assert_eq!(s_var.var_type, VarType::Str);
         assert!(!spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin));
+    }
+
+    /// Regression: A_{1}...A_{10} must parse as Array1D, not GridRow.
+    /// Multi-digit purely-numeric subscripts like {10} are 1D indices, not 2D.
+    #[test]
+    fn array1d_multi_digit_subscript_not_grid_row() {
+        let spec = parse("N\nA_{1}...A_{10}\n", "");
+        assert!(
+            spec.ok,
+            "expected ok=true for 1D array with multi-digit subscript"
+        );
+        let a_var = spec.vars.iter().find(|v| v.name == "a").expect("var a");
+        assert_eq!(a_var.dim, 1, "a should be Vec (dim=1)");
+        // Should not be misclassified as Str
+        assert_ne!(
+            a_var.var_type,
+            VarType::Str,
+            "purely-numeric multi-digit subscript should not trigger GridRow detection"
+        );
     }
 }
