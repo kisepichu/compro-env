@@ -171,6 +171,8 @@ enum RawLine {
     Vdots,
     /// Loop row: one line inside a vdots loop with multiple vars (e.g. t_1 k_1)
     LoopRow(Vec<RawVar>),
+    /// Grid row: S_{11}...S_{1W} — one row of a character grid, read as one String
+    GridRow(RawVar),
 }
 
 /// Parse errors cause ok=false
@@ -199,6 +201,12 @@ fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
         {
             return Err(ParseError::Unknown);
         }
+    }
+
+    // Try to detect a character grid row: X_{row,col_start}...X_{row,col_end}
+    // (before array1d, because some grid patterns look like array1d with alphabetic subscripts)
+    if let Some(result) = try_parse_grid_row(&tokens) {
+        return result;
     }
 
     // Try to detect 1D horizontal array: pattern like Ident_Num ... Ident_Num [Cdots] Ident_Num
@@ -298,6 +306,155 @@ fn try_parse_array1d(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
     } else {
         Some(Ok(RawLine::Array1D { name: base, size }))
     }
+}
+
+/// Try to detect a character grid row: `X_{row col_start} ... X_{row col_end}`
+/// Returns Some(Ok(GridRow)) when the whole line is exactly this pattern.
+/// Returns None when not applicable (falls through to parse_var_list).
+fn try_parse_grid_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
+    // Must contain Cdots to be a range expression
+    if !tokens.contains(&Token::Cdots) {
+        return None;
+    }
+
+    let mut i = 0;
+
+    // First: Ident(name)
+    let first_name = match tokens.get(i) {
+        Some(Token::Ident(n)) => {
+            i += 1;
+            n.clone()
+        }
+        _ => return None,
+    };
+
+    // Subscript _
+    if tokens.get(i) != Some(&Token::Subscript) {
+        return None;
+    }
+    i += 1;
+
+    // 2D subscript: LBrace with multiple content parts (or comma)
+    let (row_start, advance1, is_2d_1) = read_2d_subscript_row_part(&tokens[i..])?;
+    i += advance1;
+
+    // Skip spaces, then Cdots
+    while tokens.get(i) == Some(&Token::Space) {
+        i += 1;
+    }
+    if tokens.get(i) != Some(&Token::Cdots) {
+        return None;
+    }
+    i += 1;
+    while tokens.get(i) == Some(&Token::Space) {
+        i += 1;
+    }
+
+    // Second: Ident(same name)
+    let second_name = match tokens.get(i) {
+        Some(Token::Ident(n)) => {
+            i += 1;
+            n.clone()
+        }
+        _ => return None,
+    };
+    if second_name != first_name {
+        return None;
+    }
+
+    // Subscript _
+    if tokens.get(i) != Some(&Token::Subscript) {
+        return None;
+    }
+    i += 1;
+
+    // 2D subscript for the end
+    let (row_end, advance2, is_2d_2) = read_2d_subscript_row_part(&tokens[i..])?;
+    i += advance2;
+
+    // Must be at end (ignoring trailing spaces)
+    while tokens.get(i) == Some(&Token::Space) {
+        i += 1;
+    }
+    if i != tokens.len() {
+        return None;
+    }
+
+    // At least one side must be a 2D subscript
+    if !is_2d_1 && !is_2d_2 {
+        return None;
+    }
+
+    // Use the row part from the end (right-hand) subscript if 2D, else from start.
+    // This is the value that becomes the loop bound (e.g. "H" from S_{H1}...S_{HW}).
+    let row_part = if is_2d_2 { row_end } else { row_start };
+
+    Some(Ok(RawLine::GridRow(RawVar {
+        math: first_name,
+        subscript: Some(row_part),
+    })))
+}
+
+/// Read a subscript brace `{content}` and return `(row_part, tokens_consumed, is_2d)`.
+///
+/// A "2D" subscript encodes both a row and a column, e.g. `{H1}`, `{HW}`, `{1W}`, `{1,1}`.
+/// The "row part" is the identifier/number that represents the row (used as loop bound).
+///
+/// Detection rules:
+/// - Multiple separate tokens in braces (`{1 W}` → parts=["1","W"]): 2D, row = first part.
+/// - Comma-separated (`{H,W}`): 2D, row = first part.
+/// - Single token with length ≥ 2 (`{H1}`, `{HW}`, `{11}`, `{iW}`): 2D, row = first char.
+/// - Single token with length 1 (`{N}`, `{i}`): 1D subscript, returns `is_2d = false`.
+fn read_2d_subscript_row_part(tokens: &[Token]) -> Option<(String, usize, bool)> {
+    if tokens.first() != Some(&Token::LBrace) {
+        return None;
+    }
+    let mut i = 1;
+    let mut parts: Vec<String> = Vec::new();
+    let mut has_comma = false;
+    while i < tokens.len() {
+        match &tokens[i] {
+            Token::RBrace => {
+                i += 1;
+                break;
+            }
+            Token::Num(n) => {
+                parts.push(n.clone());
+                i += 1;
+            }
+            Token::Ident(s) => {
+                parts.push(s.clone());
+                i += 1;
+            }
+            Token::Comma => {
+                has_comma = true;
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    let (row_part, is_2d) = match parts.as_slice() {
+        // Multiple separate parts: {1 W}, first part is row
+        [first, _, ..] => (first.clone(), true),
+        // Single token
+        [single] => {
+            if has_comma || single.len() >= 2 {
+                // Comma-separated ({H,W}) or single multi-char token ({H1}, {HW}, {11})
+                // Row = first character of the token
+                let row = single.chars().next()?.to_string();
+                (row, true)
+            } else {
+                // Single-char subscript {N} or {i}: 1D, not a grid row
+                (single.clone(), false)
+            }
+        }
+        _ => return None,
+    };
+
+    Some((row_part, i, is_2d))
 }
 
 /// Read a subscript value after `_` token.
@@ -415,6 +572,7 @@ enum IntermOp {
     },
     LoopEnd,
     ReadLoopRow(Vec<String>), // math names of loop-row vars (dim=1)
+    ReadGridRow(String),      // math name of grid-row var (dim=1, var_type=Str)
 }
 
 fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError> {
@@ -423,34 +581,30 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
     let mut loop_var_counter = 0usize;
 
     // Pre-scan: mark which line indices are inside a vdots loop block.
-    // A vdots block is: [LoopRow*] Vdots [LoopRow*] where there's at least one LoopRow before.
-    // We record ranges as (loop_row_before_start, vdots_idx, loop_row_after_end).
+    // A vdots block is: [LoopRow*|GridRow*] Vdots [LoopRow*|GridRow*] where there's at least
+    // one LoopRow/GridRow before. We record ranges as (block_start, vdots_idx, after_end).
     // Lines in a vdots block are consumed at Vdots time and skipped otherwise.
+    let is_loop_or_grid = |rl: &RawLine| matches!(rl, RawLine::LoopRow(_) | RawLine::GridRow(_));
+
     let mut vdots_blocks: Vec<(usize, usize, usize)> = Vec::new(); // (block_start, vdots_idx, after_end)
     {
         let mut j = 0;
         while j < raw_lines.len() {
             if matches!(raw_lines[j], RawLine::Vdots) {
-                // Find consecutive LoopRows before this vdots
+                // Find consecutive LoopRows/GridRows before this vdots
                 let mut block_start = j;
-                while block_start > 0 {
-                    match &raw_lines[block_start - 1] {
-                        RawLine::LoopRow(_) => block_start -= 1,
-                        _ => break,
-                    }
+                while block_start > 0 && is_loop_or_grid(&raw_lines[block_start - 1]) {
+                    block_start -= 1;
                 }
                 if block_start == j {
-                    // No LoopRows before — not a vdots loop, skip
+                    // No LoopRows/GridRows before — not a vdots loop, skip
                     j += 1;
                     continue;
                 }
-                // Find LoopRows after this vdots
+                // Find LoopRows/GridRows after this vdots
                 let mut after_end = j + 1;
-                while after_end < raw_lines.len() {
-                    match &raw_lines[after_end] {
-                        RawLine::LoopRow(_) => after_end += 1,
-                        _ => break,
-                    }
+                while after_end < raw_lines.len() && is_loop_or_grid(&raw_lines[after_end]) {
+                    after_end += 1;
                 }
                 vdots_blocks.push((block_start, j, after_end));
                 j = after_end;
@@ -469,30 +623,34 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
         if let Some(&(block_start, vdots_idx, after_end)) =
             vdots_blocks.iter().find(|&&(bs, _, _)| bs == i)
         {
-            // Get the representative loop row vars from the first "before" row
-            let first_before = match &raw_lines[block_start] {
-                RawLine::LoopRow(vars) => vars.iter().map(|v| v.math.clone()).collect::<Vec<_>>(),
+            // Determine if the loop body is a grid row (→ ReadGridRow) or multi-var (→ ReadLoopRow)
+            let is_grid = matches!(raw_lines[block_start], RawLine::GridRow(_));
+
+            // Get the representative vars from the first "before" row
+            let first_before: Vec<String> = match &raw_lines[block_start] {
+                RawLine::LoopRow(vars) => vars.iter().map(|v| v.math.clone()).collect(),
+                RawLine::GridRow(v) => vec![v.math.clone()],
                 _ => return Err(ParseError::Unknown),
+            };
+
+            // Helper: extract subscript from a LoopRow or GridRow
+            let row_subscript = |rl: &RawLine| -> String {
+                match rl {
+                    RawLine::LoopRow(vars) => vars
+                        .last()
+                        .and_then(|v| v.subscript.clone())
+                        .unwrap_or_default(),
+                    RawLine::GridRow(v) => v.subscript.clone().unwrap_or_default(),
+                    _ => String::new(),
+                }
             };
 
             // Get the loop end from the last "after" row's last var's subscript
             let end_size = if after_end > vdots_idx + 1 {
-                match &raw_lines[after_end - 1] {
-                    RawLine::LoopRow(vars) => vars
-                        .last()
-                        .and_then(|v| v.subscript.clone())
-                        .unwrap_or_default(),
-                    _ => String::new(),
-                }
+                row_subscript(&raw_lines[after_end - 1])
             } else {
                 // No after row — use last before row's last var's subscript
-                match &raw_lines[vdots_idx - 1] {
-                    RawLine::LoopRow(vars) => vars
-                        .last()
-                        .and_then(|v| v.subscript.clone())
-                        .unwrap_or_default(),
-                    _ => String::new(),
-                }
+                row_subscript(&raw_lines[vdots_idx - 1])
             };
 
             let lv = loop_vars.get(loop_var_counter).copied().unwrap_or("i");
@@ -503,7 +661,13 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
                 begin: "0".to_string(),
                 end: end_size,
             });
-            ops.push(IntermOp::ReadLoopRow(first_before));
+            if is_grid {
+                ops.push(IntermOp::ReadGridRow(
+                    first_before.into_iter().next().unwrap_or_default(),
+                ));
+            } else {
+                ops.push(IntermOp::ReadLoopRow(first_before));
+            }
             ops.push(IntermOp::LoopEnd);
 
             i = after_end;
@@ -543,6 +707,10 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
                 // (e.g. "A_1 A_2" without \vdots). Silently degrading to scalars would
                 // produce duplicate variable names; treat as unsupported.
                 return Err(ParseError::NonNumericSubscript);
+            }
+            RawLine::GridRow(_) => {
+                // GridRow not matched to a vdots block — treat as unsupported
+                return Err(ParseError::Unknown);
             }
         }
     }
@@ -890,6 +1058,33 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                     end: None,
                 });
             }
+            IntermOp::ReadGridRow(math) => {
+                let lv = ops
+                    .iter()
+                    .rev()
+                    .find_map(|o| o.loop_var.clone())
+                    .unwrap_or_else(|| "i".to_string());
+                let loop_end = current_loop_end.clone().unwrap_or_default();
+                let name = normalize_name(math, &all_math_names);
+                ensure_var_decl(&mut var_decls, &name, math, 1, vec![loop_end.clone()]);
+                // Grid rows are always strings — set type directly, overriding inference.
+                if let Some(decl) = var_decls.iter_mut().find(|d| d.name == name) {
+                    decl.var_type = VarType::Str;
+                }
+                ops.push(InputOp {
+                    tag: OpTag::ReadLine,
+                    depth,
+                    vars: vec![VarRef {
+                        name,
+                        dim: 1,
+                        size: None,
+                        index: Some(lv),
+                    }],
+                    loop_var: None,
+                    begin: None,
+                    end: None,
+                });
+            }
             IntermOp::LoopEnd => {
                 depth = depth.saturating_sub(1);
                 current_loop_end = None;
@@ -1072,6 +1267,7 @@ fn collect_math_names(ops: &[IntermOp]) -> Vec<String> {
                 names.push(size.clone());
             }
             IntermOp::ReadLoopRow(ns) => names.extend(ns.iter().cloned()),
+            IntermOp::ReadGridRow(n) => names.push(n.clone()),
             IntermOp::LoopBegin { end, .. } => names.push(end.clone()),
             IntermOp::LoopEnd => {}
         }
@@ -1603,5 +1799,54 @@ mod tests {
             VarType::Str,
             "s should be Str from 部分列 constraint"
         );
+    }
+
+    // ── TASK-015: 文字グリッド (2D添字) ──────────────────────────────────────────
+
+    /// abc151-d style: "H W\nS_{11}...S_{1W}\n:\nS_{H1}...S_{HW}\n"
+    /// → ok=true, s: Vec<String>, flattened to [String; h]
+    #[test]
+    fn grid_row_2d_subscript_numeric_flattened() {
+        let spec = parse("H W\nS_{11}...S_{1W}\n:\nS_{H1}...S_{HW}\n", "");
+        assert!(spec.ok, "expected ok=true for 2D grid row");
+        let s_var = spec.vars.iter().find(|v| v.name == "s").expect("var s");
+        assert_eq!(s_var.dim, 1, "s should be Vec (dim=1)");
+        assert_eq!(s_var.var_type, VarType::Str, "s should be Str");
+        assert!(
+            !spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin),
+            "loop should be flattened"
+        );
+        let s_op = spec
+            .ops
+            .iter()
+            .find(|o| o.vars.iter().any(|v| v.name == "s"))
+            .expect("ReadLine op for s");
+        assert_eq!(
+            s_op.vars[0].size.as_deref(),
+            Some("h"),
+            "flattened op should have size=h"
+        );
+    }
+
+    /// Loop variable form: "H W\nS_{i1}...S_{iW}\n\\vdots\nS_{H1}...S_{HW}\n"
+    #[test]
+    fn grid_row_loop_var_form_flattened() {
+        let spec = parse("H W\nS_{i1}...S_{iW}\n\\vdots\nS_{H1}...S_{HW}\n", "");
+        assert!(spec.ok, "expected ok=true for loop-var grid row");
+        let s_var = spec.vars.iter().find(|v| v.name == "s").expect("var s");
+        assert_eq!(s_var.dim, 1);
+        assert_eq!(s_var.var_type, VarType::Str);
+        assert!(!spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin));
+    }
+
+    /// Comma-separated 2D subscript: "H W\nS_{1,1}...S_{1,W}\n:\nS_{H,1}...S_{H,W}\n"
+    #[test]
+    fn grid_row_comma_subscript_flattened() {
+        let spec = parse("H W\nS_{1,1}...S_{1,W}\n:\nS_{H,1}...S_{H,W}\n", "");
+        assert!(spec.ok, "expected ok=true for comma-separated grid row");
+        let s_var = spec.vars.iter().find(|v| v.name == "s").expect("var s");
+        assert_eq!(s_var.dim, 1);
+        assert_eq!(s_var.var_type, VarType::Str);
+        assert!(!spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin));
     }
 }
