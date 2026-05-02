@@ -366,10 +366,8 @@ infrastructure/
 | クエリ型: `\text{query}_i` / `\mathrm{Query}_i` | abc241-D, abc248-D |
 | クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 | abc241-D, typical90-L |
 | T-testcases 型: pre[0]=`T` 単独 + pre[1]=ケース形式 | abc238-D |
-| 空白なし文字グリッド: `S_{11}...S_{1W}` | abc151-D, abc176-D |
 | 可変長行: `T_i K_i A_{i,1} \ldots A_{i,K_i}` | abc226-C |
 | 斜め・上三角行列: 行ごとに長さが異なる | abc236-D |
-| 非数値添字スカラー: `A_x`, `C_h` | abc246-E, abc176-D |
 | ネストループ 2段以上 | — |
 
 ---

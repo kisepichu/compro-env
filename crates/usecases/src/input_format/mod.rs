@@ -583,6 +583,11 @@ enum IntermOp {
     LoopEnd,
     ReadLoopRow(Vec<String>), // math names of loop-row vars (dim=1)
     ReadGridRow(String),      // math name of grid-row var (dim=1, var_type=Str)
+    /// Subscripted scalars from a standalone LoopRow (e.g. A_x A_y, r_1 c_1).
+    /// Each entry is (name_seed, base_math):
+    ///   name_seed — used by normalize_name to derive the Rust variable name (e.g. "Ax", "r1")
+    ///   base_math — original base name stored in VarDecl.math for constraint inference (e.g. "A", "r")
+    ReadSubscriptedScalars(Vec<(String, String)>),
 }
 
 fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError> {
@@ -594,27 +599,61 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
     // A vdots block is: [LoopRow*|GridRow*] Vdots [LoopRow*|GridRow*] where there's at least
     // one LoopRow/GridRow before. We record ranges as (block_start, vdots_idx, after_end).
     // Lines in a vdots block are consumed at Vdots time and skipped otherwise.
-    let is_loop_or_grid = |rl: &RawLine| matches!(rl, RawLine::LoopRow(_) | RawLine::GridRow(_));
+    // A LoopRow is eligible for a vdots block only when all its vars share the same subscript
+    // (e.g. "t_1 k_1" all have "1"; "S_N" has "N").  Lines where vars have *different*
+    // subscripts (e.g. "A_x A_y") are coordinate-style scalars that should not be pulled
+    // into a loop block.
+    let is_loop_or_grid = |rl: &RawLine| match rl {
+        RawLine::LoopRow(vars) => {
+            // All vars must have a subscript, and all subscripts must be equal.
+            // This rejects mixed rows like "A_1 B" (None subscript on B) and rows
+            // with different subscripts like "A_x A_y", keeping only true loop-body
+            // rows like "t_1 k_1" (all subscript "1") or "S_N" (subscript "N").
+            let first = match vars.first() {
+                Some(v) => v.subscript.as_deref(),
+                None => return false,
+            };
+            first.is_some() && vars.iter().all(|v| v.subscript.as_deref() == first)
+        }
+        RawLine::GridRow(_) => true,
+        _ => false,
+    };
 
     let mut vdots_blocks: Vec<(usize, usize, usize)> = Vec::new(); // (block_start, vdots_idx, after_end)
     {
         let mut j = 0;
         while j < raw_lines.len() {
             if matches!(raw_lines[j], RawLine::Vdots) {
-                // Find consecutive LoopRows/GridRows before this vdots
+                // Find consecutive LoopRows/GridRows before this vdots.
+                // Stop extending when the kind (LoopRow vs GridRow) changes, so that
+                // standalone subscript-scalar lines (e.g. "r_1 c_1") before a grid loop
+                // are not pulled into the block.
+                let last_is_grid = j > 0 && matches!(raw_lines[j - 1], RawLine::GridRow(_));
                 let mut block_start = j;
-                while block_start > 0 && is_loop_or_grid(&raw_lines[block_start - 1]) {
-                    block_start -= 1;
+                while block_start > 0 {
+                    let prev = &raw_lines[block_start - 1];
+                    let prev_is_grid = matches!(prev, RawLine::GridRow(_));
+                    if is_loop_or_grid(prev) && prev_is_grid == last_is_grid {
+                        block_start -= 1;
+                    } else {
+                        break;
+                    }
                 }
                 if block_start == j {
                     // No LoopRows/GridRows before — not a vdots loop, skip
                     j += 1;
                     continue;
                 }
-                // Find LoopRows/GridRows after this vdots
+                // Find LoopRows/GridRows after this vdots (same kind constraint)
                 let mut after_end = j + 1;
-                while after_end < raw_lines.len() && is_loop_or_grid(&raw_lines[after_end]) {
-                    after_end += 1;
+                while after_end < raw_lines.len() {
+                    let next = &raw_lines[after_end];
+                    let next_is_grid = matches!(next, RawLine::GridRow(_));
+                    if is_loop_or_grid(next) && next_is_grid == last_is_grid {
+                        after_end += 1;
+                    } else {
+                        break;
+                    }
                 }
                 vdots_blocks.push((block_start, j, after_end));
                 j = after_end;
@@ -720,11 +759,26 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
                 // Vdots not part of a loop block — skip
                 i += 1;
             }
-            RawLine::LoopRow(_) => {
-                // LoopRow not matched to a vdots block — unsupported fixed enumeration
-                // (e.g. "A_1 A_2" without \vdots). Silently degrading to scalars would
-                // produce duplicate variable names; treat as unsupported.
-                return Err(ParseError::NonNumericSubscript);
+            RawLine::LoopRow(vars) => {
+                // LoopRow not matched to a vdots block — treat each var as an independent
+                // scalar.  We need two pieces per var:
+                //   name_seed  — math + sub concatenated (e.g. "Ax", "r1") for normalize_name
+                //   base_math  — original base name (e.g. "A", "r") stored in VarDecl.math so
+                //                constraint inference (contains_subscripted) still works
+                let infos: Vec<(String, String)> = vars
+                    .iter()
+                    .map(|v| {
+                        let name_seed = match &v.subscript {
+                            Some(sub) => format!("{}{}", v.math, sub),
+                            None => v.math.clone(),
+                        };
+                        (name_seed, v.math.clone())
+                    })
+                    .collect();
+                if !infos.is_empty() {
+                    ops.push(IntermOp::ReadSubscriptedScalars(infos));
+                }
+                i += 1;
             }
             RawLine::GridRow(_) => {
                 // GridRow not matched to a vdots block — treat as unsupported
@@ -1106,6 +1160,33 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                     end: None,
                 });
             }
+            IntermOp::ReadSubscriptedScalars(infos) => {
+                // Each entry: (name_seed, base_math).
+                // name_seed → normalize_name → Rust variable name (e.g. "Ax" → "ax")
+                // base_math → stored in VarDecl.math so constraint inference still works
+                //             (e.g. "A" allows contains_subscripted to find "A_x" in constraints)
+                let var_refs: Vec<VarRef> = infos
+                    .iter()
+                    .map(|(name_seed, base_math)| {
+                        let name = normalize_name(name_seed, &all_math_names);
+                        ensure_var_decl(&mut var_decls, &name, base_math, 0, vec![]);
+                        VarRef {
+                            name,
+                            dim: 0,
+                            size: None,
+                            index: None,
+                        }
+                    })
+                    .collect();
+                ops.push(InputOp {
+                    tag: OpTag::ReadLine,
+                    depth,
+                    vars: var_refs,
+                    loop_var: None,
+                    begin: None,
+                    end: None,
+                });
+            }
             IntermOp::LoopEnd => {
                 depth = depth.saturating_sub(1);
                 current_loop_end = None;
@@ -1289,6 +1370,10 @@ fn collect_math_names(ops: &[IntermOp]) -> Vec<String> {
             }
             IntermOp::ReadLoopRow(ns) => names.extend(ns.iter().cloned()),
             IntermOp::ReadGridRow(n) => names.push(n.clone()),
+            // Use name_seeds (not base_math) so normalize_name collision detection works correctly.
+            IntermOp::ReadSubscriptedScalars(infos) => {
+                names.extend(infos.iter().map(|(seed, _)| seed.clone()))
+            }
             IntermOp::LoopBegin { end, .. } => names.push(end.clone()),
             IntermOp::LoopEnd => {}
         }
@@ -1458,15 +1543,15 @@ mod tests {
         assert!(!spec.ok, "expected ok=false for T-testcases pattern");
     }
 
-    // ── Phase 2: non-numeric subscript scalar (A_x A_y) ──────────────────────
+    // ── Phase 1: subscripted scalars (A_x A_y) — now supported ──────────────
 
     #[test]
-    fn phase2_non_numeric_subscript_scalars() {
+    fn subscripted_scalars_ok() {
+        // A_x A_y with alphabetic subscripts → scalars ax, ay (TASK-016)
         let spec = scalar_ok("A_x A_y\n");
-        assert!(
-            !spec.ok,
-            "expected ok=false for non-numeric subscript on single-element"
-        );
+        assert!(spec.ok, "expected ok=true for subscripted scalars A_x A_y");
+        assert!(spec.vars.iter().any(|v| v.name == "ax"), "expected var ax");
+        assert!(spec.vars.iter().any(|v| v.name == "ay"), "expected var ay");
     }
 
     // ── empty string ─────────────────────────────────────────────────────────
@@ -1888,5 +1973,76 @@ mod tests {
             VarType::Str,
             "purely-numeric multi-digit subscript should not trigger GridRow detection"
         );
+    }
+
+    // ── TASK-016: 非数値添字スカラー ───────────────────────────────────────────────
+
+    /// Single line with alphabetic subscripts: "A_x A_y" → scalars ax, ay
+    #[test]
+    fn alpha_subscript_scalars_single_line() {
+        let spec = parse("A_x A_y\n", "");
+        assert!(spec.ok, "expected ok=true for A_x A_y");
+        let ax = spec.vars.iter().find(|v| v.name == "ax").expect("var ax");
+        let ay = spec.vars.iter().find(|v| v.name == "ay").expect("var ay");
+        assert_eq!(ax.dim, 0, "ax should be scalar (dim=0)");
+        assert_eq!(ay.dim, 0, "ay should be scalar (dim=0)");
+    }
+
+    /// Two lines with numeric subscripts, no vdots: "r_1 c_1\nr_2 c_2" → scalars r1,c1,r2,c2
+    #[test]
+    fn numeric_subscript_scalars_no_vdots() {
+        let spec = parse("r_1 c_1\nr_2 c_2\n", "");
+        assert!(
+            spec.ok,
+            "expected ok=true for r_1 c_1 / r_2 c_2 without vdots"
+        );
+        for name in &["r1", "c1", "r2", "c2"] {
+            let v = spec
+                .vars
+                .iter()
+                .find(|v| v.name == *name)
+                .unwrap_or_else(|| panic!("var {name} not found"));
+            assert_eq!(v.dim, 0, "{name} should be scalar (dim=0)");
+        }
+    }
+
+    /// abc246-E style: "N\nA_x A_y\nB_x B_y\nS_1\n\vdots\nS_N\n"
+    /// → ok=true, scalars ax,ay,bx,by; array s
+    #[test]
+    fn abc246e_style_alpha_subscript_with_array() {
+        let spec = parse("N\nA_x A_y\nB_x B_y\nS_1\n\\vdots\nS_N\n", "");
+        assert!(spec.ok, "expected ok=true for abc246-E style input");
+        for name in &["ax", "ay", "bx", "by"] {
+            let v = spec
+                .vars
+                .iter()
+                .find(|v| v.name == *name)
+                .unwrap_or_else(|| panic!("var {name} not found"));
+            assert_eq!(v.dim, 0, "{name} should be scalar (dim=0)");
+        }
+        let s = spec.vars.iter().find(|v| v.name == "s").expect("var s");
+        assert_eq!(s.dim, 1, "s should be Vec (dim=1)");
+    }
+
+    /// abc176-D style: "H W\nr_1 c_1\nr_2 c_2\nS_{H1}...S_{HW}\n:\nS_{H1}...S_{HW}\n"
+    /// → ok=true, scalars h,w,r1,c1,r2,c2; array s (Vec<String>)
+    #[test]
+    fn abc176d_style_numeric_subscript_scalars_with_grid() {
+        let spec = parse(
+            "H W\nr_1 c_1\nr_2 c_2\nS_{i1}...S_{iW}\n\\vdots\nS_{H1}...S_{HW}\n",
+            "",
+        );
+        assert!(spec.ok, "expected ok=true for abc176-D style input");
+        for name in &["r1", "c1", "r2", "c2"] {
+            let v = spec
+                .vars
+                .iter()
+                .find(|v| v.name == *name)
+                .unwrap_or_else(|| panic!("var {name} not found"));
+            assert_eq!(v.dim, 0, "{name} should be scalar (dim=0)");
+        }
+        let s = spec.vars.iter().find(|v| v.name == "s").expect("var s");
+        assert_eq!(s.dim, 1, "s should be Vec<String> (dim=1)");
+        assert_eq!(s.var_type, VarType::Str, "s should be Str");
     }
 }
