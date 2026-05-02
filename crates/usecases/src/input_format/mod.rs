@@ -583,6 +583,11 @@ enum IntermOp {
     LoopEnd,
     ReadLoopRow(Vec<String>), // math names of loop-row vars (dim=1)
     ReadGridRow(String),      // math name of grid-row var (dim=1, var_type=Str)
+    /// Subscripted scalars from a standalone LoopRow (e.g. A_x A_y, r_1 c_1).
+    /// Each entry is (name_seed, base_math):
+    ///   name_seed — used by normalize_name to derive the Rust variable name (e.g. "Ax", "r1")
+    ///   base_math — original base name stored in VarDecl.math for constraint inference (e.g. "A", "r")
+    ReadSubscriptedScalars(Vec<(String, String)>),
 }
 
 fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError> {
@@ -756,17 +761,22 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
             }
             RawLine::LoopRow(vars) => {
                 // LoopRow not matched to a vdots block — treat each var as an independent
-                // scalar, incorporating the subscript into the name to avoid collisions.
-                // e.g. "A_x A_y" → ["Ax", "Ay"], "r_1 c_1" → ["r1", "c1"]
-                let names: Vec<String> = vars
+                // scalar.  We need two pieces per var:
+                //   name_seed  — math + sub concatenated (e.g. "Ax", "r1") for normalize_name
+                //   base_math  — original base name (e.g. "A", "r") stored in VarDecl.math so
+                //                constraint inference (contains_subscripted) still works
+                let infos: Vec<(String, String)> = vars
                     .iter()
-                    .map(|v| match &v.subscript {
-                        Some(sub) => format!("{}{}", v.math, sub),
-                        None => v.math.clone(),
+                    .map(|v| {
+                        let name_seed = match &v.subscript {
+                            Some(sub) => format!("{}{}", v.math, sub),
+                            None => v.math.clone(),
+                        };
+                        (name_seed, v.math.clone())
                     })
                     .collect();
-                if !names.is_empty() {
-                    ops.push(IntermOp::ReadScalars(names));
+                if !infos.is_empty() {
+                    ops.push(IntermOp::ReadSubscriptedScalars(infos));
                 }
                 i += 1;
             }
@@ -1150,6 +1160,33 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                     end: None,
                 });
             }
+            IntermOp::ReadSubscriptedScalars(infos) => {
+                // Each entry: (name_seed, base_math).
+                // name_seed → normalize_name → Rust variable name (e.g. "Ax" → "ax")
+                // base_math → stored in VarDecl.math so constraint inference still works
+                //             (e.g. "A" allows contains_subscripted to find "A_x" in constraints)
+                let var_refs: Vec<VarRef> = infos
+                    .iter()
+                    .map(|(name_seed, base_math)| {
+                        let name = normalize_name(name_seed, &all_math_names);
+                        ensure_var_decl(&mut var_decls, &name, base_math, 0, vec![]);
+                        VarRef {
+                            name,
+                            dim: 0,
+                            size: None,
+                            index: None,
+                        }
+                    })
+                    .collect();
+                ops.push(InputOp {
+                    tag: OpTag::ReadLine,
+                    depth,
+                    vars: var_refs,
+                    loop_var: None,
+                    begin: None,
+                    end: None,
+                });
+            }
             IntermOp::LoopEnd => {
                 depth = depth.saturating_sub(1);
                 current_loop_end = None;
@@ -1333,6 +1370,10 @@ fn collect_math_names(ops: &[IntermOp]) -> Vec<String> {
             }
             IntermOp::ReadLoopRow(ns) => names.extend(ns.iter().cloned()),
             IntermOp::ReadGridRow(n) => names.push(n.clone()),
+            // Use name_seeds (not base_math) so normalize_name collision detection works correctly.
+            IntermOp::ReadSubscriptedScalars(infos) => {
+                names.extend(infos.iter().map(|(seed, _)| seed.clone()))
+            }
             IntermOp::LoopBegin { end, .. } => names.push(end.clone()),
             IntermOp::LoopEnd => {}
         }
