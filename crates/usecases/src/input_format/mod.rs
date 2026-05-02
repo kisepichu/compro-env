@@ -600,8 +600,15 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
     // into a loop block.
     let is_loop_or_grid = |rl: &RawLine| match rl {
         RawLine::LoopRow(vars) => {
-            let subs: Vec<&str> = vars.iter().filter_map(|v| v.subscript.as_deref()).collect();
-            !subs.is_empty() && subs.iter().all(|s| *s == subs[0])
+            // All vars must have a subscript, and all subscripts must be equal.
+            // This rejects mixed rows like "A_1 B" (None subscript on B) and rows
+            // with different subscripts like "A_x A_y", keeping only true loop-body
+            // rows like "t_1 k_1" (all subscript "1") or "S_N" (subscript "N").
+            let first = match vars.first() {
+                Some(v) => v.subscript.as_deref(),
+                None => return false,
+            };
+            first.is_some() && vars.iter().all(|v| v.subscript.as_deref() == first)
         }
         RawLine::GridRow(_) => true,
         _ => false,
