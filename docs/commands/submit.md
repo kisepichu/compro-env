@@ -21,11 +21,12 @@ ce sub <contest_id> <problem_code> [solution_name]
 
 ## 挙動
 
-1. 提出前に `ce test <contest_id> <problem_code> [solution_name]` 相当のテストを実行する:
+1. Unix 環境では、提出前に `ce test <contest_id> <problem_code> [solution_name]` 相当のテストを実行する:
    - 実行内容は `docs/commands/test.md` と同じ
    - `test_command` の標準出力・標準エラーはそのまま端末に流す
    - 終了コードが `0` の場合のみ次のステップへ進む
    - 終了コードが `0` 以外の場合は提出 URL を生成せず、ブラウザも開かずにエラー終了する
+   - 非 Unix 環境では、`ce test` が未対応のため提出前テストをスキップし、従来通り提出 URL 生成へ進む
 2. 解法ディレクトリの `ce.toml` から `language` を読む:
    ```
    solutions/{contest_id}/{problem_code}/{solution_name}/ce.toml
@@ -66,8 +67,8 @@ https://atcoder.jp/contests/{contest_id}/submit?taskScreenName={problem_id}#ce={
 
 ## エラーケース
 
-- 提出前テストが失敗した: 終了コードを表示してエラー終了し、提出 URL は生成しない
-- 提出前テストを起動できない、または `test_command` が未定義: `ce test` と同じエラーとして終了し、提出 URL は生成しない
+- Unix 環境で提出前テストが失敗した: 終了コードを表示してエラー終了し、提出 URL は生成しない
+- Unix 環境で提出前テストを起動できない、または `test_command` が未定義: `ce test` と同じエラーとして終了し、提出 URL は生成しない
 - 解法の `ce.toml` が存在しない: パスを表示してエラー終了
 - 提出ファイルが存在しない: パスを表示してエラー終了
 - `lang_id` が config に未設定: エラー終了

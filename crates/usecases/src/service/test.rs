@@ -37,6 +37,11 @@ impl Service {
 
         let testcases_dir = self.contest_repo.testcases_dir(contest_id, problem_code);
 
+        #[cfg(not(unix))]
+        anyhow::bail!(
+            "test_command execution requires a Unix-like shell (`sh`), which is unsupported on this platform"
+        );
+
         #[cfg(unix)]
         let status = Command::new("sh")
             .arg("-c")
@@ -46,23 +51,8 @@ impl Service {
             .status()
             .with_context(|| "failed to launch sh")?;
 
-        #[cfg(windows)]
-        let status = Command::new("cmd")
-            .arg("/C")
-            .arg(test_command)
-            .current_dir(&solution_dir)
-            .env("CE_TESTCASES_DIR", &testcases_dir)
-            .status()
-            .with_context(|| "failed to launch cmd")?;
-
-        #[cfg(not(any(unix, windows)))]
-        anyhow::bail!("test_command execution is unsupported on this platform");
-
         #[cfg(unix)]
-        return Ok(status.code().unwrap_or(1));
-
-        #[cfg(windows)]
-        return Ok(status.code().unwrap_or(1));
+        Ok(status.code().unwrap_or(1))
     }
 }
 

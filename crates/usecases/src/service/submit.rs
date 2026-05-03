@@ -13,11 +13,18 @@ impl Service {
         solution_name: &str,
     ) -> Result<SubmitResult> {
         // 0. Run the solution's test command before preparing submission.
-        let test_exit_code = self.test(contest_id, problem_code, solution_name)?;
-        if test_exit_code != 0 {
-            anyhow::bail!(
-                "pre-submit tests failed with exit code {test_exit_code}; submission skipped"
-            );
+        //
+        // `Service::test` currently executes `test_command` via `sh -c`, so
+        // enforce the pre-submit gate only on platforms where that contract is
+        // supported. Non-Unix submit still builds the browser URL as before.
+        #[cfg(unix)]
+        {
+            let test_exit_code = self.test(contest_id, problem_code, solution_name)?;
+            if test_exit_code != 0 {
+                anyhow::bail!(
+                    "pre-submit tests failed with exit code {test_exit_code}; submission skipped"
+                );
+            }
         }
 
         // 1. Locate solution directory and read ce.toml for language.
@@ -97,7 +104,7 @@ impl Service {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use crate::{
         config::Config,
@@ -280,13 +287,21 @@ mod tests {
 
     // ── Tests ────────────────────────────────────────────────────────────────
 
+    fn ce_toml_with_language_and_passing_test() -> &'static str {
+        if cfg!(unix) {
+            "language = \"rust\"\ntest_command = \"exit 0\"\n"
+        } else {
+            "language = \"rust\"\n"
+        }
+    }
+
     /// Happy path: SubmitResult.submission_url is the URL returned by StubOJ.
     #[test]
     fn submit_happy_path_returns_submission_url() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ce.toml"),
-            "language = \"rust\"\ntest_command = \"exit 0\"\n",
+            ce_toml_with_language_and_passing_test(),
         )
         .unwrap();
         let expected_url =
@@ -304,6 +319,7 @@ mod tests {
 
     /// A non-zero pre-submit test exits before source reading or URL generation.
     #[test]
+    #[cfg(unix)]
     fn submit_skips_when_pre_submit_test_fails() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -368,7 +384,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ce.toml"),
-            "language = \"rust\"\ntest_command = \"exit 0\"\n",
+            ce_toml_with_language_and_passing_test(),
         )
         .unwrap();
         let service = make_service(
@@ -391,7 +407,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ce.toml"),
-            "language = \"rust\"\ntest_command = \"exit 0\"\n",
+            ce_toml_with_language_and_passing_test(),
         )
         .unwrap();
         let service = make_service(
