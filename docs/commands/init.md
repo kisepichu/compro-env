@@ -361,8 +361,15 @@ edition = "2021"
 
 `ok=true` のとき: `solve` を純粋な引数関数として生成し、`main` で `input!` → `solve(args...)` と呼ぶ。
 `ok=false` のとき: フォールバックとして `solve` が `src` を受け取る従来スタイルを生成する。
+`solve` 本文は `with_output(|| { ... })` で包まれる。本文内で `out!(answer)` を呼ぶと 1 行出力として `String` に蓄積され、`with_output` が最後にその `String` を返す。`out!(a, b)` は空白区切り、`out!(vec)` / `out!(slice)` / `out!((a, b))` は要素を空白区切りで出力する。
 
 ```tera
+{% raw %}
+trait OutValue { ... }
+fn with_output<T>(f: impl FnOnce() -> T) -> String { ... }
+macro_rules! out { ... }
+{% endraw %}
+
 use proconio::input;
 
 {% if input_format.ok -%}
@@ -371,7 +378,10 @@ fn solve(
     {{ v.name }}: {% if v.is_size %}usize{% elif v.dim == 1 %}Vec<{% if v.var_type == "str" %}String{% else %}i64{% endif %}>{% elif v.var_type == "str" %}String{% else %}i64{% endif %},
     {% endfor -%}
 ) -> String {
-    todo!()
+    with_output(|| {
+        // TODO: write solution and call out!(answer)
+        todo!()
+    })
 }
 
 fn main() {
@@ -397,7 +407,9 @@ fn main() {
 fn solve<R: std::io::BufRead>(src: &mut impl proconio::source::Source<R>) -> String {
     // TODO: input_format.ok = false — write input manually
     // raw: {{ input_format.raw }}
-    todo!()
+    with_output(|| {
+        todo!()
+    })
 }
 
 fn main() {
