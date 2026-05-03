@@ -21,23 +21,29 @@ ce sub <contest_id> <problem_code> [solution_name]
 
 ## 挙動
 
-1. 解法ディレクトリの `ce.toml` から `language` を読む:
+1. Unix 環境では、提出前に `ce test <contest_id> <problem_code> [solution_name]` 相当のテストを実行する:
+   - 実行内容は `docs/commands/test.md` と同じ
+   - `test_command` の標準出力・標準エラーはそのまま端末に流す
+   - 終了コードが `0` の場合のみ次のステップへ進む
+   - 終了コードが `0` 以外の場合は提出 URL を生成せず、ブラウザも開かずにエラー終了する
+   - 非 Unix 環境では、`ce test` が未対応のため提出前テストをスキップし、従来通り提出 URL 生成へ進む
+2. 解法ディレクトリの `ce.toml` から `language` を読む:
    ```
    solutions/{contest_id}/{problem_code}/{solution_name}/ce.toml
    ```
    `language` フィールドは `templates/{lang}/ce.toml.tera` で定義され `ce init` / `ce solution add` 時に生成される (詳細: `docs/commands/test.md`)。
-2. `.ce.toml` から `OJKind` と `problem_id` を取得する:
+3. `.ce.toml` から `OJKind` と `problem_id` を取得する:
    - `ContestRepository::get_oj_kind(contest_id)` で `OJKind` を得る
    - `ContestRepository::get_problem(contest_id, problem_code)` で `problem_id` を得る
-3. config の `language.{language}.solution_file` からファイルパスを決定し、`SolutionRepository::get_source(solution, file_path)` でソースを読む:
+4. config の `language.{language}.solution_file` からファイルパスを決定し、`SolutionRepository::get_source(solution, file_path)` でソースを読む:
    ```
    solutions/{contest_id}/{problem_code}/{solution_name}/{solution_file}
    ```
-4. config の `language.{language}.{oj}.lang_id` を取得する
-5. 提出ページ URL を生成して標準出力に表示する
-6. 提出ページ URL をブラウザで開く (詳細: 次節)
+5. config の `language.{language}.{oj}.lang_id` を取得する
+6. 提出ページ URL を生成して標準出力に表示する
+7. 提出ページ URL をブラウザで開く (詳細: 次節)
 
-ステップ 5 の URL を開いた後、Tampermonkey userscript が問題選択・ソースコード注入を行う (詳細: `docs/userscript.md`)。
+ステップ 6 の URL を開いた後、Tampermonkey userscript が問題選択・ソースコード注入を行う (詳細: `docs/userscript.md`)。
 
 ## 提出 URL の生成
 
@@ -61,6 +67,8 @@ https://atcoder.jp/contests/{contest_id}/submit?taskScreenName={problem_id}#ce={
 
 ## エラーケース
 
+- Unix 環境で提出前テストが失敗した: 終了コードを表示してエラー終了し、提出 URL は生成しない
+- Unix 環境で提出前テストを起動できない、または `test_command` が未定義: `ce test` と同じエラーとして終了し、提出 URL は生成しない
 - 解法の `ce.toml` が存在しない: パスを表示してエラー終了
 - 提出ファイルが存在しない: パスを表示してエラー終了
 - `lang_id` が config に未設定: エラー終了

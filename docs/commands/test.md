@@ -5,6 +5,9 @@
 解法ディレクトリの `ce.toml` に定義されたテストコマンドを実行する。
 テストケースの照合方法・出力形式はテンプレートでユーザーが自由に定義する。
 
+現在の `ce test` は Unix-like shell (`sh`) が利用できる環境のみ対応する。
+非 Unix 環境では `ce test` は未対応としてエラー終了する。
+
 ## シグネチャ
 
 ```
@@ -22,10 +25,10 @@ ce test <contest_id> <problem_code> [solution_name]
 3. `test_command` を `sh -c` 経由で実行する
    - 作業ディレクトリ: 解法ディレクトリ (`solutions/{contest_id}/{problem_code}/{solution_name}/`)
    - 環境変数 `CE_TESTCASES_DIR` に `solutions/{contest_id}/testcases/{problem_code}/` の絶対パスをセット
-3. 標準出力・標準エラーはそのまま端末に流す
-4. `test_command` の終了コードをそのまま `ce test` の終了コードとして返す
+4. 標準出力・標準エラーはそのまま端末に流す
+5. `test_command` の終了コードをそのまま `ce test` の終了コードとして返す
 
-将来的には `ce sub` がこの終了コードを参照し、0 以外なら提出をスキップする想定（詳細: `docs/commands/submit.md`）。
+Unix 環境では `ce sub` が提出前にこのテスト処理を実行し、終了コードが 0 以外なら提出 URL を生成しない（詳細: `docs/commands/submit.md`）。
 
 ## テンプレートでの定義
 
@@ -50,6 +53,7 @@ ce test <contest_id> <problem_code> [solution_name]
 - 解法ディレクトリが存在しない: `ce init` を実行するよう促して exit 1
 - 解法ディレクトリはあるが `ce.toml` がない: テンプレートに `ce.toml.tera` を追加するよう促して exit 1
 - `test_command` キーが未定義: エラーメッセージを表示して exit 1
+- 非 Unix 環境で実行した: 未対応であることを表示して exit 1
 - コマンド起動失敗 (`sh` が見つからない等): エラーメッセージを表示して exit 1
 
 ---
