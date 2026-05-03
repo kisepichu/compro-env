@@ -22,10 +22,10 @@ ce test <contest_id> <problem_code> [solution_name]
 3. `test_command` を `sh -c` 経由で実行する
    - 作業ディレクトリ: 解法ディレクトリ (`solutions/{contest_id}/{problem_code}/{solution_name}/`)
    - 環境変数 `CE_TESTCASES_DIR` に `solutions/{contest_id}/testcases/{problem_code}/` の絶対パスをセット
-3. 標準出力・標準エラーはそのまま端末に流す
-4. `test_command` の終了コードをそのまま `ce test` の終了コードとして返す
+4. 標準出力・標準エラーはそのまま端末に流す
+5. `test_command` の終了コードをそのまま `ce test` の終了コードとして返す
 
-将来的には `ce sub` がこの終了コードを参照し、0 以外なら提出をスキップする想定（詳細: `docs/commands/submit.md`）。
+`ce sub` は提出前にこのテスト処理を実行し、終了コードが 0 以外なら提出 URL を生成しない（詳細: `docs/commands/submit.md`）。
 
 ## テンプレートでの定義
 

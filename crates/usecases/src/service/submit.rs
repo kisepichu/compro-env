@@ -12,6 +12,14 @@ impl Service {
         problem_code: &str,
         solution_name: &str,
     ) -> Result<SubmitResult> {
+        // 0. Run the solution's test command before preparing submission.
+        let test_exit_code = self.test(contest_id, problem_code, solution_name)?;
+        if test_exit_code != 0 {
+            anyhow::bail!(
+                "pre-submit tests failed with exit code {test_exit_code}; submission skipped"
+            );
+        }
+
         // 1. Locate solution directory and read ce.toml for language.
         let solution_dir = self
             .solution_repo
@@ -89,7 +97,7 @@ impl Service {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use crate::{
         config::Config,
@@ -108,6 +116,7 @@ mod tests {
 
     struct StubOJ {
         submit_url: String,
+        panic_on_build_submit_url: bool,
     }
     impl OnlineJudge for StubOJ {
         fn name(&self) -> &str {
@@ -128,6 +137,9 @@ mod tests {
             todo!()
         }
         fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
+            if self.panic_on_build_submit_url {
+                panic!("build_submit_url must not be called");
+            }
             self.submit_url.clone()
         }
     }
@@ -244,9 +256,13 @@ mod tests {
         source: Option<String>,
         lang_id: Option<String>,
         submit_url: String,
+        panic_on_build_submit_url: bool,
     ) -> Service {
         Service::new(
-            Box::new(StubOJ { submit_url }),
+            Box::new(StubOJ {
+                submit_url,
+                panic_on_build_submit_url,
+            }),
             Box::new(StubContestRepo {
                 problem: default_problem(),
             }),
@@ -268,7 +284,11 @@ mod tests {
     #[test]
     fn submit_happy_path_returns_submission_url() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("ce.toml"), "language = \"rust\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            "language = \"rust\"\ntest_command = \"exit 0\"\n",
+        )
+        .unwrap();
         let expected_url =
             "https://atcoder.jp/contests/abc001/submit?taskScreenName=abc001_a#ce=XXX".to_string();
         let service = make_service(
@@ -276,9 +296,33 @@ mod tests {
             Some("fn main() {}".to_string()),
             Some("6088".to_string()),
             expected_url.clone(),
+            false,
         );
         let result = service.submit("abc001", "a", "main").unwrap();
         assert_eq!(result.submission_url, expected_url);
+    }
+
+    /// A non-zero pre-submit test exits before source reading or URL generation.
+    #[test]
+    fn submit_skips_when_pre_submit_test_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            "language = \"rust\"\ntest_command = \"exit 7\"\n",
+        )
+        .unwrap();
+        let service = make_service(
+            dir.path().to_path_buf(),
+            Some("fn main() {}".to_string()),
+            Some("6088".to_string()),
+            "https://example.com".to_string(),
+            true,
+        );
+        let err = service.submit("abc001", "a", "main").unwrap_err();
+        assert!(
+            err.to_string().contains("submission skipped"),
+            "unexpected error: {err}"
+        );
     }
 
     /// ce.toml missing in solution dir => error message contains "ce.toml".
@@ -290,6 +334,7 @@ mod tests {
             Some("fn main() {}".to_string()),
             Some("6088".to_string()),
             "https://example.com".to_string(),
+            false,
         );
         let err = service.submit("abc001", "a", "main").unwrap_err();
         assert!(
@@ -302,16 +347,13 @@ mod tests {
     #[test]
     fn submit_errors_when_language_key_missing_in_ce_toml() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("ce.toml"),
-            "test_command = \"cargo test\"\n",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("ce.toml"), "test_command = \"exit 0\"\n").unwrap();
         let service = make_service(
             dir.path().to_path_buf(),
             Some("fn main() {}".to_string()),
             Some("6088".to_string()),
             "https://example.com".to_string(),
+            false,
         );
         let err = service.submit("abc001", "a", "main").unwrap_err();
         assert!(
@@ -324,12 +366,17 @@ mod tests {
     #[test]
     fn submit_errors_when_source_file_missing() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("ce.toml"), "language = \"rust\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            "language = \"rust\"\ntest_command = \"exit 0\"\n",
+        )
+        .unwrap();
         let service = make_service(
             dir.path().to_path_buf(),
             None, // get_source returns Err
             Some("6088".to_string()),
             "https://example.com".to_string(),
+            false,
         );
         let err = service.submit("abc001", "a", "main").unwrap_err();
         assert!(
@@ -342,12 +389,17 @@ mod tests {
     #[test]
     fn submit_errors_when_lang_id_not_configured() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("ce.toml"), "language = \"rust\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            "language = \"rust\"\ntest_command = \"exit 0\"\n",
+        )
+        .unwrap();
         let service = make_service(
             dir.path().to_path_buf(),
             Some("fn main() {}".to_string()),
             None, // lang_id returns None
             "https://example.com".to_string(),
+            false,
         );
         let err = service.submit("abc001", "a", "main").unwrap_err();
         assert!(
