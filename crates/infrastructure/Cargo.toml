@@ -1,0 +1,24 @@
+[package]
+name = "infrastructure"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+domain = { workspace = true }
+usecases = { workspace = true }
+interfaces = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["blocking", "cookies"] }
+toml = "0.8"
+tera = "1"
+walkdir = "2"
+serde_json = "1"
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"
+serial_test = "3"

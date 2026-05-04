@@ -1,0 +1,85 @@
+# ce submit (ce sub)
+
+## 概要
+
+解法をブラウザで提出する。`ce sub` は `ce submit` のエイリアス。
+
+AtCoder は Cloudflare Turnstile を導入しており、HTTP 直接送信でのボット提出がブロックされる。
+そのため `ce submit` は提出内容を URL フラグメントに埋め込んでブラウザで提出ページを開く。
+ブラウザに Tampermonkey userscript を導入することで問題選択・ソースコード注入を自動化できる。
+
+## シグネチャ
+
+```
+ce submit <contest_id> <problem_code> [solution_name]
+ce sub <contest_id> <problem_code> [solution_name]
+```
+
+- `contest_id`: コンテスト ID
+- `problem_code`: 問題コード
+- `solution_name`: 解法名 (省略時: `main`)
+
+## 挙動
+
+1. Unix 環境では、提出前に `ce test <contest_id> <problem_code> [solution_name]` 相当のテストを実行する:
+   - 実行内容は `docs/commands/test.md` と同じ
+   - `test_command` の標準出力・標準エラーはそのまま端末に流す
+   - 終了コードが `0` の場合のみ次のステップへ進む
+   - 終了コードが `0` 以外の場合は提出 URL を生成せず、ブラウザも開かずにエラー終了する
+   - 非 Unix 環境では、`ce test` が未対応のため提出前テストをスキップし、従来通り提出 URL 生成へ進む
+2. 解法ディレクトリの `ce.toml` から `language` を読む:
+   ```
+   solutions/{contest_id}/{problem_code}/{solution_name}/ce.toml
+   ```
+   `language` フィールドは `templates/{lang}/ce.toml.tera` で定義され `ce init` / `ce solution add` 時に生成される (詳細: `docs/commands/test.md`)。
+3. `.ce.toml` から `OJKind` と `problem_id` を取得する:
+   - `ContestRepository::get_oj_kind(contest_id)` で `OJKind` を得る
+   - `ContestRepository::get_problem(contest_id, problem_code)` で `problem_id` を得る
+4. config の `language.{language}.solution_file` からファイルパスを決定し、`SolutionRepository::get_source(solution, file_path)` でソースを読む:
+   ```
+   solutions/{contest_id}/{problem_code}/{solution_name}/{solution_file}
+   ```
+5. config の `language.{language}.{oj}.lang_id` を取得する
+6. 提出ページ URL を生成して標準出力に表示する
+7. 提出ページ URL をブラウザで開く (詳細: 次節)
+
+ステップ 6 の URL を開いた後、Tampermonkey userscript が問題選択・ソースコード注入を行う (詳細: `docs/userscript.md`)。
+
+## 提出 URL の生成
+
+```
+https://atcoder.jp/contests/{contest_id}/submit?taskScreenName={problem_id}#ce={payload}
+```
+
+- `?taskScreenName={problem_id}`: AtCoder の submit ページが対応している既存クエリパラメータ。問題プルダウンを `problem_id` で事前選択する
+- `#ce={payload}`: userscript が読む URL フラグメント
+
+`payload` は以下の JSON を URL-safe base64 (RFC 4648 §5、パディング `=` あり) でエンコードしたもの:
+
+```json
+{"lang_id": "6088", "source": "fn main() { ... }"}
+```
+
+ブラウザで URL を開く際は OS のデフォルトブラウザを使用する:
+- Linux: `xdg-open <url>`
+- macOS: `open <url>`
+- Windows: `explorer.exe <url>`
+
+## エラーケース
+
+- Unix 環境で提出前テストが失敗した: 終了コードを表示してエラー終了し、提出 URL は生成しない
+- Unix 環境で提出前テストを起動できない、または `test_command` が未定義: `ce test` と同じエラーとして終了し、提出 URL は生成しない
+- 解法の `ce.toml` が存在しない: パスを表示してエラー終了
+- 提出ファイルが存在しない: パスを表示してエラー終了
+- `lang_id` が config に未設定: エラー終了
+
+## 将来拡張
+
+- リアルタイムモード: `ce sub a` (cwd から `contest_id` を自動検出)
+- 提出後の結果をポーリングして表示 (ブラウザから提出 URL を受け取る方法が別途必要)
+- `submit_preprocess`: バンドル等を実行して stdout を提出内容とする
+
+## 既知の技術的負債
+
+- **`Config` trait の戻り値**: `lang_id()` / `submit_file()` は設定読み込み失敗時に `eprintln!` して `None`/デフォルト値にフォールバックする。`Result` を返して呼び出し側でハンドリングすべき。変更には `usecases/src/config.rs` の trait 定義と 4 サービスのテストスタブ変更が必要。
+- **`submit_file()` のデフォルト値**: 言語問わず `"src/main.rs"` にフォールバックする。C++ テンプレートは `main.cpp` を使うため不整合。言語ごとのデフォルトパスを持つべき。

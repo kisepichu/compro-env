@@ -1,0 +1,68 @@
+use anyhow::Result;
+use usecases::service::Service;
+
+pub mod input;
+use input::{InitInput, LoginInput, LogoutInput, NewInput, SubmitInput, TestInput, WhoamiInput};
+
+pub struct Controller {
+    service: Service,
+}
+
+impl Controller {
+    pub fn new(service: Service) -> Self {
+        Self { service }
+    }
+
+    pub fn login(&self, args: &dyn LoginInput) -> Result<()> {
+        self.service.login(args.oj(), args.cookie())
+    }
+
+    pub fn whoami(&self, args: &dyn WhoamiInput) -> Result<String> {
+        self.service.whoami(&args.oj())
+    }
+
+    pub fn logout(&self, args: &dyn LogoutInput) -> Result<bool> {
+        self.service.logout(&args.oj())
+    }
+
+    pub fn init(
+        &self,
+        args: &dyn InitInput,
+        on_progress: &dyn Fn(&str),
+    ) -> Result<usecases::service::init::InitResult> {
+        self.service
+            .init(&args.contest_id(), args.oj(), &args.language(), on_progress)
+    }
+
+    pub fn new_solution(&self, args: &dyn NewInput) -> Result<()> {
+        use domain::entity::Solution;
+        let problem_code = args.problem_code();
+        let solution = Solution {
+            contest_id: args.contest_id(),
+            // problem_title is not available at this call site; fall back to the
+            // problem code so that template variables like {{problem.title}} are
+            // non-empty rather than blank.
+            problem_title: problem_code.clone(),
+            problem_code,
+            name: args.solution_name(),
+            language: args.language(),
+        };
+        self.service.new_solution(solution)
+    }
+
+    pub fn test(&self, args: &dyn TestInput) -> Result<i32> {
+        self.service.test(
+            &args.contest_id(),
+            &args.problem_code(),
+            &args.solution_name(),
+        )
+    }
+
+    pub fn submit(&self, args: &dyn SubmitInput) -> Result<domain::entity::SubmitResult> {
+        self.service.submit(
+            &args.contest_id(),
+            &args.problem_code(),
+            &args.solution_name(),
+        )
+    }
+}

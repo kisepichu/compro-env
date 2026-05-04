@@ -1,0 +1,29 @@
+language = "cpp"
+test_command = """
+g++ -std=gnu++17 -O2 -o a.out main.cpp || exit 1
+set -- "$CE_TESTCASES_DIR"/*.in
+if [ ! -e "$1" ]; then echo "no testcases found in $CE_TESTCASES_DIR"; exit 1; fi
+result=0
+for f in "$@"; do
+    expected_file="${f%.in}.out"
+    actual_file=$(mktemp "${TMPDIR:-/tmp}/ce_actual.XXXXXX") || exit 1
+    stderr_file=$(mktemp "${TMPDIR:-/tmp}/ce_stderr.XXXXXX") || { rm -f "$actual_file"; exit 1; }
+    if ./a.out < "$f" > "$actual_file" 2> "$stderr_file"; then
+        if diff -u "$expected_file" "$actual_file" > /dev/null; then
+            echo "AC: $(basename "$f")"
+        else
+            echo "WA: $(basename "$f")"
+            diff -u "$expected_file" "$actual_file"
+            result=1
+        fi
+    else
+        exit_code=$?
+        echo "RE: $(basename "$f") (exit code: $exit_code)"
+        if [ -s "$actual_file" ]; then echo "--- stdout ---"; cat "$actual_file"; fi
+        if [ -s "$stderr_file" ]; then echo "--- stderr ---" >&2; cat "$stderr_file" >&2; fi
+        result=1
+    fi
+    rm -f "$actual_file" "$stderr_file"
+done
+exit $result
+"""

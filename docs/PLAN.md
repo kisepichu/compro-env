@@ -1,20 +1,49 @@
-(WIP)
+# PLAN
 
-大まかに手順予定 変更可
+壁打ちしながら更新。未決事項は `docs/spec.md` の Q リストを参照。
 
-- IDEA.md をもとに人間と壁打ち、 PLAN.md 等にまとめる
-  - claude code 自走のための最低限の環境構築。細かい改善は並行して行う
-- 要件定義
-  - md で書けば良さそう? xxx 機能 で docs/spec/xxx.md などに分けて md を作り、各ファイル下部に質問リストを作ってもらうとか?
-- ドメインモデル図
-  - これとかは AI を用いた開発の方法を学んでいく。ドメインモデル図とかを draw.io などで以前書いていたが、 AI は書けるのか? 下も合わせて md で書けるものは全て md で書くべきかも
-- ユースケース図
-- ER 図
-- シーケンス図
-- ディレクトリ構造を決めて骨格部分のコードを書き todo!() で埋める
-- ドメインモデルや ER 図をコードに落とす
-- 開発ドキュメントを参照しながら、残りの機能を基本的な方から進める。
+## 開発フロー (予定)
 
-  - https://zenn.dev/nagano_it/articles/spec-driven-development-claudecode-2025 のように、開発ドキュメントと実装を常に同期させるなんらかの仕組みは作りたい。 この方法は開発初期の機能追加ではなく全体の枠組みの実装部分では使えないかもしれないが。
+1. **壁打ち・仕様まとめ** ← 今ここ
+   - IDEA.md をもとに壁打ちし `docs/spec.md` に仕様を固める
+2. **ドメインモデル設計**
+   - エンティティ・値オブジェクト・集約を確定 (spec.md のモデルをベースに)
+3. **ディレクトリ骨格 + `todo!()` 実装**
+4. **MVP 機能を順に実装**
+   - login → init → test → solution add → submit
+5. **仕様と実装の同期を保ちながら拡張**
 
-  ...
+## 確定事項
+
+| 項目 | 決定内容 |
+|------|----------|
+| ツール名 | `compro-env` / コマンド `ce` |
+| 実装言語 | Rust |
+| MVP スコープ | login, init, test, solution add, submit |
+| AtCoder ログイン | `REVEL_SESSION` 手動コピー (aclogin 方式を自前実装) |
+| oj 連携 | なし (Cloudflare Turnstile で破綻中) |
+| ディレクトリ構造 | `solutions/{contest_id}/{problem_code}/{solution_name}/` |
+| テストケース置き場 | `solutions/{contest_id}/testcases/{problem_code}/` (言語共通) |
+| solution_name デフォルト | `main` |
+| init の挙動 | サンプル取得 + ディレクトリ作成 (MVP)。テスト生成は将来 |
+| OJ 判定 | プレフィックスで自動判定 + URL 対応 + 不明時は stdin |
+| コンフィグ | グローバル `~/.config/ce/` + プロジェクトローカル 2 段階 |
+| テンプレート | `templates/{lang}/` が解法ディレクトリ 1 つ分のテンプレート。言語はユーザー追加可能 |
+| エラー設計 | `anyhow` + `thiserror`、型パラメータなし |
+| コンテキスト検出 | カレントディレクトリから `contest_id` を自動検出 |
+
+## giming から引き継ぐ設計
+
+- 4 層構造: domain / usecases / interfaces / infrastructure
+- `OnlineJudge` trait をポートとして usecases に置く
+- Repository trait を usecases に置き、実装は infrastructure
+
+## giming から改善する設計
+
+| giming の問題点 | 改善方針 |
+|----------------|----------|
+| `E: Error + 'static` が全体に伝播 | `anyhow` + `thiserror` に統一 |
+| `WorkProblem<'p>` がライフタイム参照 | データを所有する形に変更 |
+| `IOSpec` が domain 層にある | MVP では不要、将来拡張で追加 |
+| `Solution` エンティティが未定義 | domain に `Solution` を追加、`SolutionRepository` も定義 |
+| `WorkspaceRepository` のみ | `ContestRepository` + `SolutionRepository` に分割 |
