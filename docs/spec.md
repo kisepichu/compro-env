@@ -363,8 +363,7 @@ infrastructure/
 
 | 非対応パターン | 確認問題 |
 | --- | --- |
-| クエリ型: `\text{query}_i` / `\mathrm{Query}_i` | abc241-D, abc248-D |
-| クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 | abc241-D, typical90-L |
+| クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 (`\text{}` マーカーなし) | typical90-L |
 | T-testcases 型: pre[0]=`T` 単独 + pre[1]=ケース形式 | abc238-D |
 | 可変長行: `T_i K_i A_{i,1} \ldots A_{i,K_i}` | abc226-C |
 | 斜め・上三角行列: 行ごとに長さが異なる | abc236-D |

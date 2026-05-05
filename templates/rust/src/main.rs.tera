@@ -130,24 +130,24 @@ fn out_newline() {
     OUTPUT.with(|out| out.borrow_mut().push('\n'));
 }
 
-fn with_output<T>(f: impl FnOnce() -> T) -> String {
+fn with_output(f: impl FnOnce()) -> String {
     out_clear();
     f();
     out_take()
 }
 
 macro_rules! out {
-    () => {
+    () => {{
         out_newline();
-    };
-    ($first:expr $(, $rest:expr)* $(,)?) => {
+    }};
+    ($first:expr $(, $rest:expr)* $(,)?) => {{
         out_write(&$first);
         $(
             out_space();
             out_write(&$rest);
         )*
         out_newline();
-    };
+    }};
 }
 
 {% endraw -%}
@@ -192,12 +192,20 @@ fn main() {
     {% elif op.tag == "loop_begin" -%}
     {% set next_index = loop.index0 + 1 -%}
     {% set body_op = input_format.ops[next_index] -%}
+    {% if body_op.tag == "loop_end" -%}
+    // TODO: read {{ op.end }} queries in a loop — write manually
+    for _ in 0..{{ op.end }} {
+        // input! { t: usize, ... }
+        todo!()
+    }
+    {% else -%}
     {% for v in body_op.vars -%}
     {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
     let mut {{ v.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}> = Vec::new();
     {% endfor -%}
     for _ in 0..{{ op.end }} {
         input! {
+    {% endif -%}
     {% elif op.tag == "read_line" and op.depth > 0 -%}
             {% for v in op.vars -%}
             {% if v.index -%}
@@ -206,13 +214,15 @@ fn main() {
             {% endif -%}
             {% endfor -%}
     {% elif op.tag == "loop_end" -%}
+    {% set prev_index = loop.index0 - 1 -%}
+    {% set body_op = input_format.ops[prev_index] -%}
+    {% if body_op.tag != "loop_begin" -%}
         }
-        {% set prev_index = loop.index0 - 1 -%}
-        {% set body_op = input_format.ops[prev_index] -%}
         {% for v in body_op.vars -%}
         {{ v.name }}.push(__tmp_{{ v.name }});
         {% endfor -%}
     }
+    {% endif -%}
     {% endif -%}
     {% endfor -%}
     print!("{}", solve({{ input_format.vars | map(attribute="name") | join(sep=", ") }}));
