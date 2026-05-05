@@ -314,6 +314,7 @@ VarRef フィールド:
 | 文字グリッド (2D添字) | `S_{11}...S_{1W}` / `:` / `S_{H1}...S_{HW}` | abc151-D, abc176-D |
 | 添字付きスカラー (アルファベット添字) | `A_x A_y` | abc246-E |
 | 添字付きスカラー (数値添字・vdots なし) | `r_1 c_1` / `r_2 c_2` (各行独立) | abc176-D |
+| クエリ型 (`\text{query}_Q` または `\mathrm{Query}_Q`) | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` | abc241-D, abc248-D |
 
 **前処理**: `\hspace{0.4cm}\vdots` は `\vdots` に正規化する。また `:` のみの行も `\vdots` と等価に扱う (トークナイザーレベルで正規化)。
 
@@ -334,8 +335,7 @@ VarRef フィールド:
 
 | 非対応パターン | 例 | 確認問題 |
 | --- | --- | --- |
-| クエリ型 (複数 pre ブロック + `\text{query}`) | `Q\nquery_1\n\vdots` | abc241-D, typical90-L |
-| クエリ型 (`\mathrm{Query}`) | `\mathrm{Query}_1` | abc248-D |
+| クエリ型 (複数 pre ブロック + 数字サブ形式、`\text{}` マーカーなし) | `Q\nquery_1\n\vdots` | typical90-L |
 | T-testcases 型 (pre[0]=`T`, pre[1]=形式) | `T\n\n a s` | abc238-D |
 | 可変長行 (サイズが変数) | `T_i K_i A_{i,1} \ldots A_{i,K_i}` | abc226-C |
 | 斜め・上三角行列 | `A_{1,2} \cdots A_{1,2N}` / `\vdots` | abc236-D |
