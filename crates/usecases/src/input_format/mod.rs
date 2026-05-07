@@ -1461,12 +1461,20 @@ fn parse_query_subblocks(
                         _ => None,
                     };
                     if let Some(raw_vars) = raw_vars_opt {
-                        let math_names: Vec<String> =
-                            raw_vars.iter().map(|v| v.math.clone()).collect();
+                        // Use math+subscript as name seed so that subscripted vars
+                        // like x_1 / x_2 yield distinct identifiers (x1, x2).
+                        let seeds: Vec<String> = raw_vars
+                            .iter()
+                            .map(|rv| match &rv.subscript {
+                                Some(s) => format!("{}{}", rv.math, s),
+                                None => rv.math.clone(),
+                            })
+                            .collect();
                         let mut var_decls: Vec<VarDecl> = raw_vars
                             .iter()
-                            .map(|rv| {
-                                let name = normalize_name(&rv.math, &math_names);
+                            .zip(seeds.iter())
+                            .map(|(rv, seed)| {
+                                let name = normalize_name(seed, &seeds);
                                 VarDecl {
                                     name,
                                     math: rv.math.clone(),
@@ -1518,11 +1526,20 @@ fn parse_query_subblocks(
         }
 
         // Build local VarDecl list (independent scope from main vars).
-        let math_names: Vec<String> = raw_vars.iter().map(|v| v.math.clone()).collect();
+        // Use math+subscript as name seed so that subscripted vars like x_1 / x_2
+        // yield distinct identifiers (x1, x2) rather than colliding as x.
+        let seeds: Vec<String> = raw_vars
+            .iter()
+            .map(|rv| match &rv.subscript {
+                Some(s) => format!("{}{}", rv.math, s),
+                None => rv.math.clone(),
+            })
+            .collect();
         let mut var_decls: Vec<VarDecl> = raw_vars
             .iter()
-            .map(|rv| {
-                let name = normalize_name(&rv.math, &math_names);
+            .zip(seeds.iter())
+            .map(|(rv, seed)| {
+                let name = normalize_name(seed, &seeds);
                 VarDecl {
                     name,
                     math: rv.math.clone(),
