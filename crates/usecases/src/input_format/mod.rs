@@ -2356,7 +2356,7 @@ mod tests {
 
     /// abc334-D style: sub-block starts with ident (not digit) → query_body populated
     #[test]
-    fn query_subblock_non_numeric_skipped() {
+    fn query_body_single_var() {
         let spec =
             scalar_ok("N Q\nR_1 \\ldots R_N\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\nX\n");
         assert!(spec.ok, "expected ok=true");

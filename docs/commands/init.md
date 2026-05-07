@@ -464,28 +464,33 @@ macro_rules! out { ... }
 use proconio::input;
 
 {% if input_format.ok -%}
+use proconio::input;
+
+{# クエリ型ループ検出: LoopBegin の直後が LoopEnd (empty body) = QueryLine 由来 #}
+{% set_global query_loop_end = "" -%}
+{% for i in range(end=input_format.ops | length) -%}
+{% set op = input_format.ops[i] -%}
+{% if op.tag == "loop_begin" -%}
+{% set next_i = i + 1 -%}
+{% if input_format.ops[next_i] is defined and input_format.ops[next_i].tag == "loop_end" -%}
+{% set_global query_loop_end = op.end -%}
+{% endif -%}
+{% endif -%}
+{% endfor -%}
 fn solve(
-    {% for v in input_format.vars -%}
-    {{ v.name }}: {% if v.is_size %}usize{% elif v.dim == 1 %}Vec<{% if v.var_type == "str" %}String{% else %}i64{% endif %}>{% elif v.var_type == "str" %}String{% else %}i64{% endif %},
-    {% endfor -%}
+    {%- for vd in input_format.vars %}
+    {% if vd.dim == 0 -%}
+    {{ vd.name }}: {% if vd.is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
+    {%- elif vd.dim == 1 -%}
+    {{ vd.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}>,
+    {%- endif %}
+    {%- endfor %}
 ) -> String {
     with_output(|| {
-        {# クエリ型ループ検出: LoopBegin の直後が LoopEnd (empty body) = QueryLine 由来 #}
-        {% set ns = namespace(query_loop_end="", in_query_loop=false) -%}
-        {% for idx in range(end=input_format.ops | length) -%}
-        {% set op = input_format.ops[idx] -%}
-        {% if op.tag == "loop_begin" -%}
-        {% set next = input_format.ops[idx + 1] -%}
-        {% if next.tag == "loop_end" -%}
-        {% set_global ns.query_loop_end = op.end -%}
-        {% set_global ns.in_query_loop = true -%}
-        {% endif -%}
-        {% endif -%}
-        {% endfor -%}
-        {% if ns.in_query_loop -%}
+        {% if query_loop_end != "" -%}
         {% if input_format.query_types | length > 0 -%}
         {# 複数種別クエリ: match dispatch を生成 #}
-        for _ in 0..{{ ns.query_loop_end }} {
+        for _ in 0..{{ query_loop_end }} {
             input! { query_type: usize, }
             match query_type {
                 {% for qt in input_format.query_types -%}
@@ -506,7 +511,7 @@ fn solve(
         }
         {% elif input_format.query_body | length > 0 -%}
         {# 単一形式クエリ (非数値先頭 sub-block): 変数入力付きループを生成 #}
-        for _ in 0..{{ ns.query_loop_end }} {
+        for _ in 0..{{ query_loop_end }} {
             input! {
                 {% for v in input_format.query_body -%}
                 {{ v.name }}: {% if v.var_type == "str" %}String{% else %}i64{% endif %},
@@ -517,7 +522,7 @@ fn solve(
         }
         {% else -%}
         {# 単一形式クエリ (sub-block なし): ループスタブを生成 #}
-        for _ in 0..{{ ns.query_loop_end }} {
+        for _ in 0..{{ query_loop_end }} {
             // TODO: read and handle query
             todo!()
         }
@@ -534,24 +539,46 @@ fn main() {
     {% if op.tag == "read_line" and op.depth == 0 -%}
     input! {
         {% for v in op.vars -%}
-        {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
         {% if v.dim == 0 -%}
+        {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
         {{ v.name }}: {% if vd.is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
-        {% elif v.size -%}
+        {% elif v.dim == 1 -%}
+        {% if v.size -%}
+        {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
         {{ v.name }}: [{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ v.size }}],
+        {% endif -%}
         {% endif -%}
         {% endfor -%}
     }
     {% elif op.tag == "loop_begin" -%}
-    {% set next_op = input_format.ops[loop.index0 + 1] -%}
-    {% if next_op.tag != "loop_end" -%}
-    {# 非空ループ (通常の multi-var ループ): main に生成 #}
-    // TODO: read {{ op.end }} items in a loop — write manually
+    {% set next_index = loop.index0 + 1 -%}
+    {% set body_op = input_format.ops[next_index] -%}
+    {% if body_op.tag == "loop_end" -%}
+    {# empty-body loop (QueryLine origin) — handled in solve, skip in main #}
+    {% else -%}
+    {% for v in body_op.vars -%}
+    {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
+    let mut {{ v.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}> = Vec::new();
+    {% endfor -%}
     for _ in 0..{{ op.end }} {
-        // input! { ... }
-        todo!()
+        input! {
+    {% endif -%}
+    {% elif op.tag == "read_line" and op.depth > 0 -%}
+            {% for v in op.vars -%}
+            {% if v.index -%}
+            {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
+            __tmp_{{ v.name }}: {% if vd.var_type == "str" %}String{% else %}i64{% endif %},
+            {% endif -%}
+            {% endfor -%}
+    {% elif op.tag == "loop_end" -%}
+    {% set prev_index = loop.index0 - 1 -%}
+    {% set body_op = input_format.ops[prev_index] -%}
+    {% if body_op.tag != "loop_begin" -%}
+        }
+        {% for v in body_op.vars -%}
+        {{ v.name }}.push(__tmp_{{ v.name }});
+        {% endfor -%}
     }
-    {# empty-body ループ (QueryLine 由来) は solve 側に生成するため main では生成しない #}
     {% endif -%}
     {% endif -%}
     {% endfor -%}
@@ -560,7 +587,6 @@ fn main() {
 {% else -%}
 fn solve<R: std::io::BufRead>(src: &mut impl proconio::source::Source<R>) -> String {
     // TODO: input_format.ok = false — write input manually
-    // raw: {{ input_format.raw }}
     with_output(|| {
         todo!()
     })
