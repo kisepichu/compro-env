@@ -34,11 +34,11 @@ query_Q
 
 ### 実装: `has_query_marker`
 
-- [x] block0 の単語を split して `"query"` (case-insensitive) が含まれれば `true`
+- [x] 各行を tokenize し、その行が `QueryLine` として parse できるかで marker 有無を判定
 
 ### 実装: `parse_line` の QueryLine 検出
 
-- [x] `Ident(s) where s.to_ascii_lowercase() == "query"` を検出条件に追加
+- [x] `query` 識別子判定を `is_query_ident` に集約し、`eq_ignore_ascii_case` を用いる実装に反映
 
 ## 完了条件
 
