@@ -186,6 +186,13 @@ enum ParseError {
     Unknown,
 }
 
+/// Returns true when `s` is the literal word "query" (case-insensitive).
+/// Used by `parse_line` for QueryLine detection; `has_query_marker` is consistent
+/// by delegating to `parse_line` rather than calling this directly.
+fn is_query_ident(s: &str) -> bool {
+    s.eq_ignore_ascii_case("query")
+}
+
 fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
     // Strip leading/trailing Space tokens
     let tokens = strip_spaces(tokens);
@@ -198,28 +205,51 @@ fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
         return Ok(RawLine::Scalars(vec![]));
     }
 
-    // Check for \text{} or \mathrm{} tokens → query placeholder line.
-    // A valid query line is exactly: \text{...}_<subscript> or \mathrm{...}_<subscript>.
-    // Anything else (extra tokens, missing subscript) falls through to Err.
-    let query_pos = tokens.iter().position(
+    // Check for LaTeX query placeholder tokens → QueryLine.
+    // \text{...} / \mathrm{...} must be followed by _<subscript>; without one → malformed error.
+    let latex_query_pos = tokens.iter().position(
         |t| matches!(t, Token::Ident(s) if s.starts_with("\\text{") || s.starts_with("\\mathrm{")),
     );
-    if let Some(pos) = query_pos {
-        // Must be the only meaningful token (at position 0 after strip_spaces)
+    if let Some(pos) = latex_query_pos {
         if pos != 0 {
             return Err(ParseError::Unknown);
         }
-        // Expect: _<subscript> and nothing after
         if tokens.get(pos + 1) == Some(&Token::Subscript) {
             let (loop_bound, advance) =
                 read_subscript_value(&tokens[pos + 2..]).ok_or(ParseError::Unknown)?;
-            // Nothing should follow
             if pos + 2 + advance != tokens.len() {
                 return Err(ParseError::Unknown);
             }
             return Ok(RawLine::QueryLine { loop_bound });
         }
-        return Err(ParseError::Unknown);
+        return Err(ParseError::Unknown); // LaTeX query form without subscript is malformed
+    }
+
+    // Check for plain-text "query" as a query marker, but only when followed by _<subscript>.
+    // Without a subscript, fall through to normal scalar parsing so that a variable literally
+    // named `query` is not misidentified as a loop marker.
+    let plain_query_pos = tokens.iter().enumerate().find_map(|(i, t)| {
+        if let Token::Ident(s) = t {
+            if is_query_ident(s) && tokens.get(i + 1) == Some(&Token::Subscript) {
+                Some(i)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    });
+    if let Some(pos) = plain_query_pos {
+        if pos != 0 {
+            return Err(ParseError::Unknown);
+        }
+        // tokens[pos+1] is Token::Subscript (guaranteed by find_map above)
+        let (loop_bound, advance) =
+            read_subscript_value(&tokens[pos + 2..]).ok_or(ParseError::Unknown)?;
+        if pos + 2 + advance != tokens.len() {
+            return Err(ParseError::Unknown);
+        }
+        return Ok(RawLine::QueryLine { loop_bound });
     }
 
     // Try to detect a character grid row: X_{row,col_start}...X_{row,col_end}
@@ -1025,10 +1055,17 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     // Phase 2 early detection
     let block0 = blocks[0];
 
-    // Whether block0 contains a query-placeholder marker (\text{...} or \mathrm{...}).
-    // If so, we attempt to parse block0 normally (QueryLine handling in parse_line/build_intermediate)
-    // rather than rejecting early.
-    let has_query_marker = block0.contains("\\text{") || block0.contains("\\mathrm{");
+    // Whether block0 contains a query-placeholder marker.
+    // Evaluated only when blocks.len() > 1 (short-circuit &&) to avoid the tokenize +
+    // parse_line pass on single-block inputs where the value is unused.
+    // Detection reuses parse_line so the rule stays consistent with actual QueryLine parsing:
+    // \text{...}_Q, \mathrm{...}_Q, or query_Q (plain-text, subscript required).
+    // A standalone `query` without a subscript does NOT count as a marker.
+    let has_query_marker = blocks.len() > 1
+        && block0.lines().any(|line| {
+            let tokens = tokenize_line(line);
+            matches!(parse_line(&tokens), Ok(RawLine::QueryLine { .. }))
+        });
 
     // Check for multiple blocks (only reject non-query multi-block forms)
     if blocks.len() > 1 && !has_query_marker {
@@ -1801,12 +1838,13 @@ mod tests {
     // ── Phase 2: multiple blocks (non-query digit sub-format) → still ok=false
 
     /// Two \\n\\n-separated blocks where block[1] starts with a digit and no query marker
+    /// Uses q_i (short ident, not "query") → no marker detected → ok=false
     #[test]
     fn multi_block_digit_no_query_marker_not_ok() {
-        let spec = scalar_ok("Q\nquery_1\n\\vdots\nquery_Q\n\n1 x\n\n2 x k");
+        let spec = scalar_ok("Q\nq_1\n\\vdots\nq_Q\n\n1 x\n\n2 x k");
         assert!(
             !spec.ok,
-            "expected ok=false for multi-block query sub-format without \\text{{}} marker"
+            "expected ok=false for multi-block with short q_i marker (not 'query')"
         );
     }
 
@@ -2428,5 +2466,52 @@ mod tests {
             0,
             "query_body must be empty when query_types is non-empty"
         );
+    }
+
+    // ── plain-text query marker (query_i pattern) ────────────────────────────
+
+    /// abc212-D style: plain-text "query_i" with ":" vdots separator
+    #[test]
+    fn plain_query_marker_abc212d() {
+        // Q\nquery_1\nquery_2\n:\nquery_Q\n\n1 X\n\n2 X\n\n3\n
+        let spec = scalar_ok("Q\nquery_1\nquery_2\n:\nquery_Q\n\n1 X\n\n2 X\n\n3\n");
+        assert!(spec.ok, "expected ok=true for plain query_i marker");
+        assert_eq!(spec.query_types.len(), 3, "expected 3 query types");
+        assert_eq!(spec.query_types[0].type_id, "1");
+        assert!(spec.query_types[0].ok);
+        assert_eq!(spec.query_types[0].vars.len(), 1);
+        assert_eq!(spec.query_types[0].vars[0].name, "x");
+        assert_eq!(spec.query_types[1].type_id, "2");
+        assert!(spec.query_types[1].ok);
+        assert_eq!(spec.query_types[1].vars.len(), 1);
+        assert_eq!(spec.query_types[2].type_id, "3");
+        assert!(spec.query_types[2].ok);
+        assert_eq!(spec.query_types[2].vars.len(), 0);
+    }
+
+    /// Short ident q_i (not "query") must NOT trigger query marker detection
+    #[test]
+    fn plain_query_marker_not_triggered_for_short_ident() {
+        let spec = scalar_ok("Q\nq_1\n:\nq_Q\n\n1 x\n");
+        assert!(
+            !spec.ok,
+            "expected ok=false: q_i is too short to be a query marker"
+        );
+    }
+
+    // A variable literally named `query` (no subscript) must not be misidentified as a
+    // query loop marker — it should parse as a normal scalar variable.
+    #[test]
+    fn standalone_query_variable_parses_as_scalar() {
+        // Input format: single line with one variable named "query"
+        let spec = parse("query", "1 \u{2264} query \u{2264} 10^9");
+        assert!(
+            spec.ok,
+            "expected ok=true: 'query' without subscript is a scalar var"
+        );
+        assert_eq!(spec.vars.len(), 1);
+        assert_eq!(spec.vars[0].name, "query");
+        assert!(spec.query_types.is_empty());
+        assert!(spec.query_body.is_empty());
     }
 }

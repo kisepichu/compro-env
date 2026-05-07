@@ -203,9 +203,9 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │
   ▼  Phase 2 早期検出 (ok: false にフォールバック)
   │    ブロック数 > 1 かつブロック[1] が数字始まり かつ ブロック[0] に query marker なし
-  │      → 非対応クエリサブ形式 (typical90-L 等)
+  │      → 非対応クエリサブ形式 (typical90-L の q_i パターン等)
   │    ブロック数 > 1 かつブロック[0] が単一変数のみ → T-testcases 型
-  │    ※ ブロック[0] に \text{query} / \mathrm{Query} がある場合は早期検出をスキップ
+  │    ※ ブロック[0] に query marker がある場合は早期検出をスキップ
   │
   ▼  Lexer  (ブロック[0] を行単位でトークン列化)
   │    IDENT       変数名 (大文字・小文字・複合: A, N, ra)
@@ -220,17 +220,18 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │
   ▼  Parser  (行パターンマッチ)
   │    スカラー列 / 1D配列(cdots) / vdots → ForLoop
-  │    \text{query}_Q / \mathrm{Query}_Q → QueryLine (vdots ブロック内のみ有効)
-  │    添字が非数値 (アルファベット) → Phase 2 → ok: false
+  │    \text{query}_Q / \mathrm{Query}_Q / query_Q → QueryLine (vdots ブロック内のみ有効)
+  │    cdots 伴う 1D 配列で添字がすべてアルファベット → Phase 2 → ok: false
   │    空白なし隣接要素 (S_{1,1}S_{1,2}) → Phase 2 → ok: false
   │
   ▼  Semantic Analysis (ブロック[0])
   │    変数テーブル (dim / size 解決)
   │    制約テキストから型推定
   │    subscript → loop_var / begin / end 解決 (0-indexed に正規化)
-  │    QueryLine vdots ブロック → LoopBegin(end=q) + LoopEnd (body なし)
+  │    QueryLine vdots ブロック → LoopBegin(end=<loop_bound>) + LoopEnd (body なし)
   │
   ▼  Query sub-block 解析 (ブロック[0] に query marker がある場合のみ)
+  │    query marker の判定: block0 のいずれかの行が QueryLine としてパースされること (parse_line と同一ルール)
   │    ブロック[1..] を順に解析して query_types / query_body を構築する
   │    各 sub-block について:
   │      空 sub-block → スキップ
@@ -477,7 +478,7 @@ X
 | 文字グリッド (2D 添字)                                                    | `S_{11}...S_{1W}` / `:` / `S_{H1}...S_{HW}`                                    | abc151-D, abc176-D |
 | 添字付きスカラー (アルファベット添字)                                     | `A_x A_y`                                                                      | abc246-E           |
 | 添字付きスカラー (数値添字・vdots なし)                                   | `r_1 c_1` / `r_2 c_2` (各行独立)                                               | abc176-D           |
-| クエリ型 (`\text{query}_Q` または `\mathrm{Query}_Q`)、sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D |
+| クエリ型 (`\text{query}_Q` / `\mathrm{Query}_Q` / `query_Q`)、sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D, abc212-D |
 
 **前処理**: `\hspace{0.4cm}\vdots` は `\vdots` に正規化する。また `:` のみの行も `\vdots` と等価に扱う (トークナイザーレベルで正規化)。
 
@@ -499,7 +500,7 @@ X
 
 | 非対応パターン                                                      | 例                                   | 確認問題    |
 | ------------------------------------------------------------------- | ------------------------------------ | ----------- |
-| クエリ型 (複数 pre ブロック + 数字サブ形式、`\text{}` マーカーなし) | `Q\nquery_1\n\vdots`                 | typical90-L |
+| クエリ型 (`q_i` など "query" を含まない plain marker、`\text{}` もなし) | `Q\nq_1\n:\nq_Q`                     | typical90-L |
 | T-testcases 型 (pre[0]=`T`, pre[1]=形式)                            | `T\n\n a s`                          | abc238-D    |
 | 可変長行 (サイズが変数)                                             | `T_i K_i A_{i,1} \ldots A_{i,K_i}`   | abc226-C    |
 | 斜め・上三角行列                                                    | `A_{1,2} \cdots A_{1,2N}` / `\vdots` | abc236-D    |
