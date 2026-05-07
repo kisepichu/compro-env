@@ -26,10 +26,10 @@ ce init <contest_id_or_url> [--lang <lang>]
 
 コンテスト開始後の通常ケースでは以下の **2 リクエスト** のみでコンテスト情報を取得する:
 
-| # | URL | 取得情報 |
-| - | --- | ------- |
-| 1 | `https://atcoder.jp/contests/{id}` | 開始時刻・problem_id ヒント (後述) |
-| 2 | `https://atcoder.jp/contests/{id}/tasks_print` | 全問題タイトル・サンプル I/O |
+| #   | URL                                            | 取得情報                           |
+| --- | ---------------------------------------------- | ---------------------------------- |
+| 1   | `https://atcoder.jp/contests/{id}`             | 開始時刻・problem_id ヒント (後述) |
+| 2   | `https://atcoder.jp/contests/{id}/tasks_print` | 全問題タイトル・サンプル I/O       |
 
 コンテスト待機中 (残り ≤ 10 秒) は `get_problems_detail` をポーリングするため、リクエスト数は 2 を超える。
 
@@ -83,7 +83,7 @@ problem_id は次の優先順位で決定する:
    - 指定なし・config にデフォルト言語あり → config の値を使用
    - 指定なし・config にデフォルト言語なし → stdin で確認:
      ```
-     Language (e.g. rust, cpp): 
+     Language (e.g. rust, cpp):
      ```
    - いずれの場合も `templates/{lang}/` ディレクトリが存在しなければエラー終了:
      ```
@@ -113,11 +113,11 @@ problem_id は次の優先順位で決定する:
 
 `get_contest_meta` で取得した開始時刻をもとに、以下のスケジュールで表示・ポーリングを切り替える:
 
-| タイミング | 動作 |
-| --- | --- |
-| 残り > 1 分 | 1 分ごとに現在時刻・開始時刻・残り時間を表示 |
-| 1 分 ≥ 残り > 10 秒 | 1 秒ごとに残り時間を表示 |
-| 残り ≤ 10 秒 | 1 秒ごとにポーリング開始 (問題一覧が取れたら開始とみなす) |
+| タイミング          | 動作                                                      |
+| ------------------- | --------------------------------------------------------- |
+| 残り > 1 分         | 1 分ごとに現在時刻・開始時刻・残り時間を表示              |
+| 1 分 ≥ 残り > 10 秒 | 1 秒ごとに残り時間を表示                                  |
+| 残り ≤ 10 秒        | 1 秒ごとにポーリング開始 (問題一覧が取れたら開始とみなす) |
 
 待機ロジックは `usecases/service/init.rs` に実装する。Ctrl-C でキャンセル可能。
 
@@ -173,18 +173,20 @@ Initialized abc334 (AtCoder) — 6 problems: a b c d e f
 
 ### Tera コンテキスト
 
-| 変数 | 内容 | ソース |
-| --- | --- | --- |
-| `contest.id` | コンテスト ID (例: `abc334`) | ドメインオブジェクト |
-| `problem.code` | 問題コード (例: `a`) | ドメインオブジェクト |
-| `problem.title` | 問題タイトル | ドメインオブジェクト |
-| `solution.name` | 解法名 (例: `main`) | ドメインオブジェクト |
-| `input_format.raw` | 入力形式の生テキスト (常に設定、取得できなければ空文字) | パーサー |
-| `input_format.ok` | パース成功フラグ (`bool`) | パーサー |
-| `input_format.vars` | 変数宣言リスト (詳細後述) | パーサー |
-| `input_format.ops` | 読み取り命令列 (詳細後述) | パーサー |
+| 変数                       | 内容                                                                            | ソース               |
+| -------------------------- | ------------------------------------------------------------------------------- | -------------------- |
+| `contest.id`               | コンテスト ID (例: `abc334`)                                                    | ドメインオブジェクト |
+| `problem.code`             | 問題コード (例: `a`)                                                            | ドメインオブジェクト |
+| `problem.title`            | 問題タイトル                                                                    | ドメインオブジェクト |
+| `solution.name`            | 解法名 (例: `main`)                                                             | ドメインオブジェクト |
+| `input_format.raw`         | 入力形式の生テキスト (常に設定、取得できなければ空文字)                         | パーサー             |
+| `input_format.ok`          | パース成功フラグ (`bool`)                                                       | パーサー             |
+| `input_format.vars`        | 変数宣言リスト (詳細後述)                                                       | パーサー             |
+| `input_format.ops`         | 読み取り命令列 (詳細後述)                                                       | パーサー             |
+| `input_format.query_types` | クエリ種別リスト (詳細後述、クエリ型以外は空リスト)                             | パーサー             |
+| `input_format.query_body`  | 単一形式クエリの変数リスト (非数値先頭 sub-block、`query_types` 非空のときは空) | パーサー             |
 
-`input_format.ok` が `false` のとき `vars` と `ops` は空リスト。テンプレートは `{% if input_format.ok %}` で分岐する。
+`input_format.ok` が `false` のとき `vars`・`ops`・`query_types`・`query_body` は空リスト。テンプレートは `{% if input_format.ok %}` で分岐する。
 
 ### 入力形式パース
 
@@ -200,9 +202,10 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │    \n\n で分割してブロック列にする
   │
   ▼  Phase 2 早期検出 (ok: false にフォールバック)
-  │    ブロック[0] に \text{query} / \mathrm{Query} → クエリ型
-  │    ブロック数 > 1 かつブロック[1] が "1 " / "2 " で始まる → クエリサブ形式
+  │    ブロック数 > 1 かつブロック[1] が数字始まり かつ ブロック[0] に query marker なし
+  │      → 非対応クエリサブ形式 (typical90-L 等)
   │    ブロック数 > 1 かつブロック[0] が単一変数のみ → T-testcases 型
+  │    ※ ブロック[0] に \text{query} / \mathrm{Query} がある場合は早期検出をスキップ
   │
   ▼  Lexer  (ブロック[0] を行単位でトークン列化)
   │    IDENT       変数名 (大文字・小文字・複合: A, N, ra)
@@ -217,15 +220,39 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │
   ▼  Parser  (行パターンマッチ)
   │    スカラー列 / 1D配列(cdots) / vdots → ForLoop
+  │    \text{query}_Q / \mathrm{Query}_Q → QueryLine (vdots ブロック内のみ有効)
   │    添字が非数値 (アルファベット) → Phase 2 → ok: false
   │    空白なし隣接要素 (S_{1,1}S_{1,2}) → Phase 2 → ok: false
   │
-  ▼  Semantic Analysis
+  ▼  Semantic Analysis (ブロック[0])
   │    変数テーブル (dim / size 解決)
   │    制約テキストから型推定
   │    subscript → loop_var / begin / end 解決 (0-indexed に正規化)
+  │    QueryLine vdots ブロック → LoopBegin(end=q) + LoopEnd (body なし)
   │
-  ▼  InputSpec  (vars + ops)
+  ▼  Query sub-block 解析 (ブロック[0] に query marker がある場合のみ)
+  │    ブロック[1..] を順に解析して query_types / query_body を構築する
+  │    各 sub-block について:
+  │      空 sub-block → スキップ
+  │      先頭行の先頭トークンが NUM → numbered sub-block (query_types に追加)
+  │        type_id = そのトークン
+  │        残りトークン (先頭行の残り + 後続行) をスカラー変数リストとして解析
+  │          変数名の小文字化・衝突解決はメイン vars と独立して実施
+  │          型推定は constraints テキストを用いてメインと同一推定器を適用
+  │        パース成功 → QueryTypeDecl { type_id, ok: true, vars }
+  │        変数解析失敗 → QueryTypeDecl { type_id, ok: false, vars: [] }
+  │      先頭行の先頭トークンが NUM でない → single-format sub-block (query_body に格納)
+  │        ※ 例: abc334_d の "X" → x: i64 として query_body = [x]
+  │        全行を連結してスカラー変数リストとして解析
+  │        パース成功 → query_body = [VarDecl, ...]
+  │        パース失敗 / 既に query_body が設定済み → スキップ (最初の 1 件のみ採用)
+  │        query_types が非空の場合は query_body を設定しない
+  │
+  │    すべて空の場合:
+  │      query_types = [], query_body = [] のまま。
+  │      テンプレートは solve にループスタブ (TODO) を生成する。
+  │
+  ▼  InputSpec  (vars + ops + query_types + query_body)
 ```
 
 #### 変数名の小文字化規則
@@ -239,6 +266,7 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
 #### ループのインデックス正規化
 
 添字が 1-origin (`A_1 ... A_N`) であっても、loop は常に 0-indexed に正規化する:
+
 - `loop_begin`: `begin: "0"`, `end: "n"` (大文字の N → 小文字化済み)
 - `read_line` 内 VarRef の `index` はループ変数名 (`"i"`, `"j"`, ...)
 
@@ -246,14 +274,35 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
 
 ```json
 [
-  { "name": "n",  "math": "N",  "var_type": "int", "dim": 0, "size": [],    "is_size": true  },
-  { "name": "k",  "math": "K",  "var_type": "int", "dim": 0, "size": [],    "is_size": false },
-  { "name": "a",  "math": "A",  "var_type": "int", "dim": 1, "size": ["n"], "is_size": false }
+  {
+    "name": "n",
+    "math": "N",
+    "var_type": "int",
+    "dim": 0,
+    "size": [],
+    "is_size": true
+  },
+  {
+    "name": "k",
+    "math": "K",
+    "var_type": "int",
+    "dim": 0,
+    "size": [],
+    "is_size": false
+  },
+  {
+    "name": "a",
+    "math": "A",
+    "var_type": "int",
+    "dim": 1,
+    "size": ["n"],
+    "is_size": false
+  }
 ]
 ```
 
 - `var_type`: `"int"` | `"str"` | `"unknown"`
-- `dim`: `0` = スカラー, `1` = 1D配列 (Phase 1 上限)
+- `dim`: `0` = スカラー, `1` = 1D 配列 (Phase 1 上限)
 - `size`: dim ごとのサイズ式 (小文字化済み変数名)
 - `is_size`: 他の var の `size` または `loop_begin` の `end` に自分の `name` が現れるなら `true`。テンプレートで `usize` / `Vec<T>` の型決定に使用する
 
@@ -261,10 +310,19 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
 
 ```json
 [
-  { "tag": "read_line", "depth": 0,
-    "vars": [{"name":"n","dim":0}, {"name":"k","dim":0}] },
-  { "tag": "read_line", "depth": 0,
-    "vars": [{"name":"a","dim":1,"size":"k"}] }
+  {
+    "tag": "read_line",
+    "depth": 0,
+    "vars": [
+      { "name": "n", "dim": 0 },
+      { "name": "k", "dim": 0 }
+    ]
+  },
+  {
+    "tag": "read_line",
+    "depth": 0,
+    "vars": [{ "name": "a", "dim": 1, "size": "k" }]
+  }
 ]
 ```
 
@@ -272,57 +330,163 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
 
 ```json
 [
-  { "tag": "read_line",  "depth": 0, "vars": [{"name":"n"},{"name":"k"}] },
-  { "tag": "read_line",  "depth": 0, "vars": [{"name":"sx"},{"name":"sy"}] },
-  { "tag": "loop_begin", "depth": 0, "loop_var":"i","begin":"0","end":"n" },
-  { "tag": "read_line",  "depth": 1, "vars": [{"name":"x","dim":1,"index":"i"},{"name":"y","dim":1,"index":"i"}] },
-  { "tag": "loop_end",   "depth": 0 }
+  {
+    "tag": "read_line",
+    "depth": 0,
+    "vars": [{ "name": "n" }, { "name": "k" }]
+  },
+  {
+    "tag": "read_line",
+    "depth": 0,
+    "vars": [{ "name": "sx" }, { "name": "sy" }]
+  },
+  {
+    "tag": "loop_begin",
+    "depth": 0,
+    "loop_var": "i",
+    "begin": "0",
+    "end": "n"
+  },
+  {
+    "tag": "read_line",
+    "depth": 1,
+    "vars": [
+      { "name": "x", "dim": 1, "index": "i" },
+      { "name": "y", "dim": 1, "index": "i" }
+    ]
+  },
+  { "tag": "loop_end", "depth": 0 }
 ]
 ```
 
 VarRef フィールド:
+
 - `dim == 0` (スカラー): `{"name":"n","dim":0}`
-- `dim == 1`, 一括読み (水平 cdots): `{"name":"a","dim":1,"size":"n"}` — 1行を split して配列全体を読む
-- `dim == 1`, 要素読み (ループ内): `{"name":"a","dim":1,"index":"i"}` — `a[i]` を1つ読む
+- `dim == 1`, 一括読み (水平 cdots): `{"name":"a","dim":1,"size":"n"}` — 1 行を split して配列全体を読む
+- `dim == 1`, 要素読み (ループ内): `{"name":"a","dim":1,"index":"i"}` — `a[i]` を 1 つ読む
+
+#### `query_types` の形式 (JSON 例)
+
+クエリ型入力 (`\text{query}_Q` 形式) のとき、`blocks[1..]` を解析して構築される。それ以外は空リスト `[]`。
+
+入力例:
+
+```
+N Q
+\text{query}_1
+\vdots
+\text{query}_Q
+
+1 x
+
+2 x k
+
+3 l r
+```
+
+生成される `query_types`:
+
+```json
+[
+  {
+    "type_id": "1",
+    "ok": true,
+    "vars": [{ "name": "x", "var_type": "int", "dim": 0, "is_size": false }]
+  },
+  {
+    "type_id": "2",
+    "ok": true,
+    "vars": [
+      { "name": "x", "var_type": "int", "dim": 0, "is_size": false },
+      { "name": "k", "var_type": "int", "dim": 0, "is_size": false }
+    ]
+  },
+  {
+    "type_id": "3",
+    "ok": true,
+    "vars": [
+      { "name": "l", "var_type": "int", "dim": 0, "is_size": false },
+      { "name": "r", "var_type": "int", "dim": 0, "is_size": false }
+    ]
+  }
+]
+```
+
+`ok: false` の例 (sub-block が解析できなかった場合):
+
+```json
+{ "type_id": "2", "ok": false, "vars": [] }
+```
+
+- `type_id`: sub-block 先頭の数字トークン
+- `ok`: sub-block の解析成功フラグ (false のときテンプレートが TODO を生成)
+- `vars`: このクエリ種別のローカル変数。`dim` は常に 0 (スカラー); `is_size` は常に `false`
+- 変数の命名規則・型推定はメイン `vars` と同一ルールを適用するが、スコープは独立
+
+#### `query_body` の形式 (JSON 例)
+
+単一形式クエリ (`query_types = []`) かつ非数値先頭 sub-block が存在するとき、その変数リスト。それ以外は空リスト `[]`。
+
+入力例 (abc334_d 形式):
+
+```
+N Q
+R_1 \ldots R_N
+\text{query}_1
+\vdots
+\text{query}_Q
+
+X
+```
+
+生成される `query_body`:
+
+```json
+[{ "name": "x", "math": "X", "var_type": "int", "dim": 0, "is_size": false }]
+```
+
+- `dim` は常に 0 (スカラー); `is_size` は常に `false`
+- 変数の命名規則・型推定はメイン `vars` と同一ルールを適用するが、スコープは独立
 
 #### 型推定 (制約テキストから)
 
 制約テキストを走査し、以下のヒューリスティックで `vars[*].var_type` を設定する:
 
-| 制約テキストのパターン | 結果 |
-| --- | --- |
-| `整数` / `integers` が出現 | 対象変数を `int` |
-| `\leq` / `<` / `≤` が変数に直接かかる | 対象変数を `int` |
-| `文字列` / `string` が出現 | 対象変数を `str` |
+| 制約テキストのパターン                                     | 結果             |
+| ---------------------------------------------------------- | ---------------- |
+| `整数` / `integers` が出現                                 | 対象変数を `int` |
+| `\leq` / `<` / `≤` が変数に直接かかる                      | 対象変数を `int` |
+| `文字列` / `string` が出現                                 | 対象変数を `str` |
 | `英小文字` / `英大文字` / `lowercase` / `uppercase` が出現 | 対象変数を `str` |
-| `All input values are integers` | 全変数を `int` |
-| (マッチなし) | `unknown` |
+| `All input values are integers`                            | 全変数を `int`   |
+| (マッチなし)                                               | `unknown`        |
 
 #### Phase 1 対応パターン
 
 実際の AtCoder 問題で確認したパターン:
 
-| パターン | 例 | 確認問題 |
-| --- | --- | --- |
-| スカラー列 | `N M K` | abc334-A,B |
-| 1D 配列 (水平 cdots) | `A_1 A_2 \ldots A_N` | abc334-C, abc360-C |
-| 複数配列 (水平) | `A_1 \ldots A_N` + `W_1 \ldots W_N` | abc360-C |
-| 単独文字列 | `S` (型推定で `str`) | abc360-A |
-| 1D 配列 (垂直 vdots, 単一変数) | `S_1` / `\vdots` / `S_N` | abc246-F |
-| `:` 区切り (垂直 vdots 等価) | `S_1` / `:` / `S_H` | ukuku09-C |
-| 複数変数ループ (`\vdots`) | `t_1 k_1` / `\vdots` / `t_Q k_Q` | abc242-D |
-| 文字グリッド (2D添字) | `S_{11}...S_{1W}` / `:` / `S_{H1}...S_{HW}` | abc151-D, abc176-D |
-| 添字付きスカラー (アルファベット添字) | `A_x A_y` | abc246-E |
-| 添字付きスカラー (数値添字・vdots なし) | `r_1 c_1` / `r_2 c_2` (各行独立) | abc176-D |
-| クエリ型 (`\text{query}_Q` または `\mathrm{Query}_Q`) | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` | abc241-D, abc248-D |
+| パターン                                                                  | 例                                                                             | 確認問題           |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------ |
+| スカラー列                                                                | `N M K`                                                                        | abc334-A,B         |
+| 1D 配列 (水平 cdots)                                                      | `A_1 A_2 \ldots A_N`                                                           | abc334-C, abc360-C |
+| 複数配列 (水平)                                                           | `A_1 \ldots A_N` + `W_1 \ldots W_N`                                            | abc360-C           |
+| 単独文字列                                                                | `S` (型推定で `str`)                                                           | abc360-A           |
+| 1D 配列 (垂直 vdots, 単一変数)                                            | `S_1` / `\vdots` / `S_N`                                                       | abc246-F           |
+| `:` 区切り (垂直 vdots 等価)                                              | `S_1` / `:` / `S_H`                                                            | ukuku09-C          |
+| 複数変数ループ (`\vdots`)                                                 | `t_1 k_1` / `\vdots` / `t_Q k_Q`                                               | abc242-D           |
+| 文字グリッド (2D 添字)                                                    | `S_{11}...S_{1W}` / `:` / `S_{H1}...S_{HW}`                                    | abc151-D, abc176-D |
+| 添字付きスカラー (アルファベット添字)                                     | `A_x A_y`                                                                      | abc246-E           |
+| 添字付きスカラー (数値添字・vdots なし)                                   | `r_1 c_1` / `r_2 c_2` (各行独立)                                               | abc176-D           |
+| クエリ型 (`\text{query}_Q` または `\mathrm{Query}_Q`)、sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D |
 
 **前処理**: `\hspace{0.4cm}\vdots` は `\vdots` に正規化する。また `:` のみの行も `\vdots` と等価に扱う (トークナイザーレベルで正規化)。
 
-**単一変数ループのフラット化**: `\vdots` または `:` で囲まれたブロックが「1行1変数」の繰り返しのみで構成される場合、`[T; N]` の一括読み込みに変換する (`flatten_single_var_loops`)。
+**単一変数ループのフラット化**: `\vdots` または `:` で囲まれたブロックが「1 行 1 変数」の繰り返しのみで構成される場合、`[T; N]` の一括読み込みに変換する (`flatten_single_var_loops`)。
 
-**複数変数ループのコード生成**: 1行複数変数のループは `Vec::new()` 宣言 + `for _ in 0..N { input!{...} ... .push(...) }` を生成する。テストハーネスではループ入力は `panic!` を生成するため、サンプルテストは手動で記述する。
+**複数変数ループのコード生成**: 1 行複数変数のループは `Vec::new()` 宣言 + `for _ in 0..N { input!{...} ... .push(...) }` を生成する。テストハーネスではループ入力は `panic!` を生成するため、サンプルテストは手動で記述する。
 
-**文字グリッド (2D添字) の検出**: `S_{11}...S_{1W}` のように `同名変数_{行col_start} Cdots 同名変数_{行col_end}` の形をとる行は「グリッドの1行 = 1つの `String`」として扱う。検出ルール:
+**文字グリッド (2D 添字) の検出**: `S_{11}...S_{1W}` のように `同名変数_{行col_start} Cdots 同名変数_{行col_end}` の形をとる行は「グリッドの 1 行 = 1 つの `String`」として扱う。検出ルール:
+
 - 両側の変数名が一致する
 - 少なくとも一方の添字ブレースが「2D」であること: 複数トークン (`{1 W}`)、カンマ区切り (`{1,W}`)、または英字を含む長さ ≥ 2 の単一トークン (`{H1}`, `{HW}`, `{iW}`) のいずれか (純数値の多桁トークン `{10}` `{12}` は 1D インデックスとして扱い GridRow 検出から除外する)
 - 行全体がこのパターンのみで構成される (前後に他の変数がない)
@@ -333,13 +497,13 @@ VarRef フィールド:
 
 実際の AtCoder 問題で確認:
 
-| 非対応パターン | 例 | 確認問題 |
-| --- | --- | --- |
-| クエリ型 (複数 pre ブロック + 数字サブ形式、`\text{}` マーカーなし) | `Q\nquery_1\n\vdots` | typical90-L |
-| T-testcases 型 (pre[0]=`T`, pre[1]=形式) | `T\n\n a s` | abc238-D |
-| 可変長行 (サイズが変数) | `T_i K_i A_{i,1} \ldots A_{i,K_i}` | abc226-C |
-| 斜め・上三角行列 | `A_{1,2} \cdots A_{1,2N}` / `\vdots` | abc236-D |
-| ネストループ 2段以上 | — | — |
+| 非対応パターン                                                      | 例                                   | 確認問題    |
+| ------------------------------------------------------------------- | ------------------------------------ | ----------- |
+| クエリ型 (複数 pre ブロック + 数字サブ形式、`\text{}` マーカーなし) | `Q\nquery_1\n\vdots`                 | typical90-L |
+| T-testcases 型 (pre[0]=`T`, pre[1]=形式)                            | `T\n\n a s`                          | abc238-D    |
+| 可変長行 (サイズが変数)                                             | `T_i K_i A_{i,1} \ldots A_{i,K_i}`   | abc226-C    |
+| 斜め・上三角行列                                                    | `A_{1,2} \cdots A_{1,2N}` / `\vdots` | abc236-D    |
+| ネストループ 2 段以上                                               | —                                    | —           |
 
 ### テンプレート例 (Rust)
 
@@ -350,6 +514,7 @@ templates/rust/
 ```
 
 `Cargo.toml.tera` 例:
+
 ```toml
 [package]
 name = "{{problem.code}}-{{solution.name}}"
@@ -373,40 +538,128 @@ macro_rules! out { ... }
 use proconio::input;
 
 {% if input_format.ok -%}
+
+{# クエリ型ループ検出: LoopBegin の直後が LoopEnd (empty body) = QueryLine 由来 #}
+{% set_global query_loop_end = "" -%}
+{% for i in range(end=input_format.ops | length) -%}
+{% set op = input_format.ops[i] -%}
+{% if op.tag == "loop_begin" -%}
+{% set next_i = i + 1 -%}
+{% if input_format.ops[next_i] is defined and input_format.ops[next_i].tag == "loop_end" -%}
+{% set_global query_loop_end = op.end -%}
+{% endif -%}
+{% endif -%}
+{% endfor -%}
 fn solve(
-    {% for v in input_format.vars -%}
-    {{ v.name }}: {% if v.is_size %}usize{% elif v.dim == 1 %}Vec<{% if v.var_type == "str" %}String{% else %}i64{% endif %}>{% elif v.var_type == "str" %}String{% else %}i64{% endif %},
-    {% endfor -%}
+    {%- for vd in input_format.vars %}
+    {% if vd.dim == 0 -%}
+    {{ vd.name }}: {% if vd.is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
+    {%- elif vd.dim == 1 -%}
+    {{ vd.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}>,
+    {%- endif %}
+    {%- endfor %}
 ) -> String {
     with_output(|| {
+        {% if query_loop_end != "" -%}
+        {% if input_format.query_types | length > 0 -%}
+        {# 複数種別クエリ: match dispatch を生成 #}
+        for _ in 0..{{ query_loop_end }} {
+            input! { query_type: usize, }
+            match query_type {
+                {% for qt in input_format.query_types -%}
+                {{ qt.type_id }} => {
+                    {% if qt.ok -%}
+                    input! {
+                        {% for v in qt.vars -%}
+                        {{ v.name }}: {% if v.var_type == "str" %}String{% else %}i64{% endif %},
+                        {% endfor -%}
+                    }
+                    {% endif -%}
+                    // TODO: handle query type {{ qt.type_id }}
+                    todo!()
+                }
+                {% endfor -%}
+                _ => unreachable!(),
+            }
+        }
+        {% elif input_format.query_body | length > 0 -%}
+        {# 単一形式クエリ (非数値先頭 sub-block): 変数入力付きループを生成 #}
+        for _ in 0..{{ query_loop_end }} {
+            input! {
+                {% for v in input_format.query_body -%}
+                {{ v.name }}: {% if v.var_type == "str" %}String{% else %}i64{% endif %},
+                {% endfor -%}
+            }
+            // TODO: handle query
+            todo!()
+        }
+        {% else -%}
+        {# 単一形式クエリ (sub-block なし): ループスタブを生成 #}
+        for _ in 0..{{ query_loop_end }} {
+            // TODO: read and handle query
+            todo!()
+        }
+        {% endif -%}
+        {% else -%}
         // TODO: write solution and call out!(answer)
         todo!()
+        {% endif -%}
     })
 }
 
 fn main() {
+    {% for op in input_format.ops -%}
+    {% if op.tag == "read_line" and op.depth == 0 -%}
     input! {
-        {% for op in input_format.ops -%}
-        {% if op.tag == "read_line" -%}
         {% for v in op.vars -%}
-        {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
         {% if v.dim == 0 -%}
+        {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
         {{ v.name }}: {% if vd.is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
-        {% elif v.size -%}
+        {% elif v.dim == 1 -%}
+        {% if v.size -%}
+        {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
         {{ v.name }}: [{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ v.size }}],
         {% endif -%}
-        {% endfor -%}
-        {% elif op.tag == "loop_begin" -%}
-        // TODO: loop {{ op.loop_var }} in {{ op.begin }}..{{ op.end }} — write manually
         {% endif -%}
         {% endfor -%}
     }
+    {% elif op.tag == "loop_begin" -%}
+    {% set next_index = loop.index0 + 1 -%}
+    {% set body_op = input_format.ops[next_index] -%}
+    {% if body_op.tag == "loop_end" -%}
+    {# empty-body loop (QueryLine origin) — handled in solve, skip in main #}
+    {% else -%}
+    {% for v in body_op.vars -%}
+    {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
+    let mut {{ v.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}> = Vec::new();
+    {% endfor -%}
+    for _ in 0..{{ op.end }} {
+        input! {
+    {% endif -%}
+    {% elif op.tag == "read_line" and op.depth > 0 -%}
+            {% for v in op.vars -%}
+            {% if v.index -%}
+            {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
+            __tmp_{{ v.name }}: {% if vd.var_type == "str" %}String{% else %}i64{% endif %},
+            {% endif -%}
+            {% endfor -%}
+    {% elif op.tag == "loop_end" -%}
+    {% set prev_index = loop.index0 - 1 -%}
+    {% set body_op = input_format.ops[prev_index] -%}
+    {% if body_op.tag != "loop_begin" -%}
+        }
+        {% for v in body_op.vars -%}
+        {{ v.name }}.push(__tmp_{{ v.name }});
+        {% endfor -%}
+    }
+    {% endif -%}
+    {% endif -%}
+    {% endfor -%}
     print!("{}", solve({{ input_format.vars | map(attribute="name") | join(sep=", ") }}));
 }
 {% else -%}
 fn solve<R: std::io::BufRead>(src: &mut impl proconio::source::Source<R>) -> String {
     // TODO: input_format.ok = false — write input manually
-    // raw: {{ input_format.raw }}
     with_output(|| {
         todo!()
     })
@@ -424,15 +677,92 @@ fn main() {
 mod tests { ... }
 ```
 
+**クエリ型テンプレート生成例** (abc241-D 形式、3 種類のクエリ):
+
+```rust
+fn solve(n: usize, q: usize) -> String {
+    with_output(|| {
+        for _ in 0..q {
+            input! { query_type: usize, }
+            match query_type {
+                1 => {
+                    input! { x: i64, }
+                    // TODO: handle query type 1
+                    todo!()
+                }
+                2 => {
+                    input! { x: i64, k: i64, }
+                    // TODO: handle query type 2
+                    todo!()
+                }
+                3 => {
+                    input! { l: i64, r: i64, }
+                    // TODO: handle query type 3
+                    todo!()
+                }
+                _ => unreachable!(),
+            }
+        }
+    })
+}
+
+fn main() {
+    input! { n: usize, q: usize, }
+    print!("{}", solve(n, q));
+}
+```
+
+sub-block が `ok: false` のクエリ種別は以下のようにフォールバック:
+
+```rust
+2 => {
+    // TODO: handle query type 2
+    todo!()
+}
+```
+
+**単一形式クエリ例** (abc334_d 形式: `query_types = []`, `query_body = [x]`):
+
+```rust
+fn solve(n: usize, q: usize, r: Vec<i64>) -> String {
+    with_output(|| {
+        for _ in 0..q {
+            input! { x: i64, }
+            // TODO: handle query
+            todo!()
+        }
+    })
+}
+
+fn main() {
+    input! { n: usize, q: usize, }
+    input! { r: [i64; n], }
+    print!("{}", solve(n, q, r));
+}
+```
+
+**sub-block なし (ループスタブのみ)** (`query_types = []`, `query_body = []`):
+
+```rust
+fn solve(q: usize) -> String {
+    with_output(|| {
+        for _ in 0..q {
+            // TODO: read and handle query
+            todo!()
+        }
+    })
+}
+```
+
 **型対応表** (テンプレート内の判定ロジック):
 
-| `dim` | `is_size` | `var_type` | Rust 型 |
-|-------|-----------|------------|---------|
-| 0 | true | any | `usize` |
-| 0 | false | `"str"` | `String` |
-| 0 | false | other | `i64` |
-| 1 | false | `"str"` | `Vec<String>` |
-| 1 | false | other | `Vec<i64>` |
+| `dim` | `is_size` | `var_type` | Rust 型       |
+| ----- | --------- | ---------- | ------------- |
+| 0     | true      | any        | `usize`       |
+| 0     | false     | `"str"`    | `String`      |
+| 0     | false     | other      | `i64`         |
+| 1     | false     | `"str"`    | `Vec<String>` |
+| 1     | false     | other      | `Vec<i64>`    |
 
 ## エラーケース
 

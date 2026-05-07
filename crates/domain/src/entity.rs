@@ -153,12 +153,30 @@ pub struct InputOp {
     pub end: Option<String>,
 }
 
+/// One query sub-type decoded from a numbered sub-block (e.g. "1 x" or "2 x k").
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct QueryTypeDecl {
+    /// The numeric type identifier ("1", "2", …).
+    pub type_id: String,
+    /// Whether the sub-block was successfully parsed.
+    pub ok: bool,
+    /// Local scalar variables for this query type (empty when ok=false).
+    pub vars: Vec<VarDecl>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct InputSpec {
     pub raw: String,
     pub ok: bool,
     pub vars: Vec<VarDecl>,
     pub ops: Vec<InputOp>,
+    /// Non-empty only for query-type input (`\text{query}_Q` form) when numbered
+    /// sub-blocks are present.  Each entry corresponds to one query kind.
+    pub query_types: Vec<QueryTypeDecl>,
+    /// Non-empty only for single-format query input: the first non-numeric sub-block's
+    /// scalar variables (e.g. abc334_d's "X" → [x: i64]).
+    /// Always empty when `query_types` is non-empty.
+    pub query_body: Vec<VarDecl>,
 }
 
 /// Sample input/output (Value Object)
@@ -228,6 +246,8 @@ mod input_spec_tests {
             ok: false,
             vars: vec![],
             ops: vec![],
+            query_types: vec![],
+            query_body: vec![],
         };
         assert!(!spec.ok);
         assert!(spec.vars.is_empty());
@@ -302,6 +322,8 @@ mod input_spec_tests {
                     end: None,
                 },
             ],
+            query_types: vec![],
+            query_body: vec![],
         };
         assert!(spec.ok);
         let json = serde_json::to_value(&spec).unwrap();
