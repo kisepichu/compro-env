@@ -231,7 +231,7 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │    QueryLine vdots ブロック → LoopBegin(end=<loop_bound>) + LoopEnd (body なし)
   │
   ▼  Query sub-block 解析 (ブロック[0] に query marker がある場合のみ)
-  │    query marker の判定: \text{ / \mathrm{ を含む、または "query" という文字列を含む
+  │    query marker の判定: \text{ / \mathrm{ を含む、または非英数字で分割した語のいずれかが "query" と等しい (大小文字不問)
   │    ブロック[1..] を順に解析して query_types / query_body を構築する
   │    各 sub-block について:
   │      空 sub-block → スキップ

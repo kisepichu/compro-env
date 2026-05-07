@@ -186,6 +186,12 @@ enum ParseError {
     Unknown,
 }
 
+/// Returns true when `s` is the literal word "query" (case-insensitive, at least 5 chars).
+/// Used by both `parse_line` and `has_query_marker` to keep detection logic in one place.
+fn is_query_ident(s: &str) -> bool {
+    s.eq_ignore_ascii_case("query")
+}
+
 fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
     // Strip leading/trailing Space tokens
     let tokens = strip_spaces(tokens);
@@ -208,7 +214,7 @@ fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
         matches!(t, Token::Ident(s)
             if s.starts_with("\\text{")
                 || s.starts_with("\\mathrm{")
-                || s.to_ascii_lowercase() == "query")
+                || is_query_ident(s))
     });
     if let Some(pos) = query_pos {
         // Must be the only meaningful token (at position 0 after strip_spaces)
@@ -1040,7 +1046,7 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
         || block0.contains("\\mathrm{")
         || block0
             .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|w| w.to_ascii_lowercase() == "query");
+            .any(is_query_ident);
 
     // Check for multiple blocks (only reject non-query multi-block forms)
     if blocks.len() > 1 && !has_query_marker {
