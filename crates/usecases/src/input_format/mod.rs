@@ -173,6 +173,10 @@ enum RawLine {
     LoopRow(Vec<RawVar>),
     /// Grid row: S_{11}...S_{1W} — one row of a character grid, read as one String
     GridRow(RawVar),
+    /// A query placeholder line: \text{something}_Q or \mathrm{something}_Q.
+    /// Signals a Q-iteration loop of queries; `loop_bound` is the subscript variable
+    /// (e.g. "Q" from `\text{query}_Q`).
+    QueryLine { loop_bound: String },
 }
 
 /// Parse errors cause ok=false
@@ -194,13 +198,28 @@ fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
         return Ok(RawLine::Scalars(vec![]));
     }
 
-    // Check for \text{} or \mathrm{} tokens → signal phase2
-    for tok in &tokens {
-        if let Token::Ident(s) = tok
-            && (s.starts_with("\\text{") || s.starts_with("\\mathrm{"))
-        {
+    // Check for \text{} or \mathrm{} tokens → query placeholder line.
+    // A valid query line is exactly: \text{...}_<subscript> or \mathrm{...}_<subscript>.
+    // Anything else (extra tokens, missing subscript) falls through to Err.
+    let query_pos = tokens.iter().position(
+        |t| matches!(t, Token::Ident(s) if s.starts_with("\\text{") || s.starts_with("\\mathrm{")),
+    );
+    if let Some(pos) = query_pos {
+        // Must be the only meaningful token (at position 0 after strip_spaces)
+        if pos != 0 {
             return Err(ParseError::Unknown);
         }
+        // Expect: _<subscript> and nothing after
+        if tokens.get(pos + 1) == Some(&Token::Subscript) {
+            let (loop_bound, advance) =
+                read_subscript_value(&tokens[pos + 2..]).ok_or(ParseError::Unknown)?;
+            // Nothing should follow
+            if pos + 2 + advance != tokens.len() {
+                return Err(ParseError::Unknown);
+            }
+            return Ok(RawLine::QueryLine { loop_bound });
+        }
+        return Err(ParseError::Unknown);
     }
 
     // Try to detect a character grid row: X_{row,col_start}...X_{row,col_end}
@@ -616,7 +635,22 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
             first.is_some() && vars.iter().all(|v| v.subscript.as_deref() == first)
         }
         RawLine::GridRow(_) => true,
+        // Query placeholder lines (\text{query}_Q etc.) are always eligible for a vdots block.
+        RawLine::QueryLine { .. } => true,
         _ => false,
+    };
+
+    /// Row kind: distinguishes LoopRow, GridRow, and QueryLine for block-extension checks.
+    #[derive(PartialEq)]
+    enum RowKind {
+        Loop,
+        Grid,
+        Query,
+    }
+    let row_kind = |rl: &RawLine| match rl {
+        RawLine::GridRow(_) => RowKind::Grid,
+        RawLine::QueryLine { .. } => RowKind::Query,
+        _ => RowKind::Loop,
     };
 
     let mut vdots_blocks: Vec<(usize, usize, usize)> = Vec::new(); // (block_start, vdots_idx, after_end)
@@ -624,32 +658,32 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
         let mut j = 0;
         while j < raw_lines.len() {
             if matches!(raw_lines[j], RawLine::Vdots) {
-                // Find consecutive LoopRows/GridRows before this vdots.
-                // Stop extending when the kind (LoopRow vs GridRow) changes, so that
-                // standalone subscript-scalar lines (e.g. "r_1 c_1") before a grid loop
-                // are not pulled into the block.
-                let last_is_grid = j > 0 && matches!(raw_lines[j - 1], RawLine::GridRow(_));
+                // Find consecutive LoopRows/GridRows/QueryLines before this vdots.
+                // Stop extending when the kind (LoopRow vs GridRow vs QueryLine) changes.
+                let last_kind = if j > 0 {
+                    row_kind(&raw_lines[j - 1])
+                } else {
+                    RowKind::Loop
+                };
                 let mut block_start = j;
                 while block_start > 0 {
                     let prev = &raw_lines[block_start - 1];
-                    let prev_is_grid = matches!(prev, RawLine::GridRow(_));
-                    if is_loop_or_grid(prev) && prev_is_grid == last_is_grid {
+                    if is_loop_or_grid(prev) && row_kind(prev) == last_kind {
                         block_start -= 1;
                     } else {
                         break;
                     }
                 }
                 if block_start == j {
-                    // No LoopRows/GridRows before — not a vdots loop, skip
+                    // No LoopRows/GridRows/QueryLines before — not a vdots loop, skip
                     j += 1;
                     continue;
                 }
-                // Find LoopRows/GridRows after this vdots (same kind constraint)
+                // Find rows after this vdots (same kind constraint)
                 let mut after_end = j + 1;
                 while after_end < raw_lines.len() {
                     let next = &raw_lines[after_end];
-                    let next_is_grid = matches!(next, RawLine::GridRow(_));
-                    if is_loop_or_grid(next) && next_is_grid == last_is_grid {
+                    if is_loop_or_grid(next) && row_kind(next) == last_kind {
                         after_end += 1;
                     } else {
                         break;
@@ -672,25 +706,20 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
         if let Some(&(block_start, vdots_idx, after_end)) =
             vdots_blocks.iter().find(|&&(bs, _, _)| bs == i)
         {
-            // Determine if the loop body is a grid row (→ ReadGridRow) or multi-var (→ ReadLoopRow)
+            // Determine block kind: query, grid, or loop-row
             let is_grid = matches!(raw_lines[block_start], RawLine::GridRow(_));
+            let is_query = matches!(raw_lines[block_start], RawLine::QueryLine { .. });
 
-            // Verify all lines in the block are the same kind (mixing GridRow/LoopRow is unsupported)
+            // Verify all lines in the block are the same kind
             for idx in (block_start..vdots_idx).chain(vdots_idx + 1..after_end) {
                 let line_is_grid = matches!(raw_lines[idx], RawLine::GridRow(_));
-                if line_is_grid != is_grid {
+                let line_is_query = matches!(raw_lines[idx], RawLine::QueryLine { .. });
+                if line_is_grid != is_grid || line_is_query != is_query {
                     return Err(ParseError::Unknown);
                 }
             }
 
-            // Get the representative vars from the first "before" row
-            let first_before: Vec<String> = match &raw_lines[block_start] {
-                RawLine::LoopRow(vars) => vars.iter().map(|v| v.math.clone()).collect(),
-                RawLine::GridRow(v) => vec![v.math.clone()],
-                _ => return Err(ParseError::Unknown),
-            };
-
-            // Helper: extract subscript from a LoopRow or GridRow
+            // Helper: extract subscript / loop_bound from a block row
             let row_subscript = |rl: &RawLine| -> String {
                 match rl {
                     RawLine::LoopRow(vars) => vars
@@ -698,15 +727,15 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
                         .and_then(|v| v.subscript.clone())
                         .unwrap_or_default(),
                     RawLine::GridRow(v) => v.subscript.clone().unwrap_or_default(),
+                    RawLine::QueryLine { loop_bound } => loop_bound.clone(),
                     _ => String::new(),
                 }
             };
 
-            // Get the loop end from the last "after" row's last var's subscript
+            // Get the loop end from the last "after" row, falling back to last "before" row
             let end_size = if after_end > vdots_idx + 1 {
                 row_subscript(&raw_lines[after_end - 1])
             } else {
-                // No after row — use last before row's last var's subscript
                 row_subscript(&raw_lines[vdots_idx - 1])
             };
 
@@ -718,11 +747,22 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
                 begin: "0".to_string(),
                 end: end_size,
             });
-            if is_grid {
+            if is_query {
+                // Query loop: body format is unknown; emit an empty loop (no ReadLoopRow).
+                // The template generates a TODO stub for the user to fill in.
+            } else if is_grid {
+                let first_before: Vec<String> = match &raw_lines[block_start] {
+                    RawLine::GridRow(v) => vec![v.math.clone()],
+                    _ => return Err(ParseError::Unknown),
+                };
                 ops.push(IntermOp::ReadGridRow(
                     first_before.into_iter().next().unwrap_or_default(),
                 ));
             } else {
+                let first_before: Vec<String> = match &raw_lines[block_start] {
+                    RawLine::LoopRow(vars) => vars.iter().map(|v| v.math.clone()).collect(),
+                    _ => return Err(ParseError::Unknown),
+                };
                 ops.push(IntermOp::ReadLoopRow(first_before));
             }
             ops.push(IntermOp::LoopEnd);
@@ -782,6 +822,10 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
             }
             RawLine::GridRow(_) => {
                 // GridRow not matched to a vdots block — treat as unsupported
+                return Err(ParseError::Unknown);
+            }
+            RawLine::QueryLine { .. } => {
+                // QueryLine not matched to a vdots block — treat as unsupported
                 return Err(ParseError::Unknown);
             }
         }
@@ -979,19 +1023,19 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     // Phase 2 early detection
     let block0 = blocks[0];
 
-    // Check for \text{ or \mathrm{
-    if block0.contains("\\text{") || block0.contains("\\mathrm{") {
-        return not_ok(raw);
-    }
+    // Whether block0 contains a query-placeholder marker (\text{...} or \mathrm{...}).
+    // If so, we attempt to parse block0 normally (QueryLine handling in parse_line/build_intermediate)
+    // rather than rejecting early.
+    let has_query_marker = block0.contains("\\text{") || block0.contains("\\mathrm{");
 
-    // Check for multiple blocks
-    if blocks.len() > 1 {
+    // Check for multiple blocks (only reject non-query multi-block forms)
+    if blocks.len() > 1 && !has_query_marker {
         let block1 = blocks[1].trim();
-        // blocks[1] starts with digit → query sub-format
+        // blocks[1] starts with digit → query sub-format (unrecognized multi-block form)
         if block1.starts_with(|c: char| c.is_ascii_digit()) {
             return not_ok(raw);
         }
-        // blocks[0] is single token → T-testcases
+        // blocks[0] is single token → T-testcases type
         let block0_tokens: Vec<Token> = block0
             .lines()
             .filter(|l| !l.trim().is_empty())
@@ -1504,34 +1548,87 @@ mod tests {
         );
     }
 
-    // ── Phase 2 early-exit: \\text{query} ─────────────────────────────────────
+    // ── Query type: \\text{query}_Q ───────────────────────────────────────────
 
-    /// Opaque query blocks → ok: false
+    /// \text{query}_Q vdots block → ok=true, preamble var q, LoopBegin(0..q)+LoopEnd
     #[test]
-    fn phase2_text_query_returns_not_ok() {
+    fn text_query_vdots_ok() {
         let spec = scalar_ok("Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n");
-        assert!(!spec.ok, "expected ok=false for \\text{{query}} block");
-        assert!(spec.vars.is_empty());
-        assert!(spec.ops.is_empty());
+        assert!(spec.ok, "expected ok=true for \\text{{query}} vdots block");
+        assert_eq!(spec.vars.len(), 1);
+        assert_eq!(spec.vars[0].name, "q");
+        assert!(spec.vars[0].is_size, "q should be is_size=true");
+        // ops: ReadLine(q), LoopBegin(0..q), LoopEnd
+        assert_eq!(spec.ops.len(), 3);
+        assert_eq!(spec.ops[0].tag, OpTag::ReadLine);
+        assert_eq!(spec.ops[1].tag, OpTag::LoopBegin);
+        assert_eq!(spec.ops[1].end.as_deref(), Some("q"));
+        assert_eq!(spec.ops[2].tag, OpTag::LoopEnd);
     }
 
-    // ── Phase 2 early-exit: \\mathrm{Query} ───────────────────────────────────
+    // ── Query type: \\mathrm{Query}_Q ─────────────────────────────────────────
 
+    /// \mathrm{Query}_Q vdots block with preamble → ok=true
     #[test]
-    fn phase2_mathrm_query_returns_not_ok() {
-        let spec = scalar_ok("N\nQ\n\\mathrm{Query}_1\n\\vdots\n\\mathrm{Query}_Q\n");
-        assert!(!spec.ok, "expected ok=false for \\mathrm{{Query}}");
+    fn mathrm_query_vdots_ok() {
+        let spec = scalar_ok("N Q\n\\mathrm{Query}_1\n\\vdots\n\\mathrm{Query}_Q\n");
+        assert!(
+            spec.ok,
+            "expected ok=true for \\mathrm{{Query}} vdots block"
+        );
+        // preamble vars n and q
+        assert!(spec.vars.iter().any(|v| v.name == "n"), "expected var n");
+        let qv = spec
+            .vars
+            .iter()
+            .find(|v| v.name == "q")
+            .expect("expected var q");
+        assert!(qv.is_size, "q should be is_size=true");
+        // ops: ReadLine(n,q), LoopBegin(0..q), LoopEnd
+        assert_eq!(spec.ops.len(), 3);
+        assert_eq!(spec.ops[1].tag, OpTag::LoopBegin);
+        assert_eq!(spec.ops[1].end.as_deref(), Some("q"));
     }
 
-    // ── Phase 2: multiple blocks (query sub-format) ───────────────────────────
+    // ── Query type: multi-block with \\text{query} marker ─────────────────────
 
-    /// Two \\n\\n-separated blocks where the tail blocks encode sub-format
+    /// Multi-block with \text{query}_Q in block[0] → ok=true (extra blocks ignored)
     #[test]
-    fn phase2_multi_block_query_subformat() {
+    fn text_query_multi_block_ok() {
+        let spec =
+            scalar_ok("N Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\n1 x\n\n2 x k\n\n3 l r\n");
+        assert!(
+            spec.ok,
+            "expected ok=true for multi-block \\text{{query}} form"
+        );
+        assert!(spec.vars.iter().any(|v| v.name == "n"));
+        assert!(spec.vars.iter().any(|v| v.name == "q"));
+        assert_eq!(spec.ops.len(), 3);
+        assert_eq!(spec.ops[1].tag, OpTag::LoopBegin);
+        assert_eq!(spec.ops[1].end.as_deref(), Some("q"));
+    }
+
+    // ── Query type without subscript → still ok=false ─────────────────────────
+
+    /// \text{query} with no subscript → ok=false (malformed)
+    #[test]
+    fn text_query_no_subscript_not_ok() {
+        let spec = scalar_ok("Q\n\\text{query}\n");
+        assert!(
+            !spec.ok,
+            "expected ok=false for \\text{{query}} without subscript"
+        );
+    }
+
+    // ── Phase 2: multiple blocks (non-query digit sub-format) → still ok=false
+
+    /// Two \\n\\n-separated blocks where block[1] starts with a digit and no query marker
+    #[test]
+    fn multi_block_digit_no_query_marker_not_ok() {
         let spec = scalar_ok("Q\nquery_1\n\\vdots\nquery_Q\n\n1 x\n\n2 x k");
         assert!(
             !spec.ok,
-            "expected ok=false for multi-block query sub-format"
+            "expected ok=false for multi-block query sub-format without \\text{{}} marker"
         );
     }
 
