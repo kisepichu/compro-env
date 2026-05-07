@@ -1043,6 +1043,7 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
             ops: vec![],
             query_types: vec![],
             query_body: vec![],
+            testcase_body: vec![],
         };
     }
 
@@ -1067,23 +1068,23 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
             matches!(parse_line(&tokens), Ok(RawLine::QueryLine { .. }))
         });
 
-    // Check for multiple blocks (only reject non-query multi-block forms)
-    if blocks.len() > 1 && !has_query_marker {
-        let block1 = blocks[1].trim();
-        // blocks[1] starts with digit → query sub-format (unrecognized multi-block form)
-        if block1.starts_with(|c: char| c.is_ascii_digit()) {
-            return not_ok(raw);
-        }
-        // blocks[0] is single token → T-testcases type
+    // Whether the input uses the T-testcases format:
+    // block 0 = single scalar (e.g. T), block 1 = body of each test case.
+    let is_testcase_format = blocks.len() > 1 && !has_query_marker && {
         let block0_tokens: Vec<Token> = block0
             .lines()
             .filter(|l| !l.trim().is_empty())
             .flat_map(tokenize_line)
             .filter(|t| t != &Token::Space)
             .collect();
-        if block0_tokens.len() == 1
-            && let Token::Ident(_) = &block0_tokens[0]
-        {
+        block0_tokens.len() == 1 && matches!(block0_tokens[0], Token::Ident(_))
+    };
+
+    // Check for multiple blocks (only reject non-query multi-block forms)
+    if blocks.len() > 1 && !has_query_marker && !is_testcase_format {
+        let block1 = blocks[1].trim();
+        // blocks[1] starts with digit → query sub-format (unrecognized multi-block form)
+        if block1.starts_with(|c: char| c.is_ascii_digit()) {
             return not_ok(raw);
         }
     }
@@ -1335,6 +1336,19 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
         (vec![], vec![])
     };
 
+    // Parse T-testcases block 1 as scalar vars for testcase_body.
+    // On success, mark the single block-0 var (the loop count, e.g. T) as is_size.
+    let testcase_body = if is_testcase_format {
+        parse_scalar_block(blocks[1], constraints)
+    } else {
+        vec![]
+    };
+    if !testcase_body.is_empty()
+        && let Some(v) = var_decls.first_mut()
+    {
+        v.is_size = true;
+    }
+
     InputSpec {
         raw: raw.to_string(),
         ok: true,
@@ -1342,6 +1356,7 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
         ops,
         query_types,
         query_body,
+        testcase_body,
     }
 }
 
@@ -1441,6 +1456,61 @@ fn flatten_single_var_loops(ops: Vec<InputOp>, var_decls: &mut [VarDecl]) -> Vec
         i += 1;
     }
     result
+}
+
+/// Parse a single block as a flat list of scalar variables.
+/// Returns the VarDecl list on success, or an empty vec if parsing fails or produces
+/// non-scalar results (e.g. arrays, loops).
+fn parse_scalar_block(block: &str, constraints: &str) -> Vec<VarDecl> {
+    let lines: Vec<&str> = block
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return vec![];
+    }
+
+    // Each line must parse as plain scalars (Scalars). Any other pattern (Array1d,
+    // GridRow, LoopRow with Cdots, Vdots, QueryLine, …) means this is not a simple
+    // scalar block and we fall back to empty.
+    let mut all_raw_vars: Vec<RawVar> = vec![];
+    for line in &lines {
+        let toks = tokenize_line(line);
+        match parse_line(&toks) {
+            Ok(RawLine::Scalars(v)) => all_raw_vars.extend(v),
+            _ => return vec![],
+        }
+    }
+    let raw_vars = all_raw_vars;
+    if raw_vars.is_empty() {
+        return vec![];
+    }
+
+    let seeds: Vec<String> = raw_vars
+        .iter()
+        .map(|rv| match &rv.subscript {
+            Some(s) => format!("{}{}", rv.math, s),
+            None => rv.math.clone(),
+        })
+        .collect();
+    let mut var_decls: Vec<VarDecl> = raw_vars
+        .iter()
+        .zip(seeds.iter())
+        .map(|(rv, seed)| {
+            let name = normalize_name(seed, &seeds);
+            VarDecl {
+                name,
+                math: rv.math.clone(),
+                var_type: VarType::Unknown,
+                dim: 0,
+                size: vec![],
+                is_size: false,
+            }
+        })
+        .collect();
+    infer_types(&mut var_decls, constraints);
+    var_decls
 }
 
 /// Parse `blocks[1..]` from a query-type input.
@@ -1615,6 +1685,7 @@ fn not_ok(raw: &str) -> InputSpec {
         ops: vec![],
         query_types: vec![],
         query_body: vec![],
+        testcase_body: vec![],
     }
 }
 
@@ -1850,10 +1921,16 @@ mod tests {
 
     // ── Phase 2: T-testcases ──────────────────────────────────────────────────
 
+    // T-testcases is now supported: ok=true with testcase_body populated.
+    // The detailed assertions live in the testcase_body_* tests below.
     #[test]
-    fn phase2_t_testcases() {
+    fn phase2_t_testcases_now_supported() {
         let spec = scalar_ok("T\n\na s");
-        assert!(!spec.ok, "expected ok=false for T-testcases pattern");
+        assert!(spec.ok, "T-testcases should now parse as ok=true");
+        assert!(
+            !spec.testcase_body.is_empty(),
+            "testcase_body should be populated"
+        );
     }
 
     // ── Phase 1: subscripted scalars (A_x A_y) — now supported ──────────────
@@ -2513,5 +2590,41 @@ mod tests {
         assert_eq!(spec.vars[0].name, "query");
         assert!(spec.query_types.is_empty());
         assert!(spec.query_body.is_empty());
+    }
+
+    // ── T-testcases ────────────────────────────────────────────────────────────────
+
+    /// abc238-D style: block 0 = single scalar T, block 1 = `a s`
+    /// Expected: ok=true, vars=[t(is_size:true)], testcase_body=[a, s]
+    #[test]
+    fn testcase_body_abc238d() {
+        let spec = parse("T\n\na s", "1 ≤ T ≤ 100\n1 ≤ a ≤ 10^9\nS is a string");
+        assert!(spec.ok, "expected ok=true for T-testcases format");
+        assert_eq!(spec.vars.len(), 1);
+        assert_eq!(spec.vars[0].name, "t");
+        assert!(spec.vars[0].is_size, "T var must be is_size:true");
+        assert_eq!(spec.testcase_body.len(), 2);
+        assert_eq!(spec.testcase_body[0].name, "a");
+        assert_eq!(spec.testcase_body[1].name, "s");
+        assert!(spec.query_types.is_empty());
+        assert!(spec.query_body.is_empty());
+    }
+
+    /// Single-block input: testcase_body must remain empty
+    #[test]
+    fn testcase_body_empty_for_single_block() {
+        let spec = scalar_ok("N\nA_1 \\ldots A_N");
+        assert!(spec.ok);
+        assert!(spec.testcase_body.is_empty());
+    }
+
+    /// Block 1 that cannot be parsed as scalars → testcase_body empty, but ok=true
+    /// (Currently ok=false because the detection falls through; this documents current behaviour.)
+    #[test]
+    fn testcase_body_empty_when_block1_not_scalar() {
+        // Block 1 has a 1D array pattern (not plain scalars)
+        let spec = parse("T\n\nA_1 \\ldots A_N", "");
+        // Falls back: not a plain scalar body → testcase_body should be empty
+        assert!(spec.testcase_body.is_empty());
     }
 }

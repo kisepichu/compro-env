@@ -185,8 +185,9 @@ Initialized abc334 (AtCoder) — 6 problems: a b c d e f
 | `input_format.ops`         | 読み取り命令列 (詳細後述)                                                       | パーサー             |
 | `input_format.query_types` | クエリ種別リスト (詳細後述、クエリ型以外は空リスト)                             | パーサー             |
 | `input_format.query_body`  | 単一形式クエリの変数リスト (非数値先頭 sub-block、`query_types` 非空のときは空) | パーサー             |
+| `input_format.testcase_body` | T-testcases 型のテストケース本体変数リスト (ブロック[0]=単一スカラー時、それ以外は空リスト) | パーサー |
 
-`input_format.ok` が `false` のとき `vars`・`ops`・`query_types`・`query_body` は空リスト。テンプレートは `{% if input_format.ok %}` で分岐する。
+`input_format.ok` が `false` のとき `vars`・`ops`・`query_types`・`query_body`・`testcase_body` は空リスト。テンプレートは `{% if input_format.ok %}` で分岐する。
 
 ### 入力形式パース
 
@@ -204,7 +205,10 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   ▼  Phase 2 早期検出 (ok: false にフォールバック)
   │    ブロック数 > 1 かつブロック[1] が数字始まり かつ ブロック[0] に query marker なし
   │      → 非対応クエリサブ形式 (typical90-L の q_i パターン等)
-  │    ブロック数 > 1 かつブロック[0] が単一変数のみ → T-testcases 型
+  │    ブロック数 > 1 かつブロック[0] が単一 Ident トークン かつ query marker なし
+  │      → T-testcases 型 → ブロック[1] をスカラー変数リストとしてパース
+  │        成功 → testcase_body = [VarDecl, ...]; ブロック[0] の変数は is_size: true に設定
+  │        失敗 → testcase_body = [] (テンプレートが TODO を生成)
   │    ※ ブロック[0] に query marker がある場合は早期検出をスキップ
   │
   ▼  Lexer  (ブロック[0] を行単位でトークン列化)
@@ -253,7 +257,7 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │      query_types = [], query_body = [] のまま。
   │      テンプレートは solve にループスタブ (TODO) を生成する。
   │
-  ▼  InputSpec  (vars + ops + query_types + query_body)
+  ▼  InputSpec  (vars + ops + query_types + query_body + testcase_body)
 ```
 
 #### 変数名の小文字化規則
@@ -449,6 +453,37 @@ X
 - `dim` は常に 0 (スカラー); `is_size` は常に `false`
 - 変数の命名規則・型推定はメイン `vars` と同一ルールを適用するが、スコープは独立
 
+#### `testcase_body` の形式 (JSON 例)
+
+T-testcases 型 (ブロック[0] = 単一スカラー `T`, ブロック[1] = 各テストケースの入力形式) のとき、ブロック[1] をスカラーとして解析した変数リスト。それ以外は空リスト `[]`。
+
+入力例 (abc238-D 形式):
+
+```
+T
+
+a s
+```
+
+生成される `testcase_body`:
+
+```json
+[
+  { "name": "a", "math": "a", "var_type": "int", "dim": 0, "is_size": false },
+  { "name": "s", "math": "s", "var_type": "str", "dim": 0, "is_size": false }
+]
+```
+
+生成される `vars`:
+
+```json
+[{ "name": "t", "math": "T", "var_type": "int", "dim": 0, "is_size": true }]
+```
+
+- `dim` は常に 0 (スカラー)。ブロック[1] がスカラー以外を含む場合は `testcase_body = []` にフォールバック
+- ループ変数 (ループ上限) は `vars[0].name` (例: `t`)。テンプレートは `for _ in 0..t { ... }` を生成
+- 変数の命名規則・型推定はメイン `vars` と同一ルールを適用するが、スコープは独立
+
 #### 型推定 (制約テキストから)
 
 制約テキストを走査し、以下のヒューリスティックで `vars[*].var_type` を設定する:
@@ -479,6 +514,7 @@ X
 | 添字付きスカラー (アルファベット添字)                                     | `A_x A_y`                                                                      | abc246-E           |
 | 添字付きスカラー (数値添字・vdots なし)                                   | `r_1 c_1` / `r_2 c_2` (各行独立)                                               | abc176-D           |
 | クエリ型 (`\text{query}_Q` / `\mathrm{Query}_Q` / `query_Q`)、sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D, abc212-D |
+| T-testcases 型 (ブロック[0]=`T`、ブロック[1]=各テストケースの入力形式)           | `T\n\na s`                                                                        | abc238-D                      |
 
 **前処理**: `\hspace{0.4cm}\vdots` は `\vdots` に正規化する。また `:` のみの行も `\vdots` と等価に扱う (トークナイザーレベルで正規化)。
 
@@ -501,7 +537,6 @@ X
 | 非対応パターン                                                      | 例                                   | 確認問題    |
 | ------------------------------------------------------------------- | ------------------------------------ | ----------- |
 | クエリ型 (`q_i` など "query" を含まない plain marker、`\text{}` もなし) | `Q\nq_1\n:\nq_Q`                     | typical90-L |
-| T-testcases 型 (pre[0]=`T`, pre[1]=形式)                            | `T\n\n a s`                          | abc238-D    |
 | 可変長行 (サイズが変数)                                             | `T_i K_i A_{i,1} \ldots A_{i,K_i}`   | abc226-C    |
 | 斜め・上三角行列                                                    | `A_{1,2} \cdots A_{1,2N}` / `\vdots` | abc236-D    |
 | ネストループ 2 段以上                                               | —                                    | —           |

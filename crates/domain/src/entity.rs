@@ -177,6 +177,9 @@ pub struct InputSpec {
     /// scalar variables (e.g. abc334_d's "X" → [x: i64]).
     /// Always empty when `query_types` is non-empty.
     pub query_body: Vec<VarDecl>,
+    /// Non-empty only for T-testcases inputs (block 0 = single scalar T, block 1 = body).
+    /// Contains the scalar variables of block 1. The loop bound is `vars[0].name`.
+    pub testcase_body: Vec<VarDecl>,
 }
 
 /// Sample input/output (Value Object)
@@ -248,6 +251,7 @@ mod input_spec_tests {
             ops: vec![],
             query_types: vec![],
             query_body: vec![],
+            testcase_body: vec![],
         };
         assert!(!spec.ok);
         assert!(spec.vars.is_empty());
@@ -324,6 +328,7 @@ mod input_spec_tests {
             ],
             query_types: vec![],
             query_body: vec![],
+            testcase_body: vec![],
         };
         assert!(spec.ok);
         let json = serde_json::to_value(&spec).unwrap();

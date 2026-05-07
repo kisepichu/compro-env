@@ -211,6 +211,16 @@ fn solve(
             todo!()
         }
         {% endif -%}
+        {% elif input_format.testcase_body | length > 0 -%}
+        for _ in 0..{{ input_format.vars[0].name }} {
+            input! {
+                {% for v in input_format.testcase_body -%}
+                {{ v.name }}: {% if v.var_type == "str" %}String{% else %}i64{% endif %},
+                {% endfor -%}
+            }
+            // TODO: handle test case
+            todo!()
+        }
         {% else -%}
         // TODO: write solution and call out!(answer)
         todo!()
