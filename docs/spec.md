@@ -175,7 +175,9 @@ InputSpec                           ← Value Object (usecases/input_format/ で
   ok: bool                          パース成功フラグ
   vars: Vec<VarDecl>                変数宣言リスト (ok=false のとき空)
   ops: Vec<InputOp>                 読み取り命令列 (ok=false のとき空)
-  query_types: Vec<QueryTypeDecl>   クエリ種別リスト (クエリ型入力のみ非空; ok=false のとき空)
+  query_types: Vec<QueryTypeDecl>   クエリ種別リスト (numbered sub-block がある場合のみ非空; ok=false のとき空)
+  query_body: Vec<VarDecl>          単一形式クエリの本体変数 (非数値先頭 sub-block がある場合のみ非空; ok=false のとき空)
+                                    query_types が非空のときは常に空
 
 QueryTypeDecl                       ← Value Object (クエリ型入力のサブ形式)
   type_id: String                   クエリ種別番号 ("1", "2", "3")

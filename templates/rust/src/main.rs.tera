@@ -195,6 +195,16 @@ fn solve(
                 _ => unreachable!(),
             }
         }
+        {% elif input_format.query_body | length > 0 -%}
+        for _ in 0..{{ query_loop_end }} {
+            input! {
+                {% for v in input_format.query_body -%}
+                {{ v.name }}: {% if v.var_type == "str" %}String{% else %}i64{% endif %},
+                {% endfor -%}
+            }
+            // TODO: handle query
+            todo!()
+        }
         {% else -%}
         for _ in 0..{{ query_loop_end }} {
             // TODO: read and handle query

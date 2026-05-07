@@ -173,6 +173,10 @@ pub struct InputSpec {
     /// Non-empty only for query-type input (`\text{query}_Q` form) when numbered
     /// sub-blocks are present.  Each entry corresponds to one query kind.
     pub query_types: Vec<QueryTypeDecl>,
+    /// Non-empty only for single-format query input: the first non-numeric sub-block's
+    /// scalar variables (e.g. abc334_d's "X" → [x: i64]).
+    /// Always empty when `query_types` is non-empty.
+    pub query_body: Vec<VarDecl>,
 }
 
 /// Sample input/output (Value Object)
@@ -243,6 +247,7 @@ mod input_spec_tests {
             vars: vec![],
             ops: vec![],
             query_types: vec![],
+            query_body: vec![],
         };
         assert!(!spec.ok);
         assert!(spec.vars.is_empty());
@@ -318,6 +323,7 @@ mod input_spec_tests {
                 },
             ],
             query_types: vec![],
+            query_body: vec![],
         };
         assert!(spec.ok);
         let json = serde_json::to_value(&spec).unwrap();

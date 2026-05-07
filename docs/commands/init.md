@@ -184,8 +184,9 @@ Initialized abc334 (AtCoder) — 6 problems: a b c d e f
 | `input_format.vars` | 変数宣言リスト (詳細後述) | パーサー |
 | `input_format.ops` | 読み取り命令列 (詳細後述) | パーサー |
 | `input_format.query_types` | クエリ種別リスト (詳細後述、クエリ型以外は空リスト) | パーサー |
+| `input_format.query_body` | 単一形式クエリの変数リスト (非数値先頭 sub-block、`query_types` 非空のときは空) | パーサー |
 
-`input_format.ok` が `false` のとき `vars`・`ops`・`query_types` は空リスト。テンプレートは `{% if input_format.ok %}` で分岐する。
+`input_format.ok` が `false` のとき `vars`・`ops`・`query_types`・`query_body` は空リスト。テンプレートは `{% if input_format.ok %}` で分岐する。
 
 ### 入力形式パース
 
@@ -230,23 +231,28 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │    QueryLine vdots ブロック → LoopBegin(end=q) + LoopEnd (body なし)
   │
   ▼  Query sub-block 解析 (ブロック[0] に query marker がある場合のみ)
-  │    ブロック[1..] を順に解析して query_types を構築する
+  │    ブロック[1..] を順に解析して query_types / query_body を構築する
   │    各 sub-block について:
-  │      空 sub-block → スキップ (エントリ生成しない)
-  │      先頭行の先頭トークンが NUM でない → スキップ (エントリ生成しない)
-  │        ※ 例: abc334_d の "X" → 数字始まりでないためスキップ、query_types = []
-  │      先頭行の先頭トークンが NUM → type_id として採用
+  │      空 sub-block → スキップ
+  │      先頭行の先頭トークンが NUM → numbered sub-block (query_types に追加)
+  │        type_id = そのトークン
   │        残りトークン (先頭行の残り + 後続行) をスカラー変数リストとして解析
   │          変数名の小文字化・衝突解決はメイン vars と独立して実施
   │          型推定は constraints テキストを用いてメインと同一推定器を適用
   │        パース成功 → QueryTypeDecl { type_id, ok: true, vars }
   │        変数解析失敗 → QueryTypeDecl { type_id, ok: false, vars: [] }
+  │      先頭行の先頭トークンが NUM でない → single-format sub-block (query_body に格納)
+  │        ※ 例: abc334_d の "X" → x: i64 として query_body = [x]
+  │        全行を連結してスカラー変数リストとして解析
+  │        パース成功 → query_body = [VarDecl, ...]
+  │        パース失敗 / 既に query_body が設定済み → スキップ (最初の 1 件のみ採用)
+  │        query_types が非空の場合は query_body を設定しない
   │
-  │    query_types が空 (sub-block なし / 全スキップ) の場合:
-  │      全クエリが同一形式または形式不明。query_types = [] のまま。
+  │    すべて空の場合:
+  │      query_types = [], query_body = [] のまま。
   │      テンプレートは solve にループスタブ (TODO) を生成する。
   │
-  ▼  InputSpec  (vars + ops + query_types)
+  ▼  InputSpec  (vars + ops + query_types + query_body)
 ```
 
 #### 変数名の小文字化規則
@@ -343,6 +349,31 @@ N Q
 - `type_id`: sub-block 先頭の数字トークン
 - `ok`: sub-block の解析成功フラグ (false のときテンプレートが TODO を生成)
 - `vars`: このクエリ種別のローカル変数。`dim` は常に 0 (スカラー); `is_size` は常に `false`
+- 変数の命名規則・型推定はメイン `vars` と同一ルールを適用するが、スコープは独立
+
+#### `query_body` の形式 (JSON 例)
+
+単一形式クエリ (`query_types = []`) かつ非数値先頭 sub-block が存在するとき、その変数リスト。それ以外は空リスト `[]`。
+
+入力例 (abc334_d 形式):
+```
+N Q
+R_1 \ldots R_N
+\text{query}_1
+\vdots
+\text{query}_Q
+
+X
+```
+
+生成される `query_body`:
+```json
+[
+  { "name": "x", "math": "X", "var_type": "int", "dim": 0, "is_size": false }
+]
+```
+
+- `dim` は常に 0 (スカラー); `is_size` は常に `false`
 - 変数の命名規則・型推定はメイン `vars` と同一ルールを適用するが、スコープは独立
 
 #### 型推定 (制約テキストから)
@@ -473,8 +504,19 @@ fn solve(
                 _ => unreachable!(),
             }
         }
+        {% elif input_format.query_body | length > 0 -%}
+        {# 単一形式クエリ (非数値先頭 sub-block): 変数入力付きループを生成 #}
+        for _ in 0..{{ ns.query_loop_end }} {
+            input! {
+                {% for v in input_format.query_body -%}
+                {{ v.name }}: {% if v.var_type == "str" %}String{% else %}i64{% endif %},
+                {% endfor -%}
+            }
+            // TODO: handle query
+            todo!()
+        }
         {% else -%}
-        {# 単一形式クエリ (sub-block が数字始まりでない / なし): ループスタブを生成 #}
+        {# 単一形式クエリ (sub-block なし): ループスタブを生成 #}
         for _ in 0..{{ ns.query_loop_end }} {
             // TODO: read and handle query
             todo!()
@@ -579,13 +621,14 @@ sub-block が `ok: false` のクエリ種別は以下のようにフォールバ
 }
 ```
 
-**単一形式クエリのフォールバック例** (abc334_d 形式: `query_types = []`):
+**単一形式クエリ例** (abc334_d 形式: `query_types = []`, `query_body = [x]`):
 
 ```rust
 fn solve(n: usize, q: usize, r: Vec<i64>) -> String {
     with_output(|| {
         for _ in 0..q {
-            // TODO: read and handle query
+            input! { x: i64, }
+            // TODO: handle query
             todo!()
         }
     })
@@ -595,6 +638,19 @@ fn main() {
     input! { n: usize, q: usize, }
     input! { r: [i64; n], }
     print!("{}", solve(n, q, r));
+}
+```
+
+**sub-block なし (ループスタブのみ)** (`query_types = []`, `query_body = []`):
+
+```rust
+fn solve(q: usize) -> String {
+    with_output(|| {
+        for _ in 0..q {
+            // TODO: read and handle query
+            todo!()
+        }
+    })
 }
 ```
 
