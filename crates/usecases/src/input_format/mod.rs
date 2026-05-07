@@ -1070,15 +1070,20 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
 
     // Whether the input uses the T-testcases format:
     // block 0 = single scalar (e.g. T), block 1 = body of each test case.
-    let is_testcase_format = blocks.len() > 1 && !has_query_marker && {
-        let block0_tokens: Vec<Token> = block0
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .flat_map(tokenize_line)
-            .filter(|t| t != &Token::Space)
-            .collect();
-        block0_tokens.len() == 1 && matches!(block0_tokens[0], Token::Ident(_))
-    };
+    // T-testcases: block 0 = single scalar, block 1 = test case body (not digit-start).
+    // Digit-start block 1 belongs to unsupported query sub-formats, not T-testcases.
+    let is_testcase_format = blocks.len() > 1
+        && !has_query_marker
+        && !blocks[1].trim().starts_with(|c: char| c.is_ascii_digit())
+        && {
+            let block0_tokens: Vec<Token> = block0
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .flat_map(tokenize_line)
+                .filter(|t| t != &Token::Space)
+                .collect();
+            block0_tokens.len() == 1 && matches!(block0_tokens[0], Token::Ident(_))
+        };
 
     // Check for multiple blocks (only reject non-query multi-block forms)
     if blocks.len() > 1 && !has_query_marker && !is_testcase_format {
@@ -1471,14 +1476,14 @@ fn parse_scalar_block(block: &str, constraints: &str) -> Vec<VarDecl> {
         return vec![];
     }
 
-    // Each line must parse as plain scalars (Scalars). Any other pattern (Array1d,
-    // GridRow, LoopRow with Cdots, Vdots, QueryLine, …) means this is not a simple
-    // scalar block and we fall back to empty.
+    // Each line must parse as plain scalars (Scalars or LoopRow — subscripted vars
+    // like A_x A_y treated as dim=0 scalars). Any other pattern (Array1d with Cdots,
+    // GridRow, Vdots, QueryLine, …) means this is not a simple scalar block.
     let mut all_raw_vars: Vec<RawVar> = vec![];
     for line in &lines {
         let toks = tokenize_line(line);
         match parse_line(&toks) {
-            Ok(RawLine::Scalars(v)) => all_raw_vars.extend(v),
+            Ok(RawLine::Scalars(v)) | Ok(RawLine::LoopRow(v)) => all_raw_vars.extend(v),
             _ => return vec![],
         }
     }
@@ -2618,13 +2623,18 @@ mod tests {
         assert!(spec.testcase_body.is_empty());
     }
 
-    /// Block 1 that cannot be parsed as scalars → testcase_body empty, but ok=true
-    /// (Currently ok=false because the detection falls through; this documents current behaviour.)
+    /// T-testcases with a 1D array in block 1: ok=true but testcase_body is empty
+    /// (falls back to a TODO-only stub in the template).
     #[test]
     fn testcase_body_empty_when_block1_not_scalar() {
         // Block 1 has a 1D array pattern (not plain scalars)
         let spec = parse("T\n\nA_1 \\ldots A_N", "");
-        // Falls back: not a plain scalar body → testcase_body should be empty
+        // ok=true: block 0 is a single ident and block 1 is not digit-start
+        assert!(
+            spec.ok,
+            "T-testcases with non-scalar block1 should still be ok=true"
+        );
+        // testcase_body empty: 1D cdots array is not a flat scalar list
         assert!(spec.testcase_body.is_empty());
     }
 }
