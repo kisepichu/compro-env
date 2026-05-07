@@ -221,7 +221,7 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   ▼  Parser  (行パターンマッチ)
   │    スカラー列 / 1D配列(cdots) / vdots → ForLoop
   │    \text{query}_Q / \mathrm{Query}_Q / query_Q → QueryLine (vdots ブロック内のみ有効)
-  │    添字が非数値 (アルファベット) → Phase 2 → ok: false  ※QueryLine 候補は例外
+  │    cdots 伴う 1D 配列で添字がすべてアルファベット → Phase 2 → ok: false
   │    空白なし隣接要素 (S_{1,1}S_{1,2}) → Phase 2 → ok: false
   │
   ▼  Semantic Analysis (ブロック[0])
@@ -231,7 +231,7 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │    QueryLine vdots ブロック → LoopBegin(end=<loop_bound>) + LoopEnd (body なし)
   │
   ▼  Query sub-block 解析 (ブロック[0] に query marker がある場合のみ)
-  │    query marker の判定: \text{ / \mathrm{ を含む、または非英数字で分割した語のいずれかが "query" と等しい (大小文字不問)
+  │    query marker の判定: block0 のいずれかの行が QueryLine としてパースされること (parse_line と同一ルール)
   │    ブロック[1..] を順に解析して query_types / query_body を構築する
   │    各 sub-block について:
   │      空 sub-block → スキップ

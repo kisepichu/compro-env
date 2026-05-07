@@ -187,7 +187,8 @@ enum ParseError {
 }
 
 /// Returns true when `s` is the literal word "query" (case-insensitive).
-/// Used by both `parse_line` and `has_query_marker` to keep detection logic in one place.
+/// Used by `parse_line` for QueryLine detection; `has_query_marker` is consistent
+/// by delegating to `parse_line` rather than calling this directly.
 fn is_query_ident(s: &str) -> bool {
     s.eq_ignore_ascii_case("query")
 }
@@ -1055,13 +1056,16 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     let block0 = blocks[0];
 
     // Whether block0 contains a query-placeholder marker.
-    // Reuses parse_line so the detection rule stays consistent with actual QueryLine parsing:
+    // Evaluated only when blocks.len() > 1 (short-circuit &&) to avoid the tokenize +
+    // parse_line pass on single-block inputs where the value is unused.
+    // Detection reuses parse_line so the rule stays consistent with actual QueryLine parsing:
     // \text{...}_Q, \mathrm{...}_Q, or query_Q (plain-text, subscript required).
     // A standalone `query` without a subscript does NOT count as a marker.
-    let has_query_marker = block0.lines().any(|line| {
-        let tokens = tokenize_line(line);
-        matches!(parse_line(&tokens), Ok(RawLine::QueryLine { .. }))
-    });
+    let has_query_marker = blocks.len() > 1
+        && block0.lines().any(|line| {
+            let tokens = tokenize_line(line);
+            matches!(parse_line(&tokens), Ok(RawLine::QueryLine { .. }))
+        });
 
     // Check for multiple blocks (only reject non-query multi-block forms)
     if blocks.len() > 1 && !has_query_marker {
