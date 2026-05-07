@@ -198,12 +198,18 @@ fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
         return Ok(RawLine::Scalars(vec![]));
     }
 
-    // Check for \text{} or \mathrm{} tokens → query placeholder line.
-    // A valid query line is exactly: \text{...}_<subscript> or \mathrm{...}_<subscript>.
-    // Anything else (extra tokens, missing subscript) falls through to Err.
-    let query_pos = tokens.iter().position(
-        |t| matches!(t, Token::Ident(s) if s.starts_with("\\text{") || s.starts_with("\\mathrm{")),
-    );
+    // Check for query placeholder tokens → QueryLine.
+    // Recognised forms:
+    //   \text{...}_<subscript>   (tokenised as Ident starting with "\\text{")
+    //   \mathrm{...}_<subscript> (tokenised as Ident starting with "\\mathrm{")
+    //   query_<subscript>        (plain ident whose lowercase is "query")
+    // A valid query line is exactly one of these followed by _<subscript> and nothing else.
+    let query_pos = tokens.iter().position(|t| {
+        matches!(t, Token::Ident(s)
+            if s.starts_with("\\text{")
+                || s.starts_with("\\mathrm{")
+                || s.to_ascii_lowercase() == "query")
+    });
     if let Some(pos) = query_pos {
         // Must be the only meaningful token (at position 0 after strip_spaces)
         if pos != 0 {
@@ -1025,10 +1031,16 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     // Phase 2 early detection
     let block0 = blocks[0];
 
-    // Whether block0 contains a query-placeholder marker (\text{...} or \mathrm{...}).
-    // If so, we attempt to parse block0 normally (QueryLine handling in parse_line/build_intermediate)
-    // rather than rejecting early.
-    let has_query_marker = block0.contains("\\text{") || block0.contains("\\mathrm{");
+    // Whether block0 contains a query-placeholder marker.
+    // Recognised forms:
+    //   \text{...}_Q / \mathrm{...}_Q  — LaTeX text/mathrm command
+    //   query_Q / Query_Q / QUERY_Q    — plain-text ident whose lowercase is "query"
+    // Short identifiers (e.g. q_i) are NOT recognised to avoid false positives.
+    let has_query_marker = block0.contains("\\text{")
+        || block0.contains("\\mathrm{")
+        || block0
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|w| w.to_ascii_lowercase() == "query");
 
     // Check for multiple blocks (only reject non-query multi-block forms)
     if blocks.len() > 1 && !has_query_marker {
@@ -1801,12 +1813,13 @@ mod tests {
     // ── Phase 2: multiple blocks (non-query digit sub-format) → still ok=false
 
     /// Two \\n\\n-separated blocks where block[1] starts with a digit and no query marker
+    /// Uses q_i (short ident, not "query") → no marker detected → ok=false
     #[test]
     fn multi_block_digit_no_query_marker_not_ok() {
-        let spec = scalar_ok("Q\nquery_1\n\\vdots\nquery_Q\n\n1 x\n\n2 x k");
+        let spec = scalar_ok("Q\nq_1\n\\vdots\nq_Q\n\n1 x\n\n2 x k");
         assert!(
             !spec.ok,
-            "expected ok=false for multi-block query sub-format without \\text{{}} marker"
+            "expected ok=false for multi-block with short q_i marker (not 'query')"
         );
     }
 
@@ -2427,6 +2440,37 @@ mod tests {
             spec.query_body.len(),
             0,
             "query_body must be empty when query_types is non-empty"
+        );
+    }
+
+    // ── plain-text query marker (query_i pattern) ────────────────────────────
+
+    /// abc212-D style: plain-text "query_i" with ":" vdots separator
+    #[test]
+    fn plain_query_marker_abc212d() {
+        // Q\nquery_1\nquery_2\n:\nquery_Q\n\n1 X\n\n2 X\n\n3\n
+        let spec = scalar_ok("Q\nquery_1\nquery_2\n:\nquery_Q\n\n1 X\n\n2 X\n\n3\n");
+        assert!(spec.ok, "expected ok=true for plain query_i marker");
+        assert_eq!(spec.query_types.len(), 3, "expected 3 query types");
+        assert_eq!(spec.query_types[0].type_id, "1");
+        assert!(spec.query_types[0].ok);
+        assert_eq!(spec.query_types[0].vars.len(), 1);
+        assert_eq!(spec.query_types[0].vars[0].name, "x");
+        assert_eq!(spec.query_types[1].type_id, "2");
+        assert!(spec.query_types[1].ok);
+        assert_eq!(spec.query_types[1].vars.len(), 1);
+        assert_eq!(spec.query_types[2].type_id, "3");
+        assert!(spec.query_types[2].ok);
+        assert_eq!(spec.query_types[2].vars.len(), 0);
+    }
+
+    /// Short ident q_i (not "query") must NOT trigger query marker detection
+    #[test]
+    fn plain_query_marker_not_triggered_for_short_ident() {
+        let spec = scalar_ok("Q\nq_1\n:\nq_Q\n\n1 x\n");
+        assert!(
+            !spec.ok,
+            "expected ok=false: q_i is too short to be a query marker"
         );
     }
 }
