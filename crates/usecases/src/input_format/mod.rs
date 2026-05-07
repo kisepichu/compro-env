@@ -1055,15 +1055,13 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     let block0 = blocks[0];
 
     // Whether block0 contains a query-placeholder marker.
-    // Recognised forms:
-    //   \text{...}_Q / \mathrm{...}_Q  — LaTeX text/mathrm command
-    //   query_Q / Query_Q / QUERY_Q    — plain-text ident whose lowercase is "query"
-    // Short identifiers (e.g. q_i) are NOT recognised to avoid false positives.
-    let has_query_marker = block0.contains("\\text{")
-        || block0.contains("\\mathrm{")
-        || block0
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(is_query_ident);
+    // Reuses parse_line so the detection rule stays consistent with actual QueryLine parsing:
+    // \text{...}_Q, \mathrm{...}_Q, or query_Q (plain-text, subscript required).
+    // A standalone `query` without a subscript does NOT count as a marker.
+    let has_query_marker = block0.lines().any(|line| {
+        let tokens = tokenize_line(line);
+        matches!(parse_line(&tokens), Ok(RawLine::QueryLine { .. }))
+    });
 
     // Check for multiple blocks (only reject non-query multi-block forms)
     if blocks.len() > 1 && !has_query_marker {
