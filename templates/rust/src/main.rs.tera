@@ -154,6 +154,16 @@ macro_rules! out {
 {% if input_format.ok -%}
 use proconio::input;
 
+{% set_global query_loop_end = "" -%}
+{% for i in range(end=input_format.ops | length) -%}
+{% set op = input_format.ops[i] -%}
+{% if op.tag == "loop_begin" -%}
+{% set next_i = i + 1 -%}
+{% if input_format.ops[next_i] is defined and input_format.ops[next_i].tag == "loop_end" -%}
+{% set_global query_loop_end = op.end -%}
+{% endif -%}
+{% endif -%}
+{% endfor -%}
 fn solve(
     {%- for vd in input_format.vars %}
     {% if vd.dim == 0 -%}
@@ -164,8 +174,37 @@ fn solve(
     {%- endfor %}
 ) -> String {
     with_output(|| {
+        {% if query_loop_end != "" -%}
+        {% if input_format.query_types | length > 0 -%}
+        for _ in 0..{{ query_loop_end }} {
+            input! { query_type: usize, }
+            match query_type {
+                {% for qt in input_format.query_types -%}
+                {{ qt.type_id }} => {
+                    {% if qt.ok -%}
+                    input! {
+                        {% for v in qt.vars -%}
+                        {{ v.name }}: {% if v.var_type == "str" %}String{% else %}i64{% endif %},
+                        {% endfor -%}
+                    }
+                    {% endif -%}
+                    // TODO: handle query type {{ qt.type_id }}
+                    todo!()
+                }
+                {% endfor -%}
+                _ => unreachable!(),
+            }
+        }
+        {% else -%}
+        for _ in 0..{{ query_loop_end }} {
+            // TODO: read and handle query
+            todo!()
+        }
+        {% endif -%}
+        {% else -%}
         // TODO: write solution and call out!(answer)
         todo!()
+        {% endif -%}
     })
 }
 
@@ -193,11 +232,7 @@ fn main() {
     {% set next_index = loop.index0 + 1 -%}
     {% set body_op = input_format.ops[next_index] -%}
     {% if body_op.tag == "loop_end" -%}
-    // TODO: read {{ op.end }} queries in a loop — write manually
-    for _ in 0..{{ op.end }} {
-        // input! { t: usize, ... }
-        todo!()
-    }
+    {# empty-body loop (QueryLine origin) — handled in solve, skip in main #}
     {% else -%}
     {% for v in body_op.vars -%}
     {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}

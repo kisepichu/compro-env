@@ -1,4 +1,4 @@
-use domain::entity::{InputOp, InputSpec, OpTag, VarDecl, VarRef, VarType};
+use domain::entity::{InputOp, InputSpec, OpTag, QueryTypeDecl, VarDecl, VarRef, VarType};
 
 // ── Lexer ──────────────────────────────────────────────────────────────────────
 
@@ -1011,6 +1011,7 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
             ok: false,
             vars: vec![],
             ops: vec![],
+            query_types: vec![],
         };
     }
 
@@ -1288,11 +1289,21 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
         return not_ok(raw);
     }
 
+    // Parse query sub-blocks (blocks[1..]) when a query marker was present in block0.
+    // Each sub-block whose first token is a Num becomes a QueryTypeDecl.
+    // Sub-blocks that start with a non-Num token (e.g. abc334-D's "X") are skipped entirely.
+    let query_types = if has_query_marker {
+        parse_query_subblocks(&blocks[1..], constraints)
+    } else {
+        vec![]
+    };
+
     InputSpec {
         raw: raw.to_string(),
         ok: true,
         vars: var_decls,
         ops,
+        query_types,
     }
 }
 
@@ -1394,12 +1405,108 @@ fn flatten_single_var_loops(ops: Vec<InputOp>, var_decls: &mut [VarDecl]) -> Vec
     result
 }
 
+/// Parse `blocks[1..]` from a query-type input into `QueryTypeDecl` entries.
+///
+/// Each sub-block is a `\n\n`-separated chunk of text.  Only sub-blocks whose
+/// first non-empty line starts with a `Num` token are processed; others are skipped.
+fn parse_query_subblocks(subblocks: &[&str], constraints: &str) -> Vec<QueryTypeDecl> {
+    let mut result = Vec::new();
+
+    for block in subblocks {
+        let block = block.trim();
+        if block.is_empty() {
+            continue;
+        }
+
+        // Collect all non-empty lines across the sub-block.
+        let lines: Vec<&str> = block
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        if lines.is_empty() {
+            continue;
+        }
+
+        // Tokenize the first line to extract type_id and first-line vars.
+        let first_tokens = tokenize_line(lines[0]);
+        let first_stripped = strip_spaces(&first_tokens);
+
+        // First token must be Num → type_id.
+        let type_id = match first_stripped.first() {
+            Some(Token::Num(n)) => n.clone(),
+            _ => continue, // not a numbered sub-block → skip
+        };
+
+        // Collect all var-name tokens from first-line remainder + subsequent lines.
+        // We only support plain scalars (Ident, possibly with subscript).
+        let remainder = &first_stripped[1..]; // skip the Num token
+        let mut all_var_tokens: Vec<Token> = remainder.to_vec();
+        for line in &lines[1..] {
+            let toks = tokenize_line(line);
+            let stripped = strip_spaces(&toks);
+            all_var_tokens.push(Token::Space);
+            all_var_tokens.extend(stripped);
+        }
+
+        // Parse the collected tokens as a var list.
+        let var_list_result = parse_var_list(&all_var_tokens);
+        let (ok, raw_vars) = match var_list_result {
+            Ok(RawLine::Scalars(vars)) => (true, vars),
+            Ok(RawLine::LoopRow(vars)) => {
+                // Subscripted vars (e.g. "x_1") — treat each as a plain scalar using
+                // the concatenated math+subscript as the name seed.
+                (true, vars)
+            }
+            _ => (false, vec![]),
+        };
+
+        if !ok {
+            result.push(QueryTypeDecl {
+                type_id,
+                ok: false,
+                vars: vec![],
+            });
+            continue;
+        }
+
+        // Build local VarDecl list (independent scope from main vars).
+        let math_names: Vec<String> = raw_vars.iter().map(|v| v.math.clone()).collect();
+        let mut var_decls: Vec<VarDecl> = raw_vars
+            .iter()
+            .map(|rv| {
+                let name = normalize_name(&rv.math, &math_names);
+                VarDecl {
+                    name,
+                    math: rv.math.clone(),
+                    var_type: VarType::Unknown,
+                    dim: 0,
+                    size: vec![],
+                    is_size: false,
+                }
+            })
+            .collect();
+
+        // Apply same type inference as main vars.
+        infer_types(&mut var_decls, constraints);
+
+        result.push(QueryTypeDecl {
+            type_id,
+            ok: true,
+            vars: var_decls,
+        });
+    }
+
+    result
+}
+
 fn not_ok(raw: &str) -> InputSpec {
     InputSpec {
         raw: raw.to_string(),
         ok: false,
         vars: vec![],
         ops: vec![],
+        query_types: vec![],
     }
 }
 
@@ -2141,5 +2248,78 @@ mod tests {
         let s = spec.vars.iter().find(|v| v.name == "s").expect("var s");
         assert_eq!(s.dim, 1, "s should be Vec<String> (dim=1)");
         assert_eq!(s.var_type, VarType::Str, "s should be Str");
+    }
+
+    // ── TASK-019: query sub-block parsing ─────────────────────────────────────
+
+    /// abc241-D style: numbered sub-blocks → query_types populated
+    #[test]
+    fn text_query_multi_block_numbered() {
+        let spec = with_constraints(
+            "N Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\n1 x\n\n2 x k\n\n3 l r\n",
+            "1 \\leq N, Q \\leq 2 \\times 10^5\n1 \\leq x \\leq 10^9\n1 \\leq k \\leq 10^9\n1 \\leq l \\leq r \\leq 10^9",
+        );
+        assert!(spec.ok, "expected ok=true");
+        assert_eq!(spec.query_types.len(), 3, "expected 3 query types");
+
+        let qt1 = &spec.query_types[0];
+        assert_eq!(qt1.type_id, "1");
+        assert!(qt1.ok);
+        assert_eq!(qt1.vars.len(), 1);
+        assert_eq!(qt1.vars[0].name, "x");
+
+        let qt2 = &spec.query_types[1];
+        assert_eq!(qt2.type_id, "2");
+        assert!(qt2.ok);
+        assert_eq!(qt2.vars.len(), 2);
+        assert_eq!(qt2.vars[0].name, "x");
+        assert_eq!(qt2.vars[1].name, "k");
+
+        let qt3 = &spec.query_types[2];
+        assert_eq!(qt3.type_id, "3");
+        assert!(qt3.ok);
+        assert_eq!(qt3.vars.len(), 2);
+        assert_eq!(qt3.vars[0].name, "l");
+        assert_eq!(qt3.vars[1].name, "r");
+    }
+
+    /// abc334-D style: sub-block starts with ident (not digit) → skipped, query_types empty
+    #[test]
+    fn query_subblock_non_numeric_skipped() {
+        let spec =
+            scalar_ok("N Q\nR_1 \\ldots R_N\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\nX\n");
+        assert!(spec.ok, "expected ok=true");
+        assert_eq!(
+            spec.query_types.len(),
+            0,
+            "non-numeric sub-block should be skipped"
+        );
+    }
+
+    /// No sub-blocks → query_types empty
+    #[test]
+    fn query_no_subblocks_empty_query_types() {
+        let spec = scalar_ok("Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n");
+        assert!(spec.ok, "expected ok=true");
+        assert_eq!(
+            spec.query_types.len(),
+            0,
+            "no sub-blocks means query_types is empty"
+        );
+    }
+
+    /// Type inference applies to query sub-block vars
+    #[test]
+    fn query_subblock_type_inference() {
+        let spec = with_constraints(
+            "N Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\n1 x\n",
+            "1 \\leq x \\leq 10^9",
+        );
+        assert!(spec.ok);
+        assert_eq!(spec.query_types.len(), 1);
+        let qt = &spec.query_types[0];
+        assert!(qt.ok);
+        assert_eq!(qt.vars[0].name, "x");
+        assert_eq!(qt.vars[0].var_type, VarType::Int);
     }
 }

@@ -175,6 +175,14 @@ InputSpec                           ← Value Object (usecases/input_format/ で
   ok: bool                          パース成功フラグ
   vars: Vec<VarDecl>                変数宣言リスト (ok=false のとき空)
   ops: Vec<InputOp>                 読み取り命令列 (ok=false のとき空)
+  query_types: Vec<QueryTypeDecl>   クエリ種別リスト (クエリ型入力のみ非空; ok=false のとき空)
+
+QueryTypeDecl                       ← Value Object (クエリ型入力のサブ形式)
+  type_id: String                   クエリ種別番号 ("1", "2", "3")
+  ok: bool                          sub-block のパース成功フラグ
+  vars: Vec<VarDecl>                このクエリ種別のローカル変数 (ok=false のとき空)
+                                    dim は常に 0 (スカラー); is_size は常に false
+                                    var_type は constraints テキストから型推定 (main の vars と同一推定器)
 
 VarDecl                             ← Value Object
   name: String                      コード用変数名 (小文字化、衝突時は大文字のまま)
