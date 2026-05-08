@@ -399,7 +399,7 @@ fn try_parse_array1d_no_cdots(tokens: &[Token]) -> Option<Result<RawLine, ParseE
                 // Adjacent elements without a Space between them → unsupported
                 // (consistent with "空白なし隣接要素 → ok:false" rule).
                 if need_separator {
-                    return None;
+                    return Some(Err(ParseError::Unknown));
                 }
                 // Must have a subscript next
                 if i + 1 >= tokens.len() || tokens[i + 1] != Token::Subscript {
@@ -464,7 +464,7 @@ fn try_parse_array2d_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>
                 // Adjacent elements without a Space token between them → unsupported
                 // (consistent with "空白なし隣接要素 → ok:false" rule).
                 if need_separator {
-                    return None;
+                    return Some(Err(ParseError::Unknown));
                 }
                 // Must have a subscript next
                 if i + 1 >= tokens.len() || tokens[i + 1] != Token::Subscript {
@@ -687,10 +687,13 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
             // {Num,Num} (2 parts, all numeric) → 2D numeric: returned as "row,col" for Array2DRow.
             // {Num,Ident} or {Ident,Num} or {Ident,Ident} (2 parts with any Ident) → None.
             // 3+ parts → None.
+            // Unclosed brace or empty comma-separated part (e.g. {1,} or {,1}) → None.
             let mut depth = 1;
             let mut parts: Vec<String> = Vec::new();
             let mut current: Option<String> = None;
             let mut has_ident = false;
+            let mut has_empty_part = false;
+            let mut closed = false;
             let mut i = 1;
             while i < tokens.len() && depth > 0 {
                 match &tokens[i] {
@@ -700,10 +703,15 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                     }
                     Token::RBrace => {
                         depth -= 1;
-                        if depth == 0
-                            && let Some(s) = current.take()
-                        {
-                            parts.push(s);
+                        if depth == 0 {
+                            closed = true;
+                            // Trailing comma: parts exist but current is empty
+                            if !parts.is_empty() && current.is_none() {
+                                has_empty_part = true;
+                            }
+                            if let Some(s) = current.take() {
+                                parts.push(s);
+                            }
                         }
                         i += 1;
                     }
@@ -717,6 +725,10 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                         i += 1;
                     }
                     Token::Comma => {
+                        // Leading or consecutive comma → empty part before this separator
+                        if current.is_none() {
+                            has_empty_part = true;
+                        }
                         if let Some(s) = current.take() {
                             parts.push(s);
                         }
@@ -726,6 +738,9 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                         i += 1;
                     }
                 }
+            }
+            if !closed || has_empty_part {
+                return None;
             }
             match parts.len() {
                 1 => Some((parts.remove(0), i)),
@@ -3011,6 +3026,36 @@ mod tests {
     fn array2d_mismatched_col_counts() {
         let input = "A_{1,1} A_{1,2} A_{1,3}\nA_{2,1} A_{2,2}";
         let spec = parse(input, "");
+        assert!(!spec.ok);
+    }
+
+    /// Adjacent array1d_no_cdots elements (no Space) → ok=false
+    #[test]
+    fn array1d_no_cdots_adjacent_no_space() {
+        // A_1A_2 has no Space token between them — must be ok=false
+        let spec = parse("A_1A_2", "");
+        assert!(!spec.ok);
+    }
+
+    /// Unclosed brace subscript → ok=false
+    #[test]
+    fn subscript_unclosed_brace() {
+        // {1,2 without closing } must not produce a valid parse
+        let spec = parse("A_{1,2", "");
+        assert!(!spec.ok);
+    }
+
+    /// Trailing comma in brace subscript → ok=false
+    #[test]
+    fn subscript_trailing_comma() {
+        let spec = parse("A_{1,}", "");
+        assert!(!spec.ok);
+    }
+
+    /// Leading comma in brace subscript → ok=false
+    #[test]
+    fn subscript_leading_comma() {
+        let spec = parse("A_{,1}", "");
         assert!(!spec.ok);
     }
 }

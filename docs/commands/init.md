@@ -515,7 +515,7 @@ a s
 
 #### 2D 固定グリッドの形式 (JSON 例)
 
-`A_{1,1} A_{1,2} ... A_{1,6}` × 3 行 (abc456-B 形式) のとき、`dim=2` の `VarDecl` 1 件と `ops` 1 命令が生成される。
+`A_{1,1} A_{1,2} A_{1,3} A_{1,4} A_{1,5} A_{1,6}` × 3 行 (abc456-B 形式) のとき、`dim=2` の `VarDecl` 1 件と `ops` 1 命令が生成される。(`...`/`\ldots` は不可: `try_parse_array2d_row` は Cdots を含む行を拒否する)
 
 入力例:
 
@@ -593,7 +593,7 @@ fn solve(a: Vec<Vec<i64>>) -> String { ... }
 | `:` 区切り (垂直 vdots 等価)                                              | `S_1` / `:` / `S_H`                                                            | ukuku09-C          |
 | 複数変数ループ (`\vdots`)                                                 | `t_1 k_1` / `\vdots` / `t_Q k_Q`                                               | abc242-D           |
 | 文字グリッド (2D 添字)                                                    | `S_{11}...S_{1W}` / `:` / `S_{H1}...S_{HW}`                                    | abc151-D, abc176-D |
-| 2D 固定グリッド (comma 添字, no cdots)                                    | `A_{1,1} ... A_{1,6}` × 3 行 (dim=2, `[[T; 6]; 3]`)                            | abc456-B           |
+| 2D 固定グリッド (comma 添字, no cdots)                                    | `A_{1,1} A_{1,2} A_{1,3}` × 3 行 (dots 不可, dim=2, `[[T; 3]; 3]`)             | abc456-B           |
 | 添字付きスカラー (アルファベット添字)                                     | `A_x A_y`                                                                      | abc246-E           |
 | 添字付きスカラー (数値添字・vdots なし)                                   | `r_1 c_1` / `r_2 c_2` (各行独立)                                               | abc176-D           |
 | クエリ型 (`\text{query}_Q` / `\mathrm{Query}_Q` / `query_Q`)、sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D, abc212-D |
