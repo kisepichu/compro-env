@@ -186,8 +186,8 @@ Initialized abc334 (AtCoder) — 6 problems: a b c d e f
 | `input_format.query_types`    | クエリ種別リスト (詳細後述、クエリ型以外は空リスト)                                                                                                    | パーサー             |
 | `input_format.query_body`     | 単一形式ループの変数リスト (スカラーのみの非数値先頭 sub-block、`query_types` 非空または `iteration_ops` 非空のときは空)                                 | パーサー             |
 | `input_format.testcase_body`  | 簡易 T-testcases 型の本体変数リスト (ブロック[0]=単一スカラー かつ ブロック[1] がスカラーのみ、それ以外は空リスト)                                       | パーサー             |
-| `input_format.iteration_vars` | 複雑な繰り返し本体の変数リスト (ブロック[1] にループ・配列が含まれる場合。`query_body`/`testcase_body` が非空のときは空)                                  | パーサー             |
-| `input_format.iteration_ops`  | 複雑な繰り返し本体の読み取り命令列 (`vars`・`ops` と同形式。`query_body`/`testcase_body` が非空のときは空。テンプレートが for ループ内でレンダリングする) | パーサー             |
+| `input_format.iteration_vars` | 複雑な繰り返し本体の変数リスト (最初に採用された非数値 sub-block にループ・配列が含まれる場合。`query_types`/`query_body`/`testcase_body` が非空のときは空) | パーサー             |
+| `input_format.iteration_ops`  | 複雑な繰り返し本体の読み取り命令列 (`vars`・`ops` と同形式。`query_types`/`query_body`/`testcase_body` が非空のときは空。テンプレートが for ループ内でレンダリングする) | パーサー             |
 
 `input_format.ok` が `false` のとき `vars`・`ops`・`query_types`・`query_body`・`testcase_body`・`iteration_vars`・`iteration_ops` は全て空リスト。テンプレートは `{% if input_format.ok %}` で分岐する。
 
@@ -267,7 +267,7 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │          パース失敗 → ステップ 2 へ
   │        ステップ 2 (スカラーパース失敗時): 完全 InputSpec としてパース (iteration_vars / iteration_ops に格納)
   │          ※ 例: abc456_f の "N K\nA_1 ... A_N"、abc456_e の複数ループ含む本体
-  │          ブロック[1] を単独の input_format_raw として再帰的にパース (ブロック分割なし)
+  │          当該 sub-block を単独で再帰パース (ブロック分割なし)
   │          パース成功 (ok=true) → iteration_vars = mini_spec.vars, iteration_ops = mini_spec.ops
   │          パース失敗 (ok=false) → iteration_vars = [], iteration_ops = []
   │            (テンプレートは solve にループスタブのみ生成)
@@ -530,7 +530,7 @@ a s
 
 #### `iteration_vars` / `iteration_ops` の形式
 
-ループマーカーがブロック[0] にあり、かつブロック[1] がスカラーパースに失敗した (ループ・配列を含む) 場合に生成される。`query_body` や `testcase_body` が非空のときは空リスト。
+ループマーカーがブロック[0] にあり、かつ最初に採用された非数値 sub-block がスカラーパースに失敗した (ループ・配列を含む) 場合に生成される。`query_body` や `testcase_body` が非空のときは空リスト。
 
 入力例 (abc456-F 形式: `T\n\mathrm{case}_T\n\nN K\nA_1 A_2 \ldots A_N`):
 
@@ -547,7 +547,7 @@ A_1 A_2 \ldots A_N
 生成される `vars` (block[0]):
 
 ```json
-[{ "name": "t", "math": "T", "var_type": "int", "dim": 0, "is_size": true }]
+[{ "name": "t", "math": "T", "var_type": "int", "dim": 0, "size": [], "is_size": true }]
 ```
 
 生成される `ops` (block[0]):
@@ -802,6 +802,9 @@ fn solve(
                 {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
                 {{ v.name }}: [{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ v.size }}],
                 {% endif -%}
+                {% elif v.dim == 2 -%}
+                {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                {{ v.name }}: [[{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ vd.size[0] }}]; {{ vd.size[1] }}],
                 {% endif -%}
                 {% endfor -%}
             }
@@ -813,9 +816,13 @@ fn solve(
             {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
             let mut {{ v.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}> = Vec::new();
             {% endfor -%}
-            {% endif -%}
             for _ in 0..{{ op.end }} {
                 input! {
+            {% else -%}
+            for _ in 0..{{ op.end }} {
+                // TODO: read loop body
+            }
+            {% endif -%}
             {% elif op.tag == "read_line" and op.depth > 0 -%}
                     {% for v in op.vars -%}
                     {% if v.index -%}
