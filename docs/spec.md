@@ -176,8 +176,11 @@ InputSpec                           ← Value Object (usecases/input_format/ で
   vars: Vec<VarDecl>                変数宣言リスト (ok=false のとき空)
   ops: Vec<InputOp>                 読み取り命令列 (ok=false のとき空)
   query_types: Vec<QueryTypeDecl>   クエリ種別リスト (numbered sub-block がある場合のみ非空; ok=false のとき空)
-  query_body: Vec<VarDecl>          単一形式クエリの本体変数 (非数値先頭 sub-block がある場合のみ非空; ok=false のとき空)
-                                    query_types が非空のときは常に空
+  query_body: Vec<VarDecl>          単一形式ループのスカラー本体変数 (非数値先頭 sub-block がある場合のみ非空; ok=false のとき空)
+                                    query_types が非空のときは常に空; iteration_ops が非空のときも常に空
+  testcase_body: Vec<VarDecl>       簡易 T-testcases の本体変数 (block[0]=単一スカラー かつ block[1]=スカラーのみ; ok=false のとき空)
+  iteration_vars: Vec<VarDecl>      複雑な繰り返し本体の変数リスト (block[1] にループ・配列を含む場合; query_body/testcase_body が非空のときは空)
+  iteration_ops: Vec<InputOp>       複雑な繰り返し本体の読み取り命令列 (vars/ops と同形式; query_body が非空のときは空)
 
 QueryTypeDecl                       ← Value Object (クエリ型入力のサブ形式)
   type_id: String                   クエリ種別番号 ("1", "2", "3")
@@ -190,7 +193,7 @@ VarDecl                             ← Value Object
   name: String                      コード用変数名 (小文字化、衝突時は大文字のまま)
   math: String                      数学表記の変数名 ("N", "A", "S_X" 等)
   var_type: VarType                 Int | Str | Unknown
-  dim: u8                           0=スカラー, 1=1D配列
+  dim: u8                           0=スカラー, 1=1D配列, 2=2D固定グリッド (size=["cols","rows"])
   size: Vec<String>                 各次元のサイズ式 (小文字化済み変数名)
   is_size: bool                     他の var の size または LoopBegin の end に自分の name が現れるなら true
                                     (テンプレートで usize/Vec<T> 等の型決定に使用)
