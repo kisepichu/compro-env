@@ -2603,7 +2603,7 @@ mod tests {
     /// Expected: ok=true, vars=[t(is_size:true)], testcase_body=[a, s]
     #[test]
     fn testcase_body_abc238d() {
-        let spec = parse("T\n\na s", "1 ≤ T ≤ 100\n1 ≤ a ≤ 10^9\nS is a string");
+        let spec = parse("T\n\na s", "1 ≤ T ≤ 100\n1 ≤ a ≤ 10^9\ns is a string");
         assert!(spec.ok, "expected ok=true for T-testcases format");
         assert_eq!(spec.vars.len(), 1);
         assert_eq!(spec.vars[0].name, "t");
@@ -2611,6 +2611,11 @@ mod tests {
         assert_eq!(spec.testcase_body.len(), 2);
         assert_eq!(spec.testcase_body[0].name, "a");
         assert_eq!(spec.testcase_body[1].name, "s");
+        assert_eq!(
+            spec.testcase_body[1].var_type,
+            VarType::Str,
+            "s should be inferred as VarType::Str"
+        );
         assert!(spec.query_types.is_empty());
         assert!(spec.query_body.is_empty());
     }

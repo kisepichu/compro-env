@@ -185,7 +185,7 @@ Initialized abc334 (AtCoder) — 6 problems: a b c d e f
 | `input_format.ops`         | 読み取り命令列 (詳細後述)                                                       | パーサー             |
 | `input_format.query_types` | クエリ種別リスト (詳細後述、クエリ型以外は空リスト)                             | パーサー             |
 | `input_format.query_body`  | 単一形式クエリの変数リスト (非数値先頭 sub-block、`query_types` 非空のときは空) | パーサー             |
-| `input_format.testcase_body` | T-testcases 型のテストケース本体変数リスト (ブロック[0]=単一スカラー時、それ以外は空リスト) | パーサー |
+| `input_format.testcase_body` | T-testcases 型のテストケース本体変数リスト (ブロック[0]=単一スカラー かつ ブロック[1] がスカラー変数のみで構成される場合、それ以外は空リスト) | パーサー |
 
 `input_format.ok` が `false` のとき `vars`・`ops`・`query_types`・`query_body`・`testcase_body` は空リスト。テンプレートは `{% if input_format.ok %}` で分岐する。
 
