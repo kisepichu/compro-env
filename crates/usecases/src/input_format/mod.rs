@@ -1348,9 +1348,9 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     } else {
         vec![]
     };
-    if !testcase_body.is_empty()
-        && let Some(v) = var_decls.first_mut()
-    {
+    // Always mark the block-0 loop-count var as is_size when the format is T-testcases,
+    // even when testcase_body is empty (non-scalar block 1 falls back to todo!() stub).
+    if is_testcase_format && let Some(v) = var_decls.first_mut() {
         v.is_size = true;
     }
 
@@ -2636,5 +2636,7 @@ mod tests {
         );
         // testcase_body empty: 1D cdots array is not a flat scalar list
         assert!(spec.testcase_body.is_empty());
+        // block-0 var is still is_size=true even when testcase_body is empty
+        assert!(spec.vars[0].is_size, "loop-count var must be is_size:true");
     }
 }
