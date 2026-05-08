@@ -386,14 +386,21 @@ fn try_parse_array1d_no_cdots(tokens: &[Token]) -> Option<Result<RawLine, ParseE
 
     let mut base_name: Option<String> = None;
     let mut subscripts: Vec<u64> = Vec::new();
+    let mut need_separator = false;
     let mut i = 0;
 
     while i < tokens.len() {
         match &tokens[i] {
             Token::Space => {
+                need_separator = false;
                 i += 1;
             }
             Token::Ident(name) => {
+                // Adjacent elements without a Space between them → unsupported
+                // (consistent with "空白なし隣接要素 → ok:false" rule).
+                if need_separator {
+                    return None;
+                }
                 // Must have a subscript next
                 if i + 1 >= tokens.len() || tokens[i + 1] != Token::Subscript {
                     return None;
@@ -401,7 +408,7 @@ fn try_parse_array1d_no_cdots(tokens: &[Token]) -> Option<Result<RawLine, ParseE
                 let (sub, advance) = read_subscript_value(&tokens[i + 2..])?;
                 i += 2 + advance;
 
-                // Subscript must be a pure numeric literal
+                // Subscript must be a pure numeric literal (no commas)
                 let n: u64 = sub.parse().ok()?;
 
                 // Base name must be consistent
@@ -411,6 +418,7 @@ fn try_parse_array1d_no_cdots(tokens: &[Token]) -> Option<Result<RawLine, ParseE
                     _ => {}
                 }
                 subscripts.push(n);
+                need_separator = true;
             }
             _ => return None,
         }
