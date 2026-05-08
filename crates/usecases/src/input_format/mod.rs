@@ -443,14 +443,21 @@ fn try_parse_array2d_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>
     let mut base_name: Option<String> = None;
     let mut row_idx: Option<String> = None;
     let mut col_count: usize = 0;
+    let mut need_separator = false;
     let mut i = 0;
 
     while i < tokens.len() {
         match &tokens[i] {
             Token::Space => {
+                need_separator = false;
                 i += 1;
             }
             Token::Ident(name) => {
+                // Adjacent elements without a Space token between them → unsupported
+                // (consistent with "空白なし隣接要素 → ok:false" rule).
+                if need_separator {
+                    return None;
+                }
                 // Must have a subscript next
                 if i + 1 >= tokens.len() || tokens[i + 1] != Token::Subscript {
                     return None;
@@ -482,6 +489,7 @@ fn try_parse_array2d_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>
                 if col_n != col_count as u64 {
                     return None;
                 }
+                need_separator = true;
             }
             _ => return None,
         }
@@ -739,6 +747,12 @@ fn parse_var_list(tokens: &[Token]) -> Result<RawLine, ParseError> {
                 if i + 1 < tokens.len() && tokens[i + 1] == Token::Subscript {
                     let (sub, advance) =
                         read_subscript_value(&tokens[i + 2..]).ok_or(ParseError::Unknown)?;
+                    // Comma-containing subscripts (e.g. "1,2" from A_{1,2}) must not reach
+                    // name normalization — they would generate invalid Rust identifiers.
+                    // Such subscripts are only valid inside Array2DRow; reject them here.
+                    if sub.contains(',') {
+                        return Err(ParseError::Unknown);
+                    }
                     i += 2 + advance;
 
                     vars.push(RawVar {
@@ -2936,7 +2950,8 @@ mod tests {
     #[test]
     fn array1d_fixed_no_cdots_nonsequential_are_scalars() {
         let spec = scalar_ok("A_1 A_3");
-        // Falls through to scalars; both get name "a" → collision resolution
+        // Falls through to scalars (non-sequential). Seeds are "A1" and "A3" →
+        // distinct normalized names "a1" and "a3".
         assert!(spec.vars.iter().all(|v| v.dim == 0));
     }
 
