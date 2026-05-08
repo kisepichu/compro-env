@@ -207,6 +207,53 @@ fn solve(
             // TODO: handle query
             todo!()
         }
+        {% elif input_format.iteration_ops | length > 0 -%}
+        {# Complex iteration body (loops/arrays): render iteration_ops inside the loop #}
+        for _ in 0..{{ query_loop_end }} {
+            {% for op in input_format.iteration_ops -%}
+            {% if op.tag == "read_line" and op.depth == 0 -%}
+            input! {
+                {% for v in op.vars -%}
+                {% if v.dim == 0 -%}
+                {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                {{ v.name }}: {% if vd.is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
+                {% elif v.dim == 1 -%}
+                {% if v.size -%}
+                {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                {{ v.name }}: [{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ v.size }}],
+                {% endif -%}
+                {% endif -%}
+                {% endfor -%}
+            }
+            {% elif op.tag == "loop_begin" -%}
+            {% set next_index = loop.index0 + 1 -%}
+            {% set body_op = input_format.iteration_ops[next_index] -%}
+            {% for v in body_op.vars -%}
+            {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+            let mut {{ v.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}> = Vec::new();
+            {% endfor -%}
+            for _ in 0..{{ op.end }} {
+                input! {
+            {% elif op.tag == "read_line" and op.depth > 0 -%}
+                    {% for v in op.vars -%}
+                    {% if v.index -%}
+                    {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                    __tmp_{{ v.name }}: {% if vd.var_type == "str" %}String{% else %}i64{% endif %},
+                    {% endif -%}
+                    {% endfor -%}
+            {% elif op.tag == "loop_end" -%}
+            {% set prev_index = loop.index0 - 1 -%}
+            {% set body_op = input_format.iteration_ops[prev_index] -%}
+                }
+                {% for v in body_op.vars -%}
+                {{ v.name }}.push(__tmp_{{ v.name }});
+                {% endfor -%}
+            }
+            {% endif -%}
+            {% endfor -%}
+            // TODO: solve each iteration
+            todo!()
+        }
         {% else -%}
         for _ in 0..{{ query_loop_end }} {
             // TODO: read and handle query

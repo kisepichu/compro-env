@@ -180,6 +180,12 @@ pub struct InputSpec {
     /// Non-empty only for T-testcases inputs (block 0 = single scalar T, block 1 = body).
     /// Contains the scalar variables of block 1. The loop bound is `vars[0].name`.
     pub testcase_body: Vec<VarDecl>,
+    /// Non-empty only when block[1] contains loops/arrays that failed scalar parse.
+    /// Parsed as an independent mini-InputSpec from block[1].  Empty when `query_body` or
+    /// `testcase_body` is non-empty, or when `query_types` is non-empty.
+    pub iteration_vars: Vec<VarDecl>,
+    /// Read ops corresponding to `iteration_vars`.  Same structure as `ops`.
+    pub iteration_ops: Vec<InputOp>,
 }
 
 /// Sample input/output (Value Object)
@@ -252,6 +258,8 @@ mod input_spec_tests {
             query_types: vec![],
             query_body: vec![],
             testcase_body: vec![],
+            iteration_vars: vec![],
+            iteration_ops: vec![],
         };
         assert!(!spec.ok);
         assert!(spec.vars.is_empty());
@@ -329,6 +337,8 @@ mod input_spec_tests {
             query_types: vec![],
             query_body: vec![],
             testcase_body: vec![],
+            iteration_vars: vec![],
+            iteration_ops: vec![],
         };
         assert!(spec.ok);
         let json = serde_json::to_value(&spec).unwrap();

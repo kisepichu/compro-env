@@ -1287,6 +1287,8 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
             query_types: vec![],
             query_body: vec![],
             testcase_body: vec![],
+            iteration_vars: vec![],
+            iteration_ops: vec![],
         };
     }
 
@@ -1601,11 +1603,12 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     }
 
     // Parse query sub-blocks (blocks[1..]) when a query marker was present in block0.
-    // Numbered sub-blocks → query_types; first non-numeric sub-block → query_body.
-    let (query_types, query_body) = if has_query_marker {
+    // Numbered sub-blocks → query_types; non-numeric sub-block → query_body (scalar)
+    // or iteration_vars/ops (complex body with loops/arrays).
+    let (query_types, query_body, iteration_vars, iteration_ops) = if has_query_marker {
         parse_query_subblocks(&blocks[1..], constraints)
     } else {
-        (vec![], vec![])
+        (vec![], vec![], vec![], vec![])
     };
 
     // Parse T-testcases block 1 as scalar vars for testcase_body.
@@ -1629,6 +1632,8 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
         query_types,
         query_body,
         testcase_body,
+        iteration_vars,
+        iteration_ops,
     }
 }
 
@@ -1787,16 +1792,22 @@ fn parse_scalar_block(block: &str, constraints: &str) -> Vec<VarDecl> {
 
 /// Parse `blocks[1..]` from a query-type input.
 ///
-/// Returns `(query_types, query_body)`:
+/// Returns `(query_types, query_body, iteration_vars, iteration_ops)`:
 /// - `query_types`: numbered sub-blocks (first token = Num).
-/// - `query_body`: scalar vars from the first non-numeric sub-block, only when
-///   `query_types` is empty (i.e. no numbered sub-block seen yet or ever).
+/// - `query_body`: scalar vars from the first non-numeric sub-block (scalars only).
+/// - `iteration_vars` / `iteration_ops`: from a full re-parse of the first non-numeric
+///   sub-block when scalar parse fails (complex body with loops/arrays).
+///
+/// Priority: `query_types` non-empty → `query_body`/`iteration_*` empty.
+///           `iteration_ops` non-empty → `query_body` empty.
 fn parse_query_subblocks(
     subblocks: &[&str],
     constraints: &str,
-) -> (Vec<QueryTypeDecl>, Vec<VarDecl>) {
+) -> (Vec<QueryTypeDecl>, Vec<VarDecl>, Vec<VarDecl>, Vec<InputOp>) {
     let mut result = Vec::new();
     let mut query_body: Vec<VarDecl> = vec![];
+    let mut iteration_vars: Vec<VarDecl> = vec![];
+    let mut iteration_ops: Vec<InputOp> = vec![];
 
     for block in subblocks {
         let block = block.trim();
@@ -1818,14 +1829,14 @@ fn parse_query_subblocks(
         let first_tokens = tokenize_line(lines[0]);
         let first_stripped = strip_spaces(&first_tokens);
 
-        // First token must be Num → type_id; otherwise → candidate for query_body.
+        // First token must be Num → type_id; otherwise → candidate for query_body
+        // (step 1: scalar) or iteration_vars/ops (step 2: full re-parse).
         let type_id = match first_stripped.first() {
             Some(Token::Num(n)) => n.clone(),
             _ => {
-                // Non-numeric sub-block: populate query_body if not already set and
-                // no numbered sub-blocks have been seen.
-                if query_body.is_empty() && result.is_empty() {
-                    // Collect all lines as a flat scalar var list.
+                // Non-numeric sub-block: try scalar parse first, then full re-parse.
+                if iteration_vars.is_empty() && query_body.is_empty() && result.is_empty() {
+                    // Step 1: attempt flat scalar var list parse.
                     let mut all_var_tokens: Vec<Token> = first_stripped.to_vec();
                     for line in &lines[1..] {
                         let toks = tokenize_line(line);
@@ -1833,10 +1844,10 @@ fn parse_query_subblocks(
                         all_var_tokens.push(Token::Space);
                         all_var_tokens.extend(stripped);
                     }
+                    // Only accept plain scalars (no subscripts) for query_body.
+                    // Subscripted vars (LoopRow) indicate array/loop structure → step 2.
                     let raw_vars_opt = match parse_var_list(&all_var_tokens) {
-                        Ok(RawLine::Scalars(v)) | Ok(RawLine::LoopRow(v)) if !v.is_empty() => {
-                            Some(v)
-                        }
+                        Ok(RawLine::Scalars(v)) if !v.is_empty() => Some(v),
                         _ => None,
                     };
                     if let Some(raw_vars) = raw_vars_opt {
@@ -1866,6 +1877,16 @@ fn parse_query_subblocks(
                             .collect();
                         infer_types(&mut var_decls, constraints);
                         query_body = var_decls;
+                    } else {
+                        // Step 2: full re-parse of this sub-block as a standalone input spec.
+                        // Reconstruct the raw text of the sub-block (all lines joined).
+                        let mini_raw = block.trim();
+                        let mini = parse(mini_raw, constraints);
+                        if mini.ok {
+                            iteration_vars = mini.vars;
+                            iteration_ops = mini.ops;
+                        }
+                        // (ok=false → iteration_vars/ops stay empty; template generates TODO stub)
                     }
                 }
                 continue;
@@ -1940,13 +1961,19 @@ fn parse_query_subblocks(
         });
     }
 
-    // If numbered query_types were found, discard any query_body (spec: always empty when
-    // query_types is non-empty).
+    // Priority: query_types non-empty → discard query_body and iteration_vars/ops.
     if !result.is_empty() {
+        query_body = vec![];
+        iteration_vars = vec![];
+        iteration_ops = vec![];
+    }
+
+    // iteration_ops non-empty → discard query_body (complex body takes priority over scalar body).
+    if !iteration_ops.is_empty() {
         query_body = vec![];
     }
 
-    (result, query_body)
+    (result, query_body, iteration_vars, iteration_ops)
 }
 
 fn not_ok(raw: &str) -> InputSpec {
@@ -1958,6 +1985,8 @@ fn not_ok(raw: &str) -> InputSpec {
         query_types: vec![],
         query_body: vec![],
         testcase_body: vec![],
+        iteration_vars: vec![],
+        iteration_ops: vec![],
     }
 }
 
@@ -3057,5 +3086,103 @@ mod tests {
     fn subscript_leading_comma() {
         let spec = parse("A_{,1}", "");
         assert!(!spec.ok);
+    }
+
+    // ── iteration_vars / iteration_ops ────────────────────────────────────────
+
+    /// abc456_f style: query-marker block[0] + complex block[1] (1D array) →
+    /// iteration_vars non-empty, query_body empty.
+    #[test]
+    fn iteration_vars_simple_array_body() {
+        // block[0]: T + case loop marker
+        // block[1]: N K \n A_1 A_2 \ldots A_N
+        let raw = "T\n\\mathrm{case}_1\n\\vdots\n\\mathrm{case}_T\n\nN K\nA_1 A_2 \\ldots A_N";
+        let spec = parse(raw, "");
+        assert!(spec.ok, "expected ok=true for abc456_f style");
+        assert!(
+            spec.query_body.is_empty(),
+            "query_body must be empty when iteration_ops is populated"
+        );
+        assert!(
+            !spec.iteration_vars.is_empty(),
+            "iteration_vars should be non-empty for complex body"
+        );
+        assert!(
+            !spec.iteration_ops.is_empty(),
+            "iteration_ops should be non-empty for complex body"
+        );
+        // iteration_vars should include n (is_size), k, a (dim=1)
+        let n = spec.iteration_vars.iter().find(|v| v.name == "n");
+        let k = spec.iteration_vars.iter().find(|v| v.name == "k");
+        let a = spec.iteration_vars.iter().find(|v| v.name == "a");
+        assert!(n.is_some(), "expected var n in iteration_vars");
+        assert!(n.unwrap().is_size, "n should be is_size=true");
+        assert!(k.is_some(), "expected var k in iteration_vars");
+        assert!(a.is_some(), "expected var a in iteration_vars");
+        assert_eq!(a.unwrap().dim, 1, "a should be dim=1");
+    }
+
+    /// abc456_e style: complex body with multiple loops and arrays →
+    /// iteration_vars non-empty, query_body empty.
+    #[test]
+    fn iteration_vars_complex_multi_loop_body() {
+        let raw = concat!(
+            "T\n\\mathrm{case}_1\n\\mathrm{case}_2\n\\vdots\n\\mathrm{case}_T\n\n",
+            "N M\nU_1 V_1\nU_2 V_2\n\\vdots\nU_M V_M\nW\nS_1\nS_2\n\\vdots\nS_N"
+        );
+        let spec = parse(raw, "");
+        assert!(spec.ok, "expected ok=true for abc456_e style");
+        assert!(
+            spec.query_body.is_empty(),
+            "query_body must be empty when iteration_ops is populated"
+        );
+        assert!(
+            !spec.iteration_vars.is_empty(),
+            "iteration_vars should be non-empty"
+        );
+        assert!(
+            !spec.iteration_ops.is_empty(),
+            "iteration_ops should be non-empty"
+        );
+    }
+
+    /// abc334_d style: scalar sub-block → query_body populated, iteration_vars empty (regression).
+    #[test]
+    fn iteration_vars_empty_for_scalar_body() {
+        let raw = "N Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\nX";
+        let spec = parse(raw, "");
+        assert!(spec.ok);
+        assert!(
+            !spec.query_body.is_empty(),
+            "scalar sub-block should populate query_body"
+        );
+        assert!(
+            spec.iteration_vars.is_empty(),
+            "iteration_vars must be empty for scalar body"
+        );
+        assert!(
+            spec.iteration_ops.is_empty(),
+            "iteration_ops must be empty for scalar body"
+        );
+    }
+
+    /// Numbered query_types → iteration_vars/ops always empty.
+    #[test]
+    fn iteration_vars_empty_when_query_types_present() {
+        let raw = "N Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\n1 x\n2 x k";
+        let spec = parse(raw, "");
+        assert!(spec.ok);
+        assert!(
+            !spec.query_types.is_empty(),
+            "expected query_types non-empty"
+        );
+        assert!(
+            spec.iteration_vars.is_empty(),
+            "iteration_vars must be empty when query_types present"
+        );
+        assert!(
+            spec.iteration_ops.is_empty(),
+            "iteration_ops must be empty when query_types present"
+        );
     }
 }
