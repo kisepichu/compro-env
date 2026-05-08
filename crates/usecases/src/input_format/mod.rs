@@ -683,9 +683,10 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
         Some(Token::Ident(s)) => Some((s.clone(), 1)),
         Some(Token::LBrace) => {
             // Read until matching RBrace, collecting comma-separated parts.
-            // {Num} → single subscript value (existing behaviour).
-            // {Num,Num} → 2D numeric: returned as "row,col" string for Array2DRow detection.
-            // Any Ident part → non-numeric, unsupported (Phase 2) → None.
+            // {Num} or {Ident} (1 part) → single subscript value (Ident used as loop bound, e.g. {N}).
+            // {Num,Num} (2 parts, all numeric) → 2D numeric: returned as "row,col" for Array2DRow.
+            // {Num,Ident} or {Ident,Num} or {Ident,Ident} (2 parts with any Ident) → None.
+            // 3+ parts → None.
             let mut depth = 1;
             let mut parts: Vec<String> = Vec::new();
             let mut current: Option<String> = None;
@@ -2992,19 +2993,17 @@ mod tests {
     /// Single Array2DRow (1 row) — not enough rows to form a 2D grid
     #[test]
     fn array2d_single_row_not_grouped() {
-        // One row of comma-subscript elements should not be treated as a 2D grid
+        // One row of comma-subscript elements cannot form a 2D grid (rows < 2 → Err → ok=false)
         let spec = parse("A_{1,1} A_{1,2} A_{1,3}", "");
-        // Falls back to ok=false or scalars — not a valid 2D grid
-        // (row count < 2 → no grouping)
-        assert!(!spec.ok || spec.vars.iter().all(|v| v.dim != 2));
+        assert!(!spec.ok);
     }
 
-    /// Row subscripts not starting from 1 → no 2D grid grouping
+    /// Row subscripts not starting from 1 → no 2D grid grouping → ok=false
     #[test]
     fn array2d_row_not_starting_from_1() {
         let input = "A_{2,1} A_{2,2}\nA_{3,1} A_{3,2}";
         let spec = parse(input, "");
-        assert!(!spec.ok || spec.vars.iter().all(|v| v.dim != 2));
+        assert!(!spec.ok);
     }
 
     /// Mismatched col counts → ok=false
@@ -3012,6 +3011,6 @@ mod tests {
     fn array2d_mismatched_col_counts() {
         let input = "A_{1,1} A_{1,2} A_{1,3}\nA_{2,1} A_{2,2}";
         let spec = parse(input, "");
-        assert!(!spec.ok || spec.vars.iter().all(|v| v.dim != 2));
+        assert!(!spec.ok);
     }
 }
