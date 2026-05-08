@@ -530,7 +530,7 @@ a s
 
 #### `iteration_vars` / `iteration_ops` の形式
 
-ループマーカーがブロック[0] にあり、かつ最初に採用された非数値 sub-block がスカラーパースに失敗した (ループ・配列を含む) 場合に生成される。`query_body` や `testcase_body` が非空のときは空リスト。
+ループマーカーがブロック[0] にあり、かつ最初に採用された非数値 sub-block がスカラーパースに失敗した (ループ・配列を含む) 場合に生成される。`query_types`・`query_body`・`testcase_body` のいずれかが非空のときは空リスト。
 
 入力例 (abc456-F 形式: `T\n\mathrm{case}_T\n\nN K\nA_1 A_2 \ldots A_N`):
 
