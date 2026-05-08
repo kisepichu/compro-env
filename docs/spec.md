@@ -180,7 +180,7 @@ InputSpec                           ← Value Object (usecases/input_format/ で
                                     query_types が非空のときは常に空; iteration_ops が非空のときも常に空
   testcase_body: Vec<VarDecl>       簡易 T-testcases の本体変数 (block[0]=単一スカラー かつ block[1]=スカラーのみ; ok=false のとき空)
   iteration_vars: Vec<VarDecl>      複雑な繰り返し本体の変数リスト (block[1] にループ・配列を含む場合; query_body/testcase_body が非空のときは空)
-  iteration_ops: Vec<InputOp>       複雑な繰り返し本体の読み取り命令列 (vars/ops と同形式; query_body が非空のときは空)
+  iteration_ops: Vec<InputOp>       複雑な繰り返し本体の読み取り命令列 (vars/ops と同形式; query_types/query_body/testcase_body が非空のときは空)
 
 QueryTypeDecl                       ← Value Object (クエリ型入力のサブ形式)
   type_id: String                   クエリ種別番号 ("1", "2", "3")

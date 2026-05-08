@@ -258,12 +258,13 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │        パース成功 → QueryTypeDecl { type_id, ok: true, vars }
   │        変数解析失敗 → QueryTypeDecl { type_id, ok: false, vars: [] }
   │      先頭行の先頭トークンが NUM でない → single-format sub-block
+  │        前提条件: query_types = [] かつ query_body = [] かつ iteration_vars = [] のとき のみ処理
+  │          (いずれかが既に埋まっている場合は当該 sub-block を完全スキップ — ステップ 2 にも進まない)
   │        ステップ 1: スカラー変数リストとして解析を試みる (query_body に格納)
   │          ※ 例: abc334_d の "X" → x: i64 として query_body = [x]
-  │          全行を連結してスカラー変数リストとして解析
+  │          全行を連結してスカラー変数リスト (Scalars のみ; LoopRow は不可) として解析
   │          パース成功 → query_body = [VarDecl, ...]
-  │          パース失敗 / 既に query_body が設定済み → ステップ 2 へ
-  │          query_types が非空の場合は query_body を設定しない
+  │          パース失敗 → ステップ 2 へ
   │        ステップ 2 (スカラーパース失敗時): 完全 InputSpec としてパース (iteration_vars / iteration_ops に格納)
   │          ※ 例: abc456_f の "N K\nA_1 ... A_N"、abc456_e の複数ループ含む本体
   │          ブロック[1] を単独の input_format_raw として再帰的にパース (ブロック分割なし)
@@ -272,9 +273,6 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │            (テンプレートは solve にループスタブのみ生成)
   │          iteration_vars / iteration_ops はメイン vars と独立したスコープ
   │          型推定はメインと同一の constraints テキストを使用
-  │
-  │    query_types が非空の場合は query_body / iteration_vars / iteration_ops を空にする
-  │    query_body が非空の場合は iteration_vars / iteration_ops を空にする
   │
   │    すべて空の場合:
   │      query_types = [], query_body = [], iteration_vars = [], iteration_ops = [] のまま。
@@ -809,11 +807,13 @@ fn solve(
             }
             {% elif op.tag == "loop_begin" -%}
             {% set next_index = loop.index0 + 1 -%}
+            {% if input_format.iteration_ops[next_index] is defined and input_format.iteration_ops[next_index].tag != "loop_end" -%}
             {% set body_op = input_format.iteration_ops[next_index] -%}
             {% for v in body_op.vars -%}
             {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
             let mut {{ v.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}> = Vec::new();
             {% endfor -%}
+            {% endif -%}
             for _ in 0..{{ op.end }} {
                 input! {
             {% elif op.tag == "read_line" and op.depth > 0 -%}
@@ -826,11 +826,13 @@ fn solve(
             {% elif op.tag == "loop_end" -%}
             {% set prev_index = loop.index0 - 1 -%}
             {% set body_op = input_format.iteration_ops[prev_index] -%}
+            {% if body_op.tag != "loop_begin" -%}
                 }
                 {% for v in body_op.vars -%}
                 {{ v.name }}.push(__tmp_{{ v.name }});
                 {% endfor -%}
             }
+            {% endif -%}
             {% endif -%}
             {% endfor -%}
             // TODO: solve each iteration
