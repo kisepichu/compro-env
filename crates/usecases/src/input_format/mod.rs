@@ -3111,7 +3111,7 @@ mod tests {
             !spec.iteration_ops.is_empty(),
             "iteration_ops should be non-empty for complex body"
         );
-        // iteration_vars should include n (is_size), k, a (dim=1)
+        // iteration_vars: n (is_size), k, a (dim=1, size=["n"])
         let n = spec.iteration_vars.iter().find(|v| v.name == "n");
         let k = spec.iteration_vars.iter().find(|v| v.name == "k");
         let a = spec.iteration_vars.iter().find(|v| v.name == "a");
@@ -3119,7 +3119,34 @@ mod tests {
         assert!(n.unwrap().is_size, "n should be is_size=true");
         assert!(k.is_some(), "expected var k in iteration_vars");
         assert!(a.is_some(), "expected var a in iteration_vars");
-        assert_eq!(a.unwrap().dim, 1, "a should be dim=1");
+        let a = a.unwrap();
+        assert_eq!(a.dim, 1, "a should be dim=1");
+        assert_eq!(a.size, vec!["n"], "a should have size=[\"n\"]");
+
+        // iteration_ops: ReadLine([n, k]) then ReadLine([a, size=Some("n")])
+        assert_eq!(
+            spec.iteration_ops.len(),
+            2,
+            "expected exactly 2 iteration_ops"
+        );
+        assert_eq!(spec.iteration_ops[0].tag, OpTag::ReadLine);
+        assert_eq!(spec.iteration_ops[0].depth, 0);
+        let op0_names: Vec<&str> = spec.iteration_ops[0]
+            .vars
+            .iter()
+            .map(|v| v.name.as_str())
+            .collect();
+        assert_eq!(op0_names, vec!["n", "k"], "first op should read n and k");
+
+        assert_eq!(spec.iteration_ops[1].tag, OpTag::ReadLine);
+        assert_eq!(spec.iteration_ops[1].vars.len(), 1);
+        assert_eq!(spec.iteration_ops[1].vars[0].name, "a");
+        assert_eq!(spec.iteration_ops[1].vars[0].dim, 1);
+        assert_eq!(
+            spec.iteration_ops[1].vars[0].size.as_deref(),
+            Some("n"),
+            "a's op should have size=n"
+        );
     }
 
     /// abc456_e style: complex body with multiple loops and arrays →
