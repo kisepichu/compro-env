@@ -227,6 +227,12 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │    \text{query}_Q / \mathrm{Query}_Q / query_Q → QueryLine (vdots ブロック内のみ有効)
   │    cdots 伴う 1D 配列で添字がすべてアルファベット → Phase 2 → ok: false
   │    空白なし隣接要素 (S_{1,1}S_{1,2}) → Phase 2 → ok: false
+  │    1D 固定サイズ (no cdots): 同名 Ident+数値添字が 2 個以上 スペース区切り 連番 → Array1D(size=literal)
+  │    2D 固定グリッド行: 同名 Ident_{Num,Num} が 2 個以上 col 添字連番 row 添字固定 → Array2DRow
+  │
+  ▼  多行グルーピング (block_to_ops)
+  │    連続する Array2DRow: 同名・row 添字が 1 始まり連番 → VarDecl(dim=2) + ReadLine(dim=2) 1 命令
+  │    (テンプレートは `[[T; cols]; rows]` として proconio で一括読み)
   │
   ▼  Semantic Analysis (ブロック[0])
   │    変数テーブル (dim / size 解決)
@@ -268,6 +274,21 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   - 例: `N` と `n` が両方出現 → `name: "N"`, `name: "n"` (小文字化しない)
 - 非数値の添字を持つ表記 (`S_X`, `S_Y` など) は現状未対応で、パースは失敗する (`ok: false`)
 
+#### 添字の分類ルール
+
+`A_x` 形式 (単純添字) および `A_{...}` 形式 (ブレース添字) の分類:
+
+| 添字形式               | 例                   | 分類              | 結果                               |
+| ---------------------- | -------------------- | ----------------- | ---------------------------------- |
+| 単一英字               | `_i`, `_j`           | ループ変数添字    | `LoopRow` / `Array1D` のインデックス |
+| 単一数値               | `_1`, `_3`           | 1D 数値添字       | `Array1D` または `Scalars` の要素  |
+| `{Num}`                | `_{1}`, `_{12}`      | 1D 数値添字       | 同上                               |
+| `{Num,Num}`            | `_{1,1}`, `_{2,6}`   | 2D numeric 添字   | `Array2DRow` 行・列インデックス    |
+| `{Ident,...}` など     | `_{i,j}`, `_{H,W}`   | 非対応 (Phase 2)  | `ok: false`                        |
+
+- `{Num,Num}` は GridRow 検出 (文字グリッド) のカンマ添字とは別扱い: GridRow は同名変数の cdots 範囲式として検出されるのに対し、`Array2DRow` は cdots なしで同名変数の col が連番するパターン
+- `{Num,Num}` 以外のカンマ添字 (`{1,N}`, `{i,j}`) は Phase 2 で `ok: false`
+
 #### ループのインデックス正規化
 
 添字が 1-origin (`A_1 ... A_N`) であっても、loop は常に 0-indexed に正規化する:
@@ -307,9 +328,12 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
 ```
 
 - `var_type`: `"int"` | `"str"` | `"unknown"`
-- `dim`: `0` = スカラー, `1` = 1D 配列 (Phase 1 上限)
-- `size`: dim ごとのサイズ式 (小文字化済み変数名)
-- `is_size`: 他の var の `size` または `loop_begin` の `end` に自分の `name` が現れるなら `true`。テンプレートで `usize` / `Vec<T>` の型決定に使用する
+- `dim`: `0` = スカラー, `1` = 1D 配列, `2` = 2D 固定グリッド
+- `size`: dim ごとのサイズ式リスト (小文字化済み変数名またはリテラル数値文字列)
+  - dim=0: `[]`
+  - dim=1: `["n"]` (可変) または `["3"]` (固定リテラル)
+  - dim=2: `["6", "3"]` — `[cols, rows]` の順。両要素とも固定リテラル
+- `is_size`: 他の var の `size` または `loop_begin` の `end` に自分の `name` が現れるなら `true`。テンプレートで `usize` / `Vec<T>` の型決定に使用する。固定リテラルサイズの場合は `is_size` は持たない (変数ではないため)
 
 #### `ops` の形式 (JSON 例)
 
@@ -367,8 +391,9 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
 VarRef フィールド:
 
 - `dim == 0` (スカラー): `{"name":"n","dim":0}`
-- `dim == 1`, 一括読み (水平 cdots): `{"name":"a","dim":1,"size":"n"}` — 1 行を split して配列全体を読む
+- `dim == 1`, 一括読み (水平 cdots または固定サイズ): `{"name":"a","dim":1,"size":"n"}` または `{"name":"a","dim":1,"size":"3"}` — 1 行を split して配列全体を読む
 - `dim == 1`, 要素読み (ループ内): `{"name":"a","dim":1,"index":"i"}` — `a[i]` を 1 つ読む
+- `dim == 2` (2D 固定グリッド): `{"name":"a","dim":2}` — サイズは VarDecl.size[0] (cols) と size[1] (rows) から参照。テンプレートは `a: [[T; cols]; rows]` を生成する
 
 #### `query_types` の形式 (JSON 例)
 
@@ -484,6 +509,57 @@ a s
 - ループ変数 (ループ上限) は `vars[0].name` (例: `t`)。テンプレートは `for _ in 0..t { ... }` を生成
 - 変数の命名規則・型推定はメイン `vars` と同一ルールを適用するが、スコープは独立
 
+#### 2D 固定グリッドの形式 (JSON 例)
+
+`A_{1,1} A_{1,2} ... A_{1,6}` × 3 行 (abc456-B 形式) のとき、`dim=2` の `VarDecl` 1 件と `ops` 1 命令が生成される。
+
+入力例:
+
+```
+A_{1,1} A_{1,2} A_{1,3} A_{1,4} A_{1,5} A_{1,6}
+A_{2,1} A_{2,2} A_{2,3} A_{2,4} A_{2,5} A_{2,6}
+A_{3,1} A_{3,2} A_{3,3} A_{3,4} A_{3,5} A_{3,6}
+```
+
+生成される `vars`:
+
+```json
+[{ "name": "a", "math": "A", "var_type": "int", "dim": 2, "size": ["6", "3"], "is_size": false }]
+```
+
+生成される `ops`:
+
+```json
+[{ "tag": "read_line", "depth": 0, "vars": [{ "name": "a", "dim": 2 }] }]
+```
+
+生成される Rust コード (main):
+
+```rust
+input! {
+    a: [[i64; 6]; 3],
+}
+```
+
+生成される solve 引数:
+
+```rust
+fn solve(a: Vec<Vec<i64>>) -> String { ... }
+```
+
+検出ルール:
+
+- 連続する N 行 (N ≥ 2) が全て `Array2DRow { name, row_idx, col_count }` であること
+- 全行の `name` が一致すること
+- `row_idx` が `"1"` 始まり連番 (`"1"`, `"2"`, ..., `"N"`) であること
+- 全行の `col_count` が等しいこと
+
+`Array2DRow` 1 行の検出ルール:
+
+- 行内の全トークンが `Ident_{Num,Num}` パターン (space 区切り)
+- 全て同一 `name`, `row_idx` 固定, `col_idx` が `"1"` 始まり連番
+- 要素数 ≥ 2
+
 #### 型推定 (制約テキストから)
 
 制約テキストを走査し、以下のヒューリスティックで `vars[*].var_type` を設定する:
@@ -504,13 +580,16 @@ a s
 | パターン                                                                  | 例                                                                             | 確認問題           |
 | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------ |
 | スカラー列                                                                | `N M K`                                                                        | abc334-A,B         |
-| 1D 配列 (水平 cdots)                                                      | `A_1 A_2 \ldots A_N`                                                           | abc334-C, abc360-C |
+| 1D 配列 (水平 cdots, 可変サイズ)                                          | `A_1 A_2 \ldots A_N`                                                           | abc334-C, abc360-C |
+| 1D 配列 (水平 cdots, 固定サイズ)                                          | `A_1 \ldots A_3`                                                               | —                  |
+| 1D 配列 (no cdots, 固定サイズ)                                            | `A_1 A_2 A_3` (2 個以上・連番)                                                  | —                  |
 | 複数配列 (水平)                                                           | `A_1 \ldots A_N` + `W_1 \ldots W_N`                                            | abc360-C           |
 | 単独文字列                                                                | `S` (型推定で `str`)                                                           | abc360-A           |
 | 1D 配列 (垂直 vdots, 単一変数)                                            | `S_1` / `\vdots` / `S_N`                                                       | abc246-F           |
 | `:` 区切り (垂直 vdots 等価)                                              | `S_1` / `:` / `S_H`                                                            | ukuku09-C          |
 | 複数変数ループ (`\vdots`)                                                 | `t_1 k_1` / `\vdots` / `t_Q k_Q`                                               | abc242-D           |
 | 文字グリッド (2D 添字)                                                    | `S_{11}...S_{1W}` / `:` / `S_{H1}...S_{HW}`                                    | abc151-D, abc176-D |
+| 2D 固定グリッド (comma 添字, no cdots)                                    | `A_{1,1} ... A_{1,6}` × 3 行 (dim=2, `[[T; 6]; 3]`)                            | abc456-B           |
 | 添字付きスカラー (アルファベット添字)                                     | `A_x A_y`                                                                      | abc246-E           |
 | 添字付きスカラー (数値添字・vdots なし)                                   | `r_1 c_1` / `r_2 c_2` (各行独立)                                               | abc176-D           |
 | クエリ型 (`\text{query}_Q` / `\mathrm{Query}_Q` / `query_Q`)、sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D, abc212-D |
@@ -540,6 +619,8 @@ a s
 | 可変長行 (サイズが変数)                                             | `T_i K_i A_{i,1} \ldots A_{i,K_i}`   | abc226-C    |
 | 斜め・上三角行列                                                    | `A_{1,2} \cdots A_{1,2N}` / `\vdots` | abc236-D    |
 | ネストループ 2 段以上                                               | —                                    | —           |
+| `{Num,Num}` 以外のカンマ添字                                        | `A_{i,j}`, `A_{1,N}`                 | —           |
+| 2D 固定グリッドで行数 1 またはセル数が 1 行の場合                  | 1 行のみ `A_{1,1}...A_{1,6}`         | —           |
 
 ### テンプレート例 (Rust)
 

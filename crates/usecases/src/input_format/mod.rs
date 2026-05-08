@@ -177,6 +177,13 @@ enum RawLine {
     /// Signals a Q-iteration loop of queries; `loop_bound` is the subscript variable
     /// (e.g. "Q" from `\text{query}_Q`).
     QueryLine { loop_bound: String },
+    /// One row of a fixed 2D grid: A_{row,1} A_{row,2} ... A_{row,cols}
+    /// All elements share the same base name and fixed row index; col subscripts are 1-based sequential.
+    Array2DRow {
+        name: String,
+        row_idx: String,
+        col_count: usize,
+    },
 }
 
 /// Parse errors cause ok=false
@@ -258,9 +265,20 @@ fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
         return result;
     }
 
+    // Try to detect a fixed 2D grid row: A_{row,1} A_{row,2} ... A_{row,cols}
+    // (before array1d and array1d_no_cdots, since comma subscripts look like multi-subscript vars)
+    if let Some(result) = try_parse_array2d_row(&tokens) {
+        return result;
+    }
+
     // Try to detect 1D horizontal array: pattern like Ident_Num ... Ident_Num [Cdots] Ident_Num
     // or Ident_Num Space Ident_Num Space Cdots
     if let Some(result) = try_parse_array1d(&tokens) {
+        return result;
+    }
+
+    // Try to detect 1D fixed array without cdots: A_1 A_2 A_3
+    if let Some(result) = try_parse_array1d_no_cdots(&tokens) {
         return result;
     }
 
@@ -355,6 +373,131 @@ fn try_parse_array1d(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
     } else {
         Some(Ok(RawLine::Array1D { name: base, size }))
     }
+}
+
+/// Try to detect a fixed-size 1D array without cdots: `A_1 A_2 A_3`
+/// Requires ≥ 2 elements, same base name, numeric subscripts sequential from 1.
+/// Returns Some(Ok(Array1D { size: last_idx })) when matched, None otherwise.
+fn try_parse_array1d_no_cdots(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
+    // Must not contain Cdots (those are handled by try_parse_array1d)
+    if tokens.contains(&Token::Cdots) {
+        return None;
+    }
+
+    let mut base_name: Option<String> = None;
+    let mut subscripts: Vec<u64> = Vec::new();
+    let mut i = 0;
+
+    while i < tokens.len() {
+        match &tokens[i] {
+            Token::Space => {
+                i += 1;
+            }
+            Token::Ident(name) => {
+                // Must have a subscript next
+                if i + 1 >= tokens.len() || tokens[i + 1] != Token::Subscript {
+                    return None;
+                }
+                let (sub, advance) = read_subscript_value(&tokens[i + 2..])?;
+                i += 2 + advance;
+
+                // Subscript must be a pure numeric literal
+                let n: u64 = sub.parse().ok()?;
+
+                // Base name must be consistent
+                match &base_name {
+                    None => base_name = Some(name.clone()),
+                    Some(bn) if bn != name => return None,
+                    _ => {}
+                }
+                subscripts.push(n);
+            }
+            _ => return None,
+        }
+    }
+
+    let base = base_name?;
+    if subscripts.len() < 2 {
+        return None;
+    }
+
+    // Subscripts must be sequential starting from 1
+    let expected: Vec<u64> = (1..=subscripts.len() as u64).collect();
+    if subscripts != expected {
+        return None;
+    }
+
+    let size = subscripts.last()?.to_string();
+    Some(Ok(RawLine::Array1D { name: base, size }))
+}
+
+/// Try to detect one row of a fixed 2D grid: `A_{row,1} A_{row,2} ... A_{row,cols}`
+/// Requires ≥ 2 elements, same base name, fixed row subscript (numeric), col subscripts sequential from 1.
+/// Returns Some(Ok(Array2DRow { ... })) when matched, None otherwise.
+fn try_parse_array2d_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
+    // Must not contain Cdots
+    if tokens.contains(&Token::Cdots) {
+        return None;
+    }
+
+    let mut base_name: Option<String> = None;
+    let mut row_idx: Option<String> = None;
+    let mut col_count: usize = 0;
+    let mut i = 0;
+
+    while i < tokens.len() {
+        match &tokens[i] {
+            Token::Space => {
+                i += 1;
+            }
+            Token::Ident(name) => {
+                // Must have a subscript next
+                if i + 1 >= tokens.len() || tokens[i + 1] != Token::Subscript {
+                    return None;
+                }
+                let (sub, advance) = read_subscript_value(&tokens[i + 2..])?;
+                i += 2 + advance;
+
+                // Subscript must be "row,col" form (both numeric)
+                let (row_s, col_s) = sub.split_once(',')?;
+                let _row_n: u64 = row_s.parse().ok()?;
+                let col_n: u64 = col_s.parse().ok()?;
+
+                // Base name consistent
+                match &base_name {
+                    None => base_name = Some(name.clone()),
+                    Some(bn) if bn != name => return None,
+                    _ => {}
+                }
+
+                // Row idx consistent
+                match &row_idx {
+                    None => row_idx = Some(row_s.to_string()),
+                    Some(r) if r != row_s => return None,
+                    _ => {}
+                }
+
+                // Col must be sequential from 1
+                col_count += 1;
+                if col_n != col_count as u64 {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+
+    let name = base_name?;
+    let row = row_idx?;
+    if col_count < 2 {
+        return None;
+    }
+
+    Some(Ok(RawLine::Array2DRow {
+        name,
+        row_idx: row,
+        col_count,
+    }))
 }
 
 /// Try to detect a character grid row: `X_{row col_start} ... X_{row col_end}`
@@ -523,9 +666,14 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
         Some(Token::Num(n)) => Some((n.clone(), 1)),
         Some(Token::Ident(s)) => Some((s.clone(), 1)),
         Some(Token::LBrace) => {
-            // Read until matching RBrace, collecting content
+            // Read until matching RBrace, collecting comma-separated parts.
+            // {Num} → single subscript value (existing behaviour).
+            // {Num,Num} → 2D numeric: returned as "row,col" string for Array2DRow detection.
+            // Any Ident part → non-numeric, unsupported (Phase 2) → None.
             let mut depth = 1;
-            let mut content_parts: Vec<String> = Vec::new();
+            let mut parts: Vec<String> = Vec::new();
+            let mut current: Option<String> = None;
+            let mut has_ident = false;
             let mut i = 1;
             while i < tokens.len() && depth > 0 {
                 match &tokens[i] {
@@ -535,30 +683,40 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                     }
                     Token::RBrace => {
                         depth -= 1;
+                        if depth == 0
+                            && let Some(s) = current.take()
+                        {
+                            parts.push(s);
+                        }
                         i += 1;
                     }
                     Token::Num(n) => {
-                        content_parts.push(n.clone());
+                        current = Some(current.map_or_else(|| n.clone(), |c| c + n));
                         i += 1;
                     }
                     Token::Ident(s) => {
-                        content_parts.push(s.clone());
+                        has_ident = true;
+                        current = Some(current.map_or_else(|| s.clone(), |c| c + s));
                         i += 1;
                     }
                     Token::Comma => {
-                        // A_{1,1} style — not supported (phase 2)
-                        return None;
+                        if let Some(s) = current.take() {
+                            parts.push(s);
+                        }
+                        i += 1;
                     }
                     _ => {
                         i += 1;
                     }
                 }
             }
-            if content_parts.len() == 1 {
-                Some((content_parts[0].clone(), i))
-            } else {
-                // Multiple parts (comma-separated) — not handled
-                None
+            match parts.len() {
+                1 => Some((parts.remove(0), i)),
+                2 if !has_ident => {
+                    // {Num,Num} — 2D numeric subscript, returned as "row,col"
+                    Some((format!("{},{}", parts[0], parts[1]), i))
+                }
+                _ => None, // Ident parts or 3+ parts → unsupported
             }
         }
         _ => None,
@@ -637,6 +795,12 @@ enum IntermOp {
     ///   name_seed — used by normalize_name to derive the Rust variable name (e.g. "Ax", "r1")
     ///   base_math — original base name stored in VarDecl.math for constraint inference (e.g. "A", "r")
     ReadSubscriptedScalars(Vec<(String, String)>),
+    /// Fixed 2D grid: consecutive Array2DRow lines with same name, sequential row indices 1..rows.
+    ReadGrid {
+        name: String,
+        rows: usize,
+        cols: usize,
+    },
 }
 
 fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError> {
@@ -857,6 +1021,47 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
             RawLine::QueryLine { .. } => {
                 // QueryLine not matched to a vdots block — treat as unsupported
                 return Err(ParseError::Unknown);
+            }
+            RawLine::Array2DRow {
+                name,
+                row_idx,
+                col_count,
+            } => {
+                // Collect consecutive Array2DRow lines with same name, sequential rows from "1".
+                if row_idx != "1" {
+                    return Err(ParseError::Unknown);
+                }
+                let base_name = name.clone();
+                let cols = *col_count;
+                let mut rows = 1usize;
+                let mut j = i + 1;
+                loop {
+                    match raw_lines.get(j) {
+                        Some(RawLine::Array2DRow {
+                            name: n2,
+                            row_idx: r2,
+                            col_count: c2,
+                        }) if n2 == &base_name => {
+                            let expected_row = (rows + 1).to_string();
+                            if r2 != &expected_row || *c2 != cols {
+                                return Err(ParseError::Unknown);
+                            }
+                            rows += 1;
+                            j += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                if rows < 2 {
+                    return Err(ParseError::Unknown);
+                }
+                ops.push(IntermOp::ReadGrid {
+                    name: base_name,
+                    rows,
+                    cols,
+                });
+                i = j;
+                continue;
             }
         }
     }
@@ -1169,6 +1374,30 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                         name: var_name,
                         dim: 1,
                         size: Some(size_name),
+                        index: None,
+                    }],
+                    loop_var: None,
+                    begin: None,
+                    end: None,
+                });
+            }
+            IntermOp::ReadGrid { name, rows, cols } => {
+                let var_name = normalize_name(name, &all_math_names);
+                // size: [cols, rows] — both literal strings
+                ensure_var_decl(
+                    &mut var_decls,
+                    &var_name,
+                    name,
+                    2,
+                    vec![cols.to_string(), rows.to_string()],
+                );
+                ops.push(InputOp {
+                    tag: OpTag::ReadLine,
+                    depth,
+                    vars: vec![VarRef {
+                        name: var_name,
+                        dim: 2,
+                        size: None,
                         index: None,
                     }],
                     loop_var: None,
@@ -1711,6 +1940,7 @@ fn collect_math_names(ops: &[IntermOp]) -> Vec<String> {
             }
             IntermOp::LoopBegin { end, .. } => names.push(end.clone()),
             IntermOp::LoopEnd => {}
+            IntermOp::ReadGrid { name, .. } => names.push(name.clone()),
         }
     }
     names
@@ -2643,5 +2873,122 @@ mod tests {
         assert!(spec.testcase_body.is_empty());
         // block-0 var is still is_size=true even when testcase_body is empty
         assert!(spec.vars[0].is_size, "loop-count var must be is_size:true");
+    }
+
+    // ── Fixed-size 1D (cdots) ──────────────────────────────────────────────────
+
+    /// A_1 \ldots A_3 — cdots with numeric end subscript → Array1D(size="3")
+    #[test]
+    fn array1d_fixed_cdots() {
+        let spec = scalar_ok("A_1 \\ldots A_3");
+        assert_eq!(spec.vars.len(), 1);
+        assert_eq!(spec.vars[0].name, "a");
+        assert_eq!(spec.vars[0].dim, 1);
+        assert_eq!(spec.vars[0].size, vec!["3"]);
+        assert!(!spec.vars[0].is_size, "literal size has no is_size var");
+        // ops: single ReadLine with dim=1, size="3"
+        assert_eq!(spec.ops.len(), 1);
+        assert_eq!(spec.ops[0].vars[0].name, "a");
+        assert_eq!(spec.ops[0].vars[0].dim, 1);
+        assert_eq!(spec.ops[0].vars[0].size.as_deref(), Some("3"));
+    }
+
+    // ── Fixed-size 1D (no cdots) ───────────────────────────────────────────────
+
+    /// A_1 A_2 A_3 — same name, sequential numeric subscripts, no cdots → Array1D(size="3")
+    #[test]
+    fn array1d_fixed_no_cdots() {
+        let spec = scalar_ok("A_1 A_2 A_3");
+        assert!(spec.ok, "expected ok=true");
+        assert_eq!(spec.vars.len(), 1);
+        assert_eq!(spec.vars[0].name, "a");
+        assert_eq!(spec.vars[0].dim, 1);
+        assert_eq!(spec.vars[0].size, vec!["3"]);
+        assert_eq!(spec.ops[0].vars[0].size.as_deref(), Some("3"));
+    }
+
+    /// A_1 A_2 — 2 elements is the minimum
+    #[test]
+    fn array1d_fixed_no_cdots_two_elements() {
+        let spec = scalar_ok("A_1 A_2");
+        assert!(spec.ok);
+        assert_eq!(spec.vars[0].dim, 1);
+        assert_eq!(spec.vars[0].size, vec!["2"]);
+    }
+
+    /// A_1 alone — not enough for an array; treated as scalar
+    #[test]
+    fn array1d_fixed_no_cdots_single_element_is_scalar() {
+        let spec = scalar_ok("A_1");
+        assert_eq!(spec.vars[0].dim, 0, "single element should be scalar");
+    }
+
+    /// A_1 B_1 — different base names → separate scalars, not array
+    #[test]
+    fn array1d_fixed_no_cdots_different_names_are_scalars() {
+        let spec = scalar_ok("A_1 B_1");
+        // Two distinct scalars
+        assert_eq!(spec.vars.len(), 2);
+        assert!(spec.vars.iter().all(|v| v.dim == 0));
+    }
+
+    /// A_1 A_3 — non-sequential subscripts → not an array
+    #[test]
+    fn array1d_fixed_no_cdots_nonsequential_are_scalars() {
+        let spec = scalar_ok("A_1 A_3");
+        // Falls through to scalars; both get name "a" → collision resolution
+        assert!(spec.vars.iter().all(|v| v.dim == 0));
+    }
+
+    // ── Fixed 2D grid (comma subscripts) ──────────────────────────────────────
+
+    /// A_{1,1} ... A_{1,6} × 3 rows → dim=2, size=["6","3"]
+    #[test]
+    fn array2d_fixed_grid_abc456b() {
+        let input = "A_{1,1} A_{1,2} A_{1,3} A_{1,4} A_{1,5} A_{1,6}\nA_{2,1} A_{2,2} A_{2,3} A_{2,4} A_{2,5} A_{2,6}\nA_{3,1} A_{3,2} A_{3,3} A_{3,4} A_{3,5} A_{3,6}";
+        let spec = scalar_ok(input);
+        assert!(spec.ok, "expected ok=true for 2D fixed grid");
+        assert_eq!(spec.vars.len(), 1);
+        assert_eq!(spec.vars[0].name, "a");
+        assert_eq!(spec.vars[0].dim, 2);
+        assert_eq!(spec.vars[0].size, vec!["6", "3"]);
+        assert_eq!(spec.ops.len(), 1);
+        assert_eq!(spec.ops[0].vars[0].dim, 2);
+    }
+
+    /// 2×2 minimal grid
+    #[test]
+    fn array2d_fixed_grid_minimal_2x2() {
+        let input = "A_{1,1} A_{1,2}\nA_{2,1} A_{2,2}";
+        let spec = scalar_ok(input);
+        assert!(spec.ok);
+        assert_eq!(spec.vars[0].dim, 2);
+        assert_eq!(spec.vars[0].size, vec!["2", "2"]);
+    }
+
+    /// Single Array2DRow (1 row) — not enough rows to form a 2D grid
+    #[test]
+    fn array2d_single_row_not_grouped() {
+        // One row of comma-subscript elements should not be treated as a 2D grid
+        let spec = parse("A_{1,1} A_{1,2} A_{1,3}", "");
+        // Falls back to ok=false or scalars — not a valid 2D grid
+        // (row count < 2 → no grouping)
+        assert!(!spec.ok || spec.vars.iter().all(|v| v.dim != 2));
+    }
+
+    /// Row subscripts not starting from 1 → no 2D grid grouping
+    #[test]
+    fn array2d_row_not_starting_from_1() {
+        let input = "A_{2,1} A_{2,2}\nA_{3,1} A_{3,2}";
+        let spec = parse(input, "");
+        assert!(!spec.ok || spec.vars.iter().all(|v| v.dim != 2));
+    }
+
+    /// Mismatched col counts → ok=false
+    #[test]
+    fn array2d_mismatched_col_counts() {
+        let input = "A_{1,1} A_{1,2} A_{1,3}\nA_{2,1} A_{2,2}";
+        let spec = parse(input, "");
+        assert!(!spec.ok || spec.vars.iter().all(|v| v.dim != 2));
     }
 }
