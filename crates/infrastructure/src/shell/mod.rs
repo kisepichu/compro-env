@@ -474,7 +474,7 @@ fn format_input_fmt_line(kinds: &[(String, domain::entity::InputFormatKind)]) ->
     }
     let ok_count = kinds
         .iter()
-        .filter(|(_, k)| *k != domain::entity::InputFormatKind::Fail)
+        .filter(|(_, k)| k != &domain::entity::InputFormatKind::Fail)
         .count();
     let total = kinds.len();
     let parts: Vec<String> = kinds

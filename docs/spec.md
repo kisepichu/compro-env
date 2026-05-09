@@ -184,7 +184,7 @@ InputSpec                           ← Value Object (usecases/input_format/ で
 
 InputFormatKind                     ← 導出値 (ce init 出力用、InputSpec から決定)
   FAIL                              ok=false
-  query(n)                          query_types が非空 (n = 種別数)
+  query({n})                        query_types が非空 (n = 種別数)
   query                             query_body が非空
   testcase                          testcase_body が非空
   iter                              iteration_ops が非空
