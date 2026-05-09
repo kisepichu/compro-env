@@ -249,8 +249,9 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │    スカラー列 / 1D配列(cdots) / vdots → ForLoop
   │    \text{X}_N / \mathrm{X}_N (X は任意文字列) → QueryLine (vdots ブロック内のみ有効)
   │    query_N (大文字小文字不問、N はループ変数) → QueryLine (vdots ブロック内のみ有効)
-  │    {X}_N (先頭が LBrace + 単一 Ident + RBrace の透明グルーピング) → QueryLine (vdots ブロック内のみ有効)
-  │      ※ {\rm X} 等の LaTeX 書式コマンドはトークナイザーで無視され {X}_N に等価になる
+  │    {query}_N (大文字小文字不問; {\rm Query}_N 等 LaTeX 書式コマンドでラップされた形を含む) → QueryLine (vdots ブロック内のみ有効)
+  │      ※ \rm 等の未知 LaTeX コマンドはトークナイザーで無視されるため {query}_N に等価になる
+  │      ※ {X}_N 一般ではなく Ident が "query" に一致する場合のみ QueryLine として扱う
   │      ※ 問題文に「クエリ」「テストケース」のどちらが書かれているかは無関係
   │      ※ 上記以外の plain-text 添字 (q_i など) は QueryLine とみなさない
   │    cdots 伴う 1D 配列で添字がすべてアルファベット → Phase 2 → ok: false
@@ -691,7 +692,7 @@ fn solve(a: Vec<Vec<i64>>) -> String { ... }
 | 2D 固定グリッド (comma 添字, no cdots)                                    | `A_{1,1} A_{1,2} A_{1,3}` × 3 行 (dots 不可, dim=2, `[[T; 3]; 3]`)             | abc456-B           |
 | 添字付きスカラー (アルファベット添字)                                     | `A_x A_y`                                                                      | abc246-E           |
 | 添字付きスカラー (数値添字・vdots なし)                                   | `r_1 c_1` / `r_2 c_2` (各行独立)                                               | abc176-D           |
-| ループマーカー付きクエリ型 (`\text{X}_N` / `\mathrm{X}_N` / `query_N` / `{\rm X}_N`)、numbered sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D, abc212-D, abc453-D, abc453-G |
+| ループマーカー付きクエリ型 (`\text{X}_N` / `\mathrm{X}_N` / `query_N` / `{\rm Query}_N`)、numbered sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D, abc212-D, abc453-G |
 | 簡易 T-testcases 型 (ブロック[0]=単一スカラー `T`、ブロック[1]=スカラー変数のみ)                    | `T\n\na s`                                                                        | abc238-D                     |
 | 複雑な繰り返し本体 (ループマーカー付き、ブロック[1] にループ・配列含む)                             | `T\n\mathrm{case}_T\n\nN K\nA_1 \ldots A_N`                                      | abc456-F, abc456-E           |
 
