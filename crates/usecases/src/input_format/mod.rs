@@ -220,12 +220,17 @@ fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
     let tokens = if tokens.first() == Some(&Token::LBrace) {
         if let Some(rbrace_rel) = tokens[1..].iter().position(|t| t == &Token::RBrace) {
             let inner = &tokens[1..1 + rbrace_rel]; // tokens between { and }
-            let inner_non_space: Vec<&Token> =
-                inner.iter().filter(|t| *t != &Token::Space).collect();
-            if inner_non_space.len() == 1 && matches!(inner_non_space[0], Token::Ident(_)) {
-                let mut unwrapped = vec![inner_non_space[0].clone()];
-                unwrapped.extend_from_slice(&tokens[1 + rbrace_rel + 1..]);
-                unwrapped
+            let mut non_space = inner.iter().filter(|t| **t != Token::Space);
+            let sole = non_space.next().cloned(); // first non-space token (cloned eagerly)
+            let has_more = non_space.next().is_some(); // ensure it's the only one
+            if !has_more {
+                if let Some(Token::Ident(_)) = &sole {
+                    let mut unwrapped = vec![sole.unwrap()];
+                    unwrapped.extend_from_slice(&tokens[1 + rbrace_rel + 1..]);
+                    unwrapped
+                } else {
+                    tokens
+                }
             } else {
                 tokens
             }
@@ -3227,8 +3232,20 @@ mod tests {
             "expected ok=true, got ok=false. vars={:?} ops={:?}",
             spec.vars, spec.ops
         );
-        assert_eq!(spec.query_types.len(), 3, "expected 3 query types");
         assert_eq!(spec.vars.len(), 3); // n, m, q
+        assert_eq!(spec.query_types.len(), 3);
+        // type 1: 1 X_i Y_i → 2 vars
+        assert_eq!(spec.query_types[0].type_id, "1");
+        assert!(spec.query_types[0].ok);
+        assert_eq!(spec.query_types[0].vars.len(), 2);
+        // type 2: 2 X_i Y_i Z_i → 3 vars
+        assert_eq!(spec.query_types[1].type_id, "2");
+        assert!(spec.query_types[1].ok);
+        assert_eq!(spec.query_types[1].vars.len(), 3);
+        // type 3: 3 X_i L_i R_i → 3 vars
+        assert_eq!(spec.query_types[2].type_id, "3");
+        assert!(spec.query_types[2].ok);
+        assert_eq!(spec.query_types[2].vars.len(), 3);
     }
 
     /// Numbered query_types → iteration_vars/ops always empty.
