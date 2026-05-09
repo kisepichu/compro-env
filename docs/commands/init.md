@@ -183,11 +183,13 @@ Initialized abc334 (AtCoder) — 6 problems: a b c d e f
 | `input_format.ok`          | パース成功フラグ (`bool`)                                                       | パーサー             |
 | `input_format.vars`        | 変数宣言リスト (詳細後述)                                                       | パーサー             |
 | `input_format.ops`         | 読み取り命令列 (詳細後述)                                                       | パーサー             |
-| `input_format.query_types` | クエリ種別リスト (詳細後述、クエリ型以外は空リスト)                             | パーサー             |
-| `input_format.query_body`  | 単一形式クエリの変数リスト (非数値先頭 sub-block、`query_types` 非空のときは空) | パーサー             |
-| `input_format.testcase_body` | T-testcases 型のテストケース本体変数リスト (ブロック[0]=単一スカラー かつ ブロック[1] がスカラー変数のみで構成される場合、それ以外は空リスト) | パーサー |
+| `input_format.query_types`    | クエリ種別リスト (詳細後述、クエリ型以外は空リスト)                                                                                                    | パーサー             |
+| `input_format.query_body`     | 単一形式ループの変数リスト (スカラーのみの非数値先頭 sub-block、`query_types` 非空または `iteration_ops` 非空のときは空)                                 | パーサー             |
+| `input_format.testcase_body`  | 簡易 T-testcases 型の本体変数リスト (ブロック[0]=単一スカラー かつ ブロック[1] がスカラーのみ、それ以外は空リスト)                                       | パーサー             |
+| `input_format.iteration_vars` | 複雑な繰り返し本体の変数リスト (最初に採用された非数値 sub-block にループ・配列が含まれる場合。`query_types`/`query_body`/`testcase_body` が非空のときは空) | パーサー             |
+| `input_format.iteration_ops`  | 複雑な繰り返し本体の読み取り命令列 (`vars`・`ops` と同形式。`query_types`/`query_body`/`testcase_body` が非空のときは空。テンプレートが for ループ内でレンダリングする) | パーサー             |
 
-`input_format.ok` が `false` のとき `vars`・`ops`・`query_types`・`query_body`・`testcase_body` は空リスト。テンプレートは `{% if input_format.ok %}` で分岐する。
+`input_format.ok` が `false` のとき `vars`・`ops`・`query_types`・`query_body`・`testcase_body`・`iteration_vars`・`iteration_ops` は全て空リスト。テンプレートは `{% if input_format.ok %}` で分岐する。
 
 ### 入力形式パース
 
@@ -203,13 +205,13 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │    \n\n で分割してブロック列にする
   │
   ▼  Phase 2 早期検出 (ok: false にフォールバック)
-  │    ブロック数 > 1 かつブロック[1] が数字始まり かつ ブロック[0] に query marker なし
+  │    ブロック数 > 1 かつブロック[1] が数字始まり かつ ブロック[0] に loop marker なし
   │      → 非対応クエリサブ形式 (typical90-L の q_i パターン等)
-  │    ブロック数 > 1 かつブロック[0] が単一 Ident トークン かつ query marker なし
-  │      → T-testcases 型 → ブロック[1] をスカラー変数リストとしてパース
+  │    ブロック数 > 1 かつブロック[0] が単一 Ident トークン かつ loop marker なし
+  │      → 簡易 T-testcases 型 → ブロック[1] をスカラー変数リストとしてパース
   │        成功 → testcase_body = [VarDecl, ...]; ブロック[0] の変数は is_size: true に設定
   │        失敗 → testcase_body = [] (テンプレートが TODO を生成)
-  │    ※ ブロック[0] に query marker がある場合は早期検出をスキップ
+  │    ※ ブロック[0] に loop marker がある場合は早期検出をスキップ
   │
   ▼  Lexer  (ブロック[0] を行単位でトークン列化)
   │    IDENT       変数名 (大文字・小文字・複合: A, N, ra)
@@ -224,7 +226,10 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │
   ▼  Parser  (行パターンマッチ)
   │    スカラー列 / 1D配列(cdots) / vdots → ForLoop
-  │    \text{query}_Q / \mathrm{Query}_Q / query_Q → QueryLine (vdots ブロック内のみ有効)
+  │    \text{X}_N / \mathrm{X}_N (X は任意文字列) → QueryLine (vdots ブロック内のみ有効)
+  │    query_N (大文字小文字不問、N はループ変数) → QueryLine (vdots ブロック内のみ有効)
+  │      ※ 問題文に「クエリ」「テストケース」のどちらが書かれているかは無関係
+  │      ※ 上記以外の plain-text 添字 (q_i など) は QueryLine とみなさない
   │    cdots 伴う 1D 配列で添字がすべてアルファベット → Phase 2 → ok: false
   │    空白なし隣接要素 (S_{1,1}S_{1,2}) → Phase 2 → ok: false
   │    1D 固定サイズ (no cdots): 同名 Ident+数値添字が 2 個以上 スペース区切り 連番 → Array1D(size=literal)
@@ -240,9 +245,9 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │    subscript → loop_var / begin / end 解決 (0-indexed に正規化)
   │    QueryLine vdots ブロック → LoopBegin(end=<loop_bound>) + LoopEnd (body なし)
   │
-  ▼  Query sub-block 解析 (ブロック[0] に query marker がある場合のみ)
-  │    query marker の判定: block0 のいずれかの行が QueryLine としてパースされること (parse_line と同一ルール)
-  │    ブロック[1..] を順に解析して query_types / query_body を構築する
+  ▼  繰り返し本体 (sub-block) 解析 (ブロック[0] に loop marker がある場合のみ)
+  │    loop marker の判定: block0 のいずれかの行が QueryLine としてパースされること (parse_line と同一ルール)
+  │    ブロック[1..] を順に解析して query_types / query_body / iteration_vars / iteration_ops を構築する
   │    各 sub-block について:
   │      空 sub-block → スキップ
   │      先頭行の先頭トークンが NUM → numbered sub-block (query_types に追加)
@@ -252,18 +257,28 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │          型推定は constraints テキストを用いてメインと同一推定器を適用
   │        パース成功 → QueryTypeDecl { type_id, ok: true, vars }
   │        変数解析失敗 → QueryTypeDecl { type_id, ok: false, vars: [] }
-  │      先頭行の先頭トークンが NUM でない → single-format sub-block (query_body に格納)
-  │        ※ 例: abc334_d の "X" → x: i64 として query_body = [x]
-  │        全行を連結してスカラー変数リストとして解析
-  │        パース成功 → query_body = [VarDecl, ...]
-  │        パース失敗 / 既に query_body が設定済み → スキップ (最初の 1 件のみ採用)
-  │        query_types が非空の場合は query_body を設定しない
+  │      先頭行の先頭トークンが NUM でない → single-format sub-block
+  │        前提条件: query_types = [] かつ query_body = [] かつ iteration_vars = [] のとき のみ処理
+  │          (いずれかが既に埋まっている場合は当該 sub-block を完全スキップ — ステップ 2 にも進まない)
+  │        ステップ 1: スカラー変数リストとして解析を試みる (query_body に格納)
+  │          ※ 例: abc334_d の "X" → x: i64 として query_body = [x]
+  │          全行を連結してスカラー変数リスト (Scalars のみ; LoopRow は不可) として解析
+  │          パース成功 → query_body = [VarDecl, ...]
+  │          パース失敗 → ステップ 2 へ
+  │        ステップ 2 (スカラーパース失敗時): 完全 InputSpec としてパース (iteration_vars / iteration_ops に格納)
+  │          ※ 例: abc456_f の "N K\nA_1 ... A_N"、abc456_e の複数ループ含む本体
+  │          当該 sub-block を単独で再帰パース (ブロック分割なし)
+  │          パース成功 (ok=true) → iteration_vars = mini_spec.vars, iteration_ops = mini_spec.ops
+  │          パース失敗 (ok=false) → iteration_vars = [], iteration_ops = []
+  │            (テンプレートは solve にループスタブのみ生成)
+  │          iteration_vars / iteration_ops はメイン vars と独立したスコープ
+  │          型推定はメインと同一の constraints テキストを使用
   │
   │    すべて空の場合:
-  │      query_types = [], query_body = [] のまま。
+  │      query_types = [], query_body = [], iteration_vars = [], iteration_ops = [] のまま。
   │      テンプレートは solve にループスタブ (TODO) を生成する。
   │
-  ▼  InputSpec  (vars + ops + query_types + query_body + testcase_body)
+  ▼  InputSpec  (vars + ops + query_types + query_body + testcase_body + iteration_vars + iteration_ops)
 ```
 
 #### 変数名の小文字化規則
@@ -513,6 +528,63 @@ a s
 - ループ変数 (ループ上限) は `vars[0].name` (例: `t`)。テンプレートは `for _ in 0..t { ... }` を生成
 - 変数の命名規則・型推定はメイン `vars` と同一ルールを適用するが、スコープは独立
 
+#### `iteration_vars` / `iteration_ops` の形式
+
+ループマーカーがブロック[0] にあり、かつ最初に採用された非数値 sub-block がスカラーパースに失敗した (ループ・配列を含む) 場合に生成される。`query_types`・`query_body`・`testcase_body` のいずれかが非空のときは空リスト。
+
+入力例 (abc456-F 形式: `T\n\mathrm{case}_T\n\nN K\nA_1 A_2 \ldots A_N`):
+
+```
+T
+\mathrm{case}_1
+\vdots
+\mathrm{case}_T
+
+N K
+A_1 A_2 \ldots A_N
+```
+
+生成される `vars` (block[0]):
+
+```json
+[{ "name": "t", "math": "T", "var_type": "int", "dim": 0, "size": [], "is_size": true }]
+```
+
+生成される `ops` (block[0]):
+
+```json
+[
+  { "tag": "read_line", "depth": 0, "vars": [{ "name": "t", "dim": 0 }] },
+  { "tag": "loop_begin", "depth": 0, "loop_var": "i", "begin": "0", "end": "t" },
+  { "tag": "loop_end",   "depth": 0 }
+]
+```
+
+生成される `iteration_vars` (block[1]):
+
+```json
+[
+  { "name": "n", "math": "N", "var_type": "int", "dim": 0, "size": [], "is_size": true },
+  { "name": "k", "math": "K", "var_type": "int", "dim": 0, "size": [], "is_size": false },
+  { "name": "a", "math": "A", "var_type": "int", "dim": 1, "size": ["n"], "is_size": false }
+]
+```
+
+生成される `iteration_ops` (block[1]):
+
+```json
+[
+  { "tag": "read_line", "depth": 0, "vars": [{ "name": "n", "dim": 0 }, { "name": "k", "dim": 0 }] },
+  { "tag": "read_line", "depth": 0, "vars": [{ "name": "a", "dim": 1, "size": "n" }] }
+]
+```
+
+- `iteration_vars` / `iteration_ops` の形式はメイン `vars` / `ops` と同一 (VarDecl / InputOp 形式)
+- スコープはメイン vars と独立 — 変数名が衝突しても別変数として扱う
+- 型推定はメインと同一の constraints テキストを使用
+- `iteration_vars` に含まれる変数はメインの `solve` 引数に含めない (for ループ内でローカル宣言)
+- ループ上限 (`query_loop_end`) は block[0] の ops から検出 (loop_begin → loop_end が空 body)
+
 #### 2D 固定グリッドの形式 (JSON 例)
 
 `A_{1,1} A_{1,2} A_{1,3} A_{1,4} A_{1,5} A_{1,6}` × 3 行 (abc456-B 形式) のとき、`dim=2` の `VarDecl` 1 件と `ops` 1 命令が生成される。(`...`/`\ldots` は不可: `try_parse_array2d_row` は Cdots を含む行を拒否する)
@@ -596,8 +668,9 @@ fn solve(a: Vec<Vec<i64>>) -> String { ... }
 | 2D 固定グリッド (comma 添字, no cdots)                                    | `A_{1,1} A_{1,2} A_{1,3}` × 3 行 (dots 不可, dim=2, `[[T; 3]; 3]`)             | abc456-B           |
 | 添字付きスカラー (アルファベット添字)                                     | `A_x A_y`                                                                      | abc246-E           |
 | 添字付きスカラー (数値添字・vdots なし)                                   | `r_1 c_1` / `r_2 c_2` (各行独立)                                               | abc176-D           |
-| クエリ型 (`\text{query}_Q` / `\mathrm{Query}_Q` / `query_Q`)、sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D, abc212-D |
-| T-testcases 型 (ブロック[0]=`T`、ブロック[1]=各テストケースの入力形式)           | `T\n\na s`                                                                        | abc238-D                      |
+| ループマーカー付きクエリ型 (`\text{X}_N` / `\mathrm{X}_N` / `query_N`)、numbered sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D, abc212-D |
+| 簡易 T-testcases 型 (ブロック[0]=単一スカラー `T`、ブロック[1]=スカラー変数のみ)                    | `T\n\na s`                                                                        | abc238-D                     |
+| 複雑な繰り返し本体 (ループマーカー付き、ブロック[1] にループ・配列含む)                             | `T\n\mathrm{case}_T\n\nN K\nA_1 \ldots A_N`                                      | abc456-F, abc456-E           |
 
 **前処理**: `\hspace{0.4cm}\vdots` は `\vdots` に正規化する。また `:` のみの行も `\vdots` と等価に扱う (トークナイザーレベルで正規化)。
 
@@ -619,12 +692,12 @@ fn solve(a: Vec<Vec<i64>>) -> String { ... }
 
 | 非対応パターン                                                      | 例                                   | 確認問題    |
 | ------------------------------------------------------------------- | ------------------------------------ | ----------- |
-| クエリ型 (`q_i` など "query" を含まない plain marker、`\text{}` もなし) | `Q\nq_1\n:\nq_Q`                     | typical90-L |
-| 可変長行 (サイズが変数)                                             | `T_i K_i A_{i,1} \ldots A_{i,K_i}`   | abc226-C    |
-| 斜め・上三角行列                                                    | `A_{1,2} \cdots A_{1,2N}` / `\vdots` | abc236-D    |
-| ネストループ 2 段以上                                               | —                                    | —           |
-| `{Num,Num}` 以外のカンマ添字                                        | `A_{i,j}`, `A_{1,N}`                 | —           |
-| 2D 固定グリッドで行数 1 またはセル数が 1 行の場合                  | 1 行のみ `A_{1,1}...A_{1,6}`         | —           |
+| ループマーカーなし plain-text 添字 (`q_i` など、`\text{}`/`\mathrm{}` もなし) | `Q\nq_1\n:\nq_Q`                       | typical90-L |
+| 可変長行 (サイズが変数)                                                       | `T_i K_i A_{i,1} \ldots A_{i,K_i}`    | abc226-C    |
+| 斜め・上三角行列                                                              | `A_{1,2} \cdots A_{1,2N}` / `\vdots`  | abc236-D    |
+| 繰り返し本体 (iteration_ops) 内のネストループ 2 段以上                        | ループ内にさらにループ                 | —           |
+| `{Num,Num}` 以外のカンマ添字                                                  | `A_{i,j}`, `A_{1,N}`                  | —           |
+| 2D 固定グリッドで行数 1 またはセル数が 1 行の場合                             | 1 行のみ `A_{1,1}...A_{1,6}`          | —           |
 
 ### テンプレート例 (Rust)
 
@@ -704,7 +777,7 @@ fn solve(
             }
         }
         {% elif input_format.query_body | length > 0 -%}
-        {# 単一形式クエリ (非数値先頭 sub-block): 変数入力付きループを生成 #}
+        {# 単一形式ループ (スカラーのみ sub-block): 変数入力付きループを生成 #}
         for _ in 0..{{ query_loop_end }} {
             input! {
                 {% for v in input_format.query_body -%}
@@ -714,8 +787,66 @@ fn solve(
             // TODO: handle query
             todo!()
         }
+        {% elif input_format.iteration_ops | length > 0 -%}
+        {# 複雑な繰り返し本体 (ループ・配列含む sub-block): iteration_ops をそのままレンダリング #}
+        for _ in 0..{{ query_loop_end }} {
+            {% for op in input_format.iteration_ops -%}
+            {% if op.tag == "read_line" and op.depth == 0 -%}
+            input! {
+                {% for v in op.vars -%}
+                {% if v.dim == 0 -%}
+                {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                {{ v.name }}: {% if vd.is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
+                {% elif v.dim == 1 -%}
+                {% if v.size -%}
+                {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                {{ v.name }}: [{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ v.size }}],
+                {% endif -%}
+                {% elif v.dim == 2 -%}
+                {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                {{ v.name }}: [[{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ vd.size[0] }}]; {{ vd.size[1] }}],
+                {% endif -%}
+                {% endfor -%}
+            }
+            {% elif op.tag == "loop_begin" -%}
+            {% set next_index = loop.index0 + 1 -%}
+            {% if input_format.iteration_ops[next_index] is defined and input_format.iteration_ops[next_index].tag != "loop_end" -%}
+            {% set body_op = input_format.iteration_ops[next_index] -%}
+            {% for v in body_op.vars -%}
+            {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+            let mut {{ v.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}> = Vec::new();
+            {% endfor -%}
+            for _ in 0..{{ op.end }} {
+                input! {
+            {% else -%}
+            for _ in 0..{{ op.end }} {
+                // TODO: read loop body
+            }
+            {% endif -%}
+            {% elif op.tag == "read_line" and op.depth > 0 -%}
+                    {% for v in op.vars -%}
+                    {% if v.index -%}
+                    {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                    __tmp_{{ v.name }}: {% if vd.var_type == "str" %}String{% else %}i64{% endif %},
+                    {% endif -%}
+                    {% endfor -%}
+            {% elif op.tag == "loop_end" -%}
+            {% set prev_index = loop.index0 - 1 -%}
+            {% set body_op = input_format.iteration_ops[prev_index] -%}
+            {% if body_op.tag != "loop_begin" -%}
+                }
+                {% for v in body_op.vars -%}
+                {{ v.name }}.push(__tmp_{{ v.name }});
+                {% endfor -%}
+            }
+            {% endif -%}
+            {% endif -%}
+            {% endfor -%}
+            // TODO: solve each iteration
+            todo!()
+        }
         {% else -%}
-        {# 単一形式クエリ (sub-block なし): ループスタブを生成 #}
+        {# ループスタブのみ (sub-block なし / パース失敗): ループスタブを生成 #}
         for _ in 0..{{ query_loop_end }} {
             // TODO: read and handle query
             todo!()
@@ -862,7 +993,7 @@ fn main() {
 }
 ```
 
-**sub-block なし (ループスタブのみ)** (`query_types = []`, `query_body = []`):
+**sub-block なし (ループスタブのみ)** (`query_types = []`, `query_body = []`, `iteration_ops = []`):
 
 ```rust
 fn solve(q: usize) -> String {
@@ -872,6 +1003,58 @@ fn solve(q: usize) -> String {
             todo!()
         }
     })
+}
+```
+
+**複雑な繰り返し本体 (1D 配列含む)** (`iteration_ops` 非空、abc456-F 形式 `T\n\mathrm{case}_T\n\nN K\nA_1 \ldots A_N`):
+
+```rust
+fn solve(t: usize) -> String {
+    with_output(|| {
+        for _ in 0..t {
+            input! { n: usize, k: i64, }
+            input! { a: [i64; n], }
+            // TODO: solve each iteration
+            todo!()
+        }
+    })
+}
+
+fn main() {
+    input! { t: usize, }
+    print!("{}", solve(t));
+}
+```
+
+**複雑な繰り返し本体 (複数ループ含む)** (`iteration_ops` 非空、abc456-E 形式):
+
+```rust
+fn solve(t: usize) -> String {
+    with_output(|| {
+        for _ in 0..t {
+            input! { n: usize, m: usize, }
+            let mut u: Vec<i64> = Vec::new();
+            let mut v: Vec<i64> = Vec::new();
+            for _ in 0..m {
+                input! { __tmp_u: i64, __tmp_v: i64, }
+                u.push(__tmp_u);
+                v.push(__tmp_v);
+            }
+            input! { w: i64, }
+            let mut s: Vec<String> = Vec::new();
+            for _ in 0..n {
+                input! { __tmp_s: String, }
+                s.push(__tmp_s);
+            }
+            // TODO: solve each iteration
+            todo!()
+        }
+    })
+}
+
+fn main() {
+    input! { t: usize, }
+    print!("{}", solve(t));
 }
 ```
 
