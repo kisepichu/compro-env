@@ -1,8 +1,8 @@
-# TASK-027: {X}_N 形式 QueryLine 対応 (abc453-G スタイル)
+# TASK-027: {query}_N 形式 QueryLine 対応 (abc453-G スタイル)
 
 ## 参照仕様
 
-- docs/commands/init.md — Parser 節「{X}_N (先頭が LBrace + 単一 Ident + RBrace の透明グルーピング) → QueryLine」
+- docs/commands/init.md — Parser 節「{query}_N (大文字小文字不問; {\rm Query}_N 等 LaTeX 書式コマンドでラップされた形を含む) → QueryLine」
 
 ## 背景
 
