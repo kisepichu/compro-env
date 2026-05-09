@@ -249,7 +249,7 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │    スカラー列 / 1D配列(cdots) / vdots → ForLoop
   │    \text{X}_N / \mathrm{X}_N (X は任意文字列) → QueryLine (vdots ブロック内のみ有効)
   │    query_N (大文字小文字不問、N はループ変数) → QueryLine (vdots ブロック内のみ有効)
-  │    {X}_N (先頭が LBrace + 単一 Ident + RBrace の透明グルーピング) → QueryLine
+  │    {X}_N (先頭が LBrace + 単一 Ident + RBrace の透明グルーピング) → QueryLine (vdots ブロック内のみ有効)
   │      ※ {\rm X} 等の LaTeX 書式コマンドはトークナイザーで無視され {X}_N に等価になる
   │      ※ 問題文に「クエリ」「テストケース」のどちらが書かれているかは無関係
   │      ※ 上記以外の plain-text 添字 (q_i など) は QueryLine とみなさない
