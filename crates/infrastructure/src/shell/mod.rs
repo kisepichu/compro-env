@@ -460,8 +460,31 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
         "  {lang}      {n_problems} solutions ({first_code}/main … {last_code}/main)",
         lang = language
     );
+    let fmt_line = format_input_fmt_line(&result.input_fmt_kinds);
+    if !fmt_line.is_empty() {
+        println!("{fmt_line}");
+    }
 
     Ok(())
+}
+
+fn format_input_fmt_line(kinds: &[(String, domain::entity::InputFormatKind)]) -> String {
+    if kinds.is_empty() {
+        return String::new();
+    }
+    let ok_count = kinds
+        .iter()
+        .filter(|(_, k)| *k != domain::entity::InputFormatKind::Fail)
+        .count();
+    let total = kinds.len();
+    let parts: Vec<String> = kinds
+        .iter()
+        .map(|(code, kind)| format!("{code}:{kind}"))
+        .collect();
+    format!(
+        "  input fmt   {}  [{ok_count}/{total} ok]",
+        parts.join("  ")
+    )
 }
 
 /// Creates a new solution directory from CLI arguments.
@@ -853,5 +876,34 @@ mod tests {
             msg.contains("unknown language"),
             "expected 'unknown language' in error, got: {msg}"
         );
+    }
+
+    /// format_input_fmt_line: mixed ok/fail → correct label and count.
+    #[test]
+    fn format_input_fmt_line_mixed() {
+        use domain::entity::InputFormatKind;
+        let kinds = vec![
+            ("a".to_string(), InputFormatKind::Plain),
+            ("b".to_string(), InputFormatKind::Fail),
+            ("c".to_string(), InputFormatKind::Loop),
+        ];
+        let line = format_input_fmt_line(&kinds);
+        assert_eq!(line, "  input fmt   a:plain  b:FAIL  c:loop  [2/3 ok]");
+    }
+
+    /// format_input_fmt_line: all ok → count matches total.
+    #[test]
+    fn format_input_fmt_line_all_ok() {
+        use domain::entity::InputFormatKind;
+        let kinds = vec![("a".to_string(), InputFormatKind::QueryTypes(3))];
+        let line = format_input_fmt_line(&kinds);
+        assert_eq!(line, "  input fmt   a:query(3)  [1/1 ok]");
+    }
+
+    /// format_input_fmt_line: empty list → empty string.
+    #[test]
+    fn format_input_fmt_line_empty() {
+        let line = format_input_fmt_line(&[]);
+        assert_eq!(line, "");
     }
 }

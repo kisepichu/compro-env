@@ -188,6 +188,64 @@ pub struct InputSpec {
     pub iteration_ops: Vec<InputOp>,
 }
 
+/// Derived format kind of a parsed `InputSpec` — used for `ce init` summary output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputFormatKind {
+    /// ok=false
+    Fail,
+    /// query_types is non-empty; carries the number of distinct query types
+    QueryTypes(usize),
+    /// query_body is non-empty (single-format loop, scalar body)
+    Query,
+    /// testcase_body is non-empty (simple T-testcases pattern)
+    Testcase,
+    /// iteration_ops is non-empty (complex loop body)
+    Iter,
+    /// ops contains a LoopBegin (empty-body loop stub)
+    Loop,
+    /// ok=true with no loop/query/iteration markers
+    Plain,
+}
+
+impl std::fmt::Display for InputFormatKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InputFormatKind::Fail => write!(f, "FAIL"),
+            InputFormatKind::QueryTypes(n) => write!(f, "query({n})"),
+            InputFormatKind::Query => write!(f, "query"),
+            InputFormatKind::Testcase => write!(f, "testcase"),
+            InputFormatKind::Iter => write!(f, "iter"),
+            InputFormatKind::Loop => write!(f, "loop"),
+            InputFormatKind::Plain => write!(f, "plain"),
+        }
+    }
+}
+
+impl InputSpec {
+    /// Derive the `InputFormatKind` from this spec's fields.
+    pub fn kind(&self) -> InputFormatKind {
+        if !self.ok {
+            return InputFormatKind::Fail;
+        }
+        if !self.query_types.is_empty() {
+            return InputFormatKind::QueryTypes(self.query_types.len());
+        }
+        if !self.query_body.is_empty() {
+            return InputFormatKind::Query;
+        }
+        if !self.testcase_body.is_empty() {
+            return InputFormatKind::Testcase;
+        }
+        if !self.iteration_ops.is_empty() {
+            return InputFormatKind::Iter;
+        }
+        if self.ops.iter().any(|op| op.tag == OpTag::LoopBegin) {
+            return InputFormatKind::Loop;
+        }
+        InputFormatKind::Plain
+    }
+}
+
 /// Sample input/output (Value Object)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sample {
@@ -345,6 +403,133 @@ mod input_spec_tests {
         assert_eq!(json["ok"], true);
         assert_eq!(json["vars"][0]["name"], "n");
         assert_eq!(json["ops"][1]["tag"], "loop_begin");
+    }
+
+    fn make_spec(ok: bool) -> InputSpec {
+        InputSpec {
+            raw: "".to_string(),
+            ok,
+            vars: vec![],
+            ops: vec![],
+            query_types: vec![],
+            query_body: vec![],
+            testcase_body: vec![],
+            iteration_vars: vec![],
+            iteration_ops: vec![],
+        }
+    }
+
+    fn make_loop_op() -> InputOp {
+        InputOp {
+            tag: OpTag::LoopBegin,
+            depth: 0,
+            vars: vec![],
+            loop_var: Some("i".to_string()),
+            begin: Some("0".to_string()),
+            end: Some("t".to_string()),
+        }
+    }
+
+    fn make_var() -> VarDecl {
+        VarDecl {
+            name: "x".to_string(),
+            math: "X".to_string(),
+            var_type: VarType::Int,
+            dim: 0,
+            size: vec![],
+            is_size: false,
+        }
+    }
+
+    // InputFormatKind: ok=false → Fail
+    #[test]
+    fn kind_fail_when_ok_false() {
+        assert_eq!(make_spec(false).kind(), InputFormatKind::Fail);
+    }
+
+    // InputFormatKind: query_types non-empty → QueryTypes(n)
+    #[test]
+    fn kind_query_types() {
+        let mut spec = make_spec(true);
+        spec.query_types = vec![
+            QueryTypeDecl {
+                type_id: "1".to_string(),
+                ok: true,
+                vars: vec![],
+            },
+            QueryTypeDecl {
+                type_id: "2".to_string(),
+                ok: true,
+                vars: vec![],
+            },
+        ];
+        assert_eq!(spec.kind(), InputFormatKind::QueryTypes(2));
+    }
+
+    // InputFormatKind: query_body non-empty → Query
+    #[test]
+    fn kind_query() {
+        let mut spec = make_spec(true);
+        spec.query_body = vec![make_var()];
+        assert_eq!(spec.kind(), InputFormatKind::Query);
+    }
+
+    // InputFormatKind: testcase_body non-empty → Testcase
+    #[test]
+    fn kind_testcase() {
+        let mut spec = make_spec(true);
+        spec.testcase_body = vec![make_var()];
+        assert_eq!(spec.kind(), InputFormatKind::Testcase);
+    }
+
+    // InputFormatKind: iteration_ops non-empty → Iter
+    #[test]
+    fn kind_iter() {
+        let mut spec = make_spec(true);
+        spec.iteration_ops = vec![InputOp {
+            tag: OpTag::ReadLine,
+            depth: 0,
+            vars: vec![],
+            loop_var: None,
+            begin: None,
+            end: None,
+        }];
+        assert_eq!(spec.kind(), InputFormatKind::Iter);
+    }
+
+    // InputFormatKind: ops contains LoopBegin → Loop
+    #[test]
+    fn kind_loop() {
+        let mut spec = make_spec(true);
+        spec.ops = vec![make_loop_op()];
+        assert_eq!(spec.kind(), InputFormatKind::Loop);
+    }
+
+    // InputFormatKind: ok=true, no loop/query/iter → Plain
+    #[test]
+    fn kind_plain() {
+        let mut spec = make_spec(true);
+        spec.ops = vec![InputOp {
+            tag: OpTag::ReadLine,
+            depth: 0,
+            vars: vec![],
+            loop_var: None,
+            begin: None,
+            end: None,
+        }];
+        assert_eq!(spec.kind(), InputFormatKind::Plain);
+    }
+
+    // Display: each variant
+    #[test]
+    fn kind_display() {
+        assert_eq!(InputFormatKind::Plain.to_string(), "plain");
+        assert_eq!(InputFormatKind::Loop.to_string(), "loop");
+        assert_eq!(InputFormatKind::Iter.to_string(), "iter");
+        assert_eq!(InputFormatKind::Testcase.to_string(), "testcase");
+        assert_eq!(InputFormatKind::Query.to_string(), "query");
+        assert_eq!(InputFormatKind::QueryTypes(3).to_string(), "query(3)");
+        assert_eq!(InputFormatKind::Fail.to_string(), "FAIL");
     }
 
     // 4. VarType::Int serializes to "int"

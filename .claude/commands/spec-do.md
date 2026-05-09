@@ -9,7 +9,7 @@
 2. `docs/commands/{command}.md` を読む。なければ `docs/spec.md` の該当部分を読む
 3. `CLAUDE.md` のアーキテクチャルールを確認する
 4. 実装を DDD レイヤーごとに分解してタスクを洗い出す
-5. タスクファイルを `tasks/doing/TASK-NNN-{command}.md` に作成する。ブランチの切り方をユーザーに確認する
+5. タスクファイルを `tasks/doing/TASK-NNN-{command}.md` に作成する。ブランチの切り方をユーザーに確認して、 dev から切る
    - NNN は既存タスクの連番 (todo/ doing/ done/ を合わせて最大番号 + 1)
 6. タスクファイルのチェックリスト項目ごとに以下の TDD サイクルを回す:
 
