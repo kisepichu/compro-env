@@ -1,3 +1,6 @@
+実装は常に TDD を用いる。/spec-\* コマンドの手順に従う。
+コミット前 `cargo test --all && cargo clippy --all --all-features -- -D warnings && cargo fmt --all --check`
+
 # compro-env
 
 競プロ CLI ツール `ce` の開発リポジトリ。
@@ -13,9 +16,6 @@
 開発計画: `docs/PLAN.md`
 
 > **コードを読む前に仕様を確認すること。** あるコマンドの実装を理解・変更する場合は、まず `docs/commands/<command>.md` を読む。全体仕様は `docs/spec.md`。
-
-実装は常に TDD を用いる。詳しくは /spec-\* コマンド
-コミット前 `cargo test --all && cargo clippy --all --all-features -- -D warnings && cargo fmt --all --check`
 
 ## アーキテクチャ
 
