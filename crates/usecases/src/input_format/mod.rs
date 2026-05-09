@@ -575,14 +575,35 @@ fn try_parse_grid_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
     let (row_start, advance1, is_2d_1) = read_2d_subscript_row_part(&tokens[i..])?;
     i += advance1;
 
-    // Skip spaces, then Cdots
-    while tokens.get(i) == Some(&Token::Space) {
-        i += 1;
-    }
-    if tokens.get(i) != Some(&Token::Cdots) {
+    // Skip spaces; consume any additional Ident_{Num,Num} prefix elements before Cdots.
+    // e.g. S_{1,1} S_{1,2} \ldots S_{1,W} — the S_{1,2} must be consumed before Cdots.
+    loop {
+        while tokens.get(i) == Some(&Token::Space) {
+            i += 1;
+        }
+        // If next is Cdots, break out to existing logic.
+        if tokens.get(i) == Some(&Token::Cdots) {
+            break;
+        }
+        // If next is Ident(same name), try to consume as an extra prefix element.
+        if let Some(Token::Ident(n)) = tokens.get(i)
+            && n == &first_name
+        {
+            let j = i + 1;
+            if tokens.get(j) == Some(&Token::Subscript)
+                && let Some((extra_row, adv, extra_is_2d)) =
+                    read_2d_subscript_row_part(&tokens[j + 1..])
+                && extra_is_2d
+                && extra_row == row_start
+            {
+                i = j + 1 + adv;
+                continue;
+            }
+        }
+        // Not Cdots and not a matching extra prefix element — not a GridRow.
         return None;
     }
-    i += 1;
+    i += 1; // consume Cdots
     while tokens.get(i) == Some(&Token::Space) {
         i += 1;
     }
@@ -2693,6 +2714,36 @@ mod tests {
             a_var.var_type,
             VarType::Str,
             "purely-numeric multi-digit subscript should not trigger GridRow detection"
+        );
+    }
+
+    /// abc453-D style: each row has two leading elements before cdots.
+    /// "H W\nS_{1,1} S_{1,2} \\ldots S_{1,W}\nS_{2,1} S_{2,2} \\ldots S_{2,W}\n\\vdots\nS_{H,1} S_{H,2} \\ldots S_{H,W}\n"
+    /// → ok=true, s: dim=1, VarType::Str, flattened with size="h" (no LoopBegin)
+    #[test]
+    fn abc453d_grid_row_multi_prefix() {
+        let raw = "H W\nS_{1,1} S_{1,2} \\ldots S_{1,W}\nS_{2,1} S_{2,2} \\ldots S_{2,W}\n\\vdots\nS_{H,1} S_{H,2} \\ldots S_{H,W}\n";
+        let spec = parse(raw, "");
+        assert!(
+            spec.ok,
+            "expected ok=true for abc453-D style multi-prefix grid row"
+        );
+        let s_var = spec.vars.iter().find(|v| v.name == "s").expect("var s");
+        assert_eq!(s_var.dim, 1, "s should be Vec (dim=1)");
+        assert_eq!(s_var.var_type, VarType::Str, "s should be Str");
+        assert!(
+            !spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin),
+            "ops should be flattened (no LoopBegin)"
+        );
+        let s_op = spec
+            .ops
+            .iter()
+            .find(|o| o.vars.iter().any(|v| v.name == "s"))
+            .expect("ReadLine op for s");
+        assert_eq!(
+            s_op.vars[0].size.as_deref(),
+            Some("h"),
+            "flattened op should have size=h"
         );
     }
 
