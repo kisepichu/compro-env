@@ -212,6 +212,35 @@ fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
         return Ok(RawLine::Scalars(vec![]));
     }
 
+    // Strip leading `{Ident}` grouping (e.g. `{\rm Query}_Q` where \rm is ignored by the
+    // tokenizer, leaving `[LBrace, Space, Ident("Query"), RBrace, ...]`).
+    // If tokens start with `{` and the content up to the first `}` contains exactly one
+    // Ident (and nothing else besides spaces), unwrap the braces so downstream detection
+    // (plain_query_pos) sees `[Ident(...), ...]` directly.
+    let tokens = if tokens.first() == Some(&Token::LBrace) {
+        if let Some(rbrace_rel) = tokens[1..].iter().position(|t| t == &Token::RBrace) {
+            let inner = &tokens[1..1 + rbrace_rel]; // tokens between { and }
+            let mut non_space = inner.iter().filter(|t| **t != Token::Space);
+            let sole = non_space.next().cloned(); // first non-space token (cloned eagerly)
+            let has_more = non_space.next().is_some(); // ensure it's the only one
+            if !has_more {
+                if let Some(Token::Ident(_)) = &sole {
+                    let mut unwrapped = vec![sole.unwrap()];
+                    unwrapped.extend_from_slice(&tokens[1 + rbrace_rel + 1..]);
+                    unwrapped
+                } else {
+                    tokens
+                }
+            } else {
+                tokens
+            }
+        } else {
+            tokens
+        }
+    } else {
+        tokens
+    };
+
     // Check for LaTeX query placeholder tokens → QueryLine.
     // \text{...} / \mathrm{...} must be followed by _<subscript>; without one → malformed error.
     let latex_query_pos = tokens.iter().position(
@@ -3191,6 +3220,32 @@ mod tests {
             spec.iteration_ops.is_empty(),
             "iteration_ops must be empty for scalar body"
         );
+    }
+
+    /// abc453_g (Copy Query): {\rm Query}_Q + 3 numbered sub-blocks → query_types(3)
+    #[test]
+    fn abc453g_rm_query_numbered_subtypes() {
+        let raw = "N M Q\r\n{\\rm Query}_1\r\n{\\rm Query}_2\r\n\\vdots\r\n{\\rm Query}_Q\r\n\n1 X_i Y_i\r\n\n2 X_i Y_i Z_i\r\n\n3 X_i L_i R_i\r\n";
+        let spec = parse(raw, "");
+        assert!(
+            spec.ok,
+            "expected ok=true, got ok=false. vars={:?} ops={:?}",
+            spec.vars, spec.ops
+        );
+        assert_eq!(spec.vars.len(), 3); // n, m, q
+        assert_eq!(spec.query_types.len(), 3);
+        // type 1: 1 X_i Y_i → 2 vars
+        assert_eq!(spec.query_types[0].type_id, "1");
+        assert!(spec.query_types[0].ok);
+        assert_eq!(spec.query_types[0].vars.len(), 2);
+        // type 2: 2 X_i Y_i Z_i → 3 vars
+        assert_eq!(spec.query_types[1].type_id, "2");
+        assert!(spec.query_types[1].ok);
+        assert_eq!(spec.query_types[1].vars.len(), 3);
+        // type 3: 3 X_i L_i R_i → 3 vars
+        assert_eq!(spec.query_types[2].type_id, "3");
+        assert!(spec.query_types[2].ok);
+        assert_eq!(spec.query_types[2].vars.len(), 3);
     }
 
     /// Numbered query_types → iteration_vars/ops always empty.

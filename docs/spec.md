@@ -176,6 +176,7 @@ InputSpec                           ← Value Object (usecases/input_format/ で
   vars: Vec<VarDecl>                変数宣言リスト (ok=false のとき空)
   ops: Vec<InputOp>                 読み取り命令列 (ok=false のとき空)
   query_types: Vec<QueryTypeDecl>   クエリ種別リスト (numbered sub-block がある場合のみ非空; ok=false のとき空)
+                                    ループマーカー認識形式: \text{X}_N / \mathrm{X}_N / query_N / {query}_N ({\rm Query}_N 等; \rm 等の未知コマンドは無視されるため {query}_N に等価)
   query_body: Vec<VarDecl>          単一形式ループのスカラー本体変数 (非数値先頭 sub-block がある場合のみ非空; ok=false のとき空)
                                     query_types が非空のときは常に空; iteration_ops が非空のときも常に空
   testcase_body: Vec<VarDecl>       簡易 T-testcases の本体変数 (block[0]=単一スカラー かつ block[1]=スカラーのみ; ok=false のとき空)
@@ -385,7 +386,7 @@ infrastructure/
 
 | 非対応パターン | 確認問題 |
 | --- | --- |
-| クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 (`\text{}` マーカーなし) | typical90-L |
+| クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 (ループマーカーなし) | typical90-L |
 | T-testcases 型: pre[0]=`T` 単独 + pre[1]=ケース形式 | abc238-D |
 | 可変長行: `T_i K_i A_{i,1} \ldots A_{i,K_i}` | abc226-C |
 | 斜め・上三角行列: 行ごとに長さが異なる | abc236-D |
