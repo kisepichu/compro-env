@@ -2755,6 +2755,21 @@ mod tests {
         );
     }
 
+    /// Regression: no-space adjacent prefix elements (S_{1,1}S_{1,2}) must NOT be GridRow.
+    /// The spec says "空白なし隣接要素 → Phase 2 → ok: false".
+    #[test]
+    fn grid_row_multi_prefix_no_space_falls_through() {
+        // S_{1,1}S_{1,2} without space between — must not be parsed as GridRow
+        let spec = parse(
+            "H W\nS_{1,1}S_{1,2} \\ldots S_{1,W}\n\\vdots\nS_{H,1}S_{H,2} \\ldots S_{H,W}\n",
+            "",
+        );
+        assert!(
+            !spec.ok,
+            "no-space adjacent prefix elements should fall through to ok=false"
+        );
+    }
+
     // ── TASK-016: 非数値添字スカラー ───────────────────────────────────────────────
 
     /// Single line with alphabetic subscripts: "A_x A_y" → scalars ax, ay
