@@ -182,6 +182,15 @@ InputSpec                           ← Value Object (usecases/input_format/ で
   iteration_vars: Vec<VarDecl>      複雑な繰り返し本体の変数リスト (最初に採用された非数値 sub-block にループ・配列を含む場合; query_types/query_body/testcase_body が非空のときは空)
   iteration_ops: Vec<InputOp>       複雑な繰り返し本体の読み取り命令列 (vars/ops と同形式; query_types/query_body/testcase_body が非空のときは空)
 
+InputFormatKind                     ← 導出値 (ce init 出力用、InputSpec から決定)
+  FAIL                              ok=false
+  query({n})                        query_types が非空 (n = 種別数)
+  query                             query_body が非空
+  testcase                          testcase_body が非空
+  iter                              iteration_ops が非空
+  loop                              ops に loop_begin を含む (上記いずれも非空でない)
+  plain                             それ以外 (ok=true、ループなし)
+
 QueryTypeDecl                       ← Value Object (クエリ型入力のサブ形式)
   type_id: String                   クエリ種別番号 ("1", "2", "3")
   ok: bool                          sub-block のパース成功フラグ

@@ -156,9 +156,30 @@ solutions/abc334/
 Initialized abc334 (AtCoder) — 6 problems: a b c d e f
   testcases   12 files
   {lang}      6 solutions (a/main … f/main)
+  input fmt   a:plain  b:plain  c:loop  d:query(3)  e:iter  f:FAIL  [5/6 ok]
 ```
 
 `{lang}` は使用した言語名 (例: `rust`)。
+
+### input fmt 行の形式
+
+各問題コードの後にコロンと format kind ラベルを付けて空白区切りで並べる。末尾に `[{ok件数}/{全件数} ok]` を付ける。
+
+#### format kind ラベル
+
+`InputSpec` のフィールドから以下の優先順で決定する:
+
+| 優先 | 条件 | ラベル |
+| ---- | ---- | ------ |
+| 1 | `ok = false` | `FAIL` (大文字) |
+| 2 | `query_types` が非空 | `query({n})` — n は種別数 |
+| 3 | `query_body` が非空 | `query` |
+| 4 | `testcase_body` が非空 | `testcase` |
+| 5 | `iteration_ops` が非空 | `iter` |
+| 6 | `ops` に `loop_begin` を含む | `loop` |
+| 7 | それ以外 (`ok=true`、ループなし) | `plain` |
+
+`input_format_raw` が取得できなかった問題は `ok=false` 扱いとして `FAIL` を表示する。
 
 ## テンプレートシステム
 
