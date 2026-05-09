@@ -575,15 +575,23 @@ fn try_parse_grid_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
     let (row_start, advance1, is_2d_1) = read_2d_subscript_row_part(&tokens[i..])?;
     i += advance1;
 
-    // Skip spaces; consume any additional Ident_{Num,Num} prefix elements before Cdots.
+    // Consume any additional prefix elements before Cdots.
     // e.g. S_{1,1} S_{1,2} \ldots S_{1,W} — the S_{1,2} must be consumed before Cdots.
+    // A space is required before each extra element; no-space adjacent elements (S_{1,1}S_{1,2})
+    // must fall through to ok:false per spec.
     loop {
+        let i_before_spaces = i;
         while tokens.get(i) == Some(&Token::Space) {
             i += 1;
         }
-        // If next is Cdots, break out to existing logic.
+        let had_space = i > i_before_spaces;
+        // If next is Cdots, break out to existing logic (no space required before Cdots).
         if tokens.get(i) == Some(&Token::Cdots) {
             break;
+        }
+        // Extra prefix Ident must be preceded by at least one space.
+        if !had_space {
+            return None;
         }
         // If next is Ident(same name), try to consume as an extra prefix element.
         if let Some(Token::Ident(n)) = tokens.get(i)
