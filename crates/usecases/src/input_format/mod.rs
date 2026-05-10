@@ -840,7 +840,7 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                             if last_kind == 1 {
                                 expr.push('*');
                             }
-                            expr.push_str(&s.to_lowercase());
+                            expr.push_str(s);
                             last_kind = 2;
                         }
                         current = Some(current.map_or_else(|| s.clone(), |c| c + s));
@@ -1286,6 +1286,39 @@ fn normalize_name(math: &str, all_math_names: &[String]) -> String {
     }
 }
 
+/// Apply `normalize_name` to each identifier within an arithmetic expression string.
+/// For a plain name like `"N"` this is equivalent to `normalize_name("N", ...)`.
+/// For `"N-1"` the `"N"` part is normalized individually and the rest (`"-1"`) is kept as-is,
+/// so the result respects collision-avoidance (e.g. `"N-1"` → `"N-1"` when `N` and `n` coexist).
+fn normalize_expr(expr: &str, all_math_names: &[String]) -> String {
+    let mut result = String::new();
+    let mut pos = 0;
+    let mut ident_start: Option<usize> = None;
+    for (i, c) in expr.char_indices() {
+        let in_ident = if ident_start.is_some() {
+            c.is_ascii_alphanumeric()
+        } else {
+            c.is_ascii_alphabetic()
+        };
+        if in_ident {
+            if ident_start.is_none() {
+                ident_start = Some(i);
+            }
+        } else if let Some(s) = ident_start.take() {
+            result.push_str(&expr[pos..s]);
+            result.push_str(&normalize_name(&expr[s..i], all_math_names));
+            pos = i;
+        }
+    }
+    if let Some(s) = ident_start {
+        result.push_str(&expr[pos..s]);
+        result.push_str(&normalize_name(&expr[s..], all_math_names));
+    } else {
+        result.push_str(&expr[pos..]);
+    }
+    result
+}
+
 // ── Type inference ─────────────────────────────────────────────────────────────
 
 fn infer_types(vars: &mut [VarDecl], constraints: &str) {
@@ -1567,7 +1600,7 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
             }
             IntermOp::ReadArray1D { name, size } => {
                 let var_name = normalize_name(name, &all_math_names);
-                let size_name = normalize_name(size, &all_math_names);
+                let size_name = normalize_expr(size, &all_math_names);
                 ensure_var_decl(&mut var_decls, &var_name, name, 1, vec![size_name.clone()]);
                 ops.push(InputOp {
                     tag: OpTag::ReadLine,
@@ -1612,7 +1645,7 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                 begin,
                 end,
             } => {
-                let end_name = normalize_name(end, &all_math_names);
+                let end_name = normalize_expr(end, &all_math_names);
                 current_loop_end = Some(end_name.clone());
                 ops.push(InputOp {
                     tag: OpTag::LoopBegin,
@@ -3606,6 +3639,37 @@ mod tests {
             !spec.ok,
             "comma+operator subscript mix should give ok=false"
         );
+    }
+
+    /// When both `N` and `n` coexist (case collision), arithmetic subscripts like `{N-1}`
+    /// must produce the uppercase-preserved ident `"N"` in the expression (e.g. `"N-1"`),
+    /// so `valid_loop_bounds` and `is_size` still work correctly.
+    #[test]
+    fn arithmetic_subscript_collision_uppercase_preserved() {
+        // "N n\nA_1 A_2 \ldots A_N\nU_1 V_1\nU_2 V_2\n\\vdots\nU_{N-1} V_{N-1}\n"
+        // N and n both appear → collision → normalize_name("N") = "N" (uppercase preserved)
+        // The {N-1} subscript must produce loop end "N-1" (not "n-1") so valid_loop_bounds passes.
+        let raw = "N n\nA_1 A_2 \\ldots A_N\nU_1 V_1\nU_2 V_2\n\\vdots\nU_{N-1} V_{N-1}\n";
+        let spec = scalar_ok(raw);
+        assert!(
+            spec.ok,
+            "expected ok=true when N/n collision and {{N-1}} loop bound; vars={:?} ops={:?}",
+            spec.vars, spec.ops
+        );
+        // N is uppercase-preserved due to collision
+        let n_upper = spec.vars.iter().find(|v| v.math == "N").expect("N var");
+        assert_eq!(n_upper.name, "N");
+        assert!(
+            n_upper.is_size,
+            "N should be is_size=true (loop bound and array size)"
+        );
+        // loop end should be "N-1" (uppercase preserved)
+        let lb = spec
+            .ops
+            .iter()
+            .find(|o| o.tag == OpTag::LoopBegin)
+            .expect("LoopBegin");
+        assert_eq!(lb.end.as_deref(), Some("N-1"), "loop end should be N-1");
     }
 
     /// Numbered query_types → iteration_vars/ops always empty.
