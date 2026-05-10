@@ -577,21 +577,14 @@ fn try_parse_grid_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
 
     // Consume any additional prefix elements before Cdots.
     // e.g. S_{1,1} S_{1,2} \ldots S_{1,W} — the S_{1,2} must be consumed before Cdots.
-    // A space is required before each extra element; no-space adjacent elements (S_{1,1}S_{1,2})
-    // must fall through to ok:false per spec.
+    // Both space-separated and no-space adjacent prefix elements are recognized.
     loop {
-        let i_before_spaces = i;
         while tokens.get(i) == Some(&Token::Space) {
             i += 1;
         }
-        let had_space = i > i_before_spaces;
         // If next is Cdots, break out to existing logic (no space required before Cdots).
         if tokens.get(i) == Some(&Token::Cdots) {
             break;
-        }
-        // Extra prefix Ident must be preceded by at least one space.
-        if !had_space {
-            return None;
         }
         // If next is Ident(same name), try to consume as an extra prefix element.
         if let Some(Token::Ident(n)) = tokens.get(i)
@@ -2755,18 +2748,37 @@ mod tests {
         );
     }
 
-    /// Regression: no-space adjacent prefix elements (S_{1,1}S_{1,2}) must NOT be GridRow.
-    /// The spec says "空白なし隣接要素 → Phase 2 → ok: false".
+    /// abc450-C style: no-space adjacent prefix elements before cdots should be a GridRow.
+    /// "H W\nS_{1,1}S_{1,2}\dots S_{1,W}\n\vdots\nS_{H,1}S_{H,2}\dots S_{H,W}\n"
+    /// → ok=true, s: dim=1, VarType::Str, flattened with size="h" (no LoopBegin)
     #[test]
-    fn grid_row_multi_prefix_no_space_falls_through() {
-        // S_{1,1}S_{1,2} without space between — must not be parsed as GridRow
-        let spec = parse(
-            "H W\nS_{1,1}S_{1,2} \\ldots S_{1,W}\n\\vdots\nS_{H,1}S_{H,2} \\ldots S_{H,W}\n",
-            "",
-        );
+    fn abc450c_grid_row_no_space() {
+        let raw = "H W\nS_{1,1}S_{1,2}\\dots S_{1,W}\n\\vdots\nS_{H,1}S_{H,2}\\dots S_{H,W}\n";
+        let spec = parse(raw, "");
         assert!(
-            !spec.ok,
-            "no-space adjacent prefix elements should fall through to ok=false"
+            spec.ok,
+            "expected ok=true for abc450-C style no-space multi-prefix grid row"
+        );
+        let h_var = spec.vars.iter().find(|v| v.name == "h").expect("var h");
+        let w_var = spec.vars.iter().find(|v| v.name == "w").expect("var w");
+        assert_eq!(h_var.dim, 0, "h should be scalar (dim=0)");
+        assert_eq!(w_var.dim, 0, "w should be scalar (dim=0)");
+        let s_var = spec.vars.iter().find(|v| v.name == "s").expect("var s");
+        assert_eq!(s_var.dim, 1, "s should be Vec (dim=1)");
+        assert_eq!(s_var.var_type, VarType::Str, "s should be Str");
+        assert!(
+            !spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin),
+            "ops should be flattened (no LoopBegin)"
+        );
+        let s_op = spec
+            .ops
+            .iter()
+            .find(|o| o.vars.iter().any(|v| v.name == "s"))
+            .expect("ReadLine op for s");
+        assert_eq!(
+            s_op.vars[0].size.as_deref(),
+            Some("h"),
+            "flattened op should have size=h"
         );
     }
 
