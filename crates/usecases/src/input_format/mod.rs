@@ -759,17 +759,24 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
             //
             // Arithmetic mode (no Comma) — build an expression string:
             //   Adjacent Num then Ident (no operator between) → insert "*"
-            //   Adjacent Ident then Num (no operator between) → insert "*"
             //   Plus/Minus/Star → append the operator character as-is
             //   All Ident tokens are lowercased in the result
             //   Examples: {2N} → "2*n", {N-1} → "n-1", {2N-1} → "2*n-1"
+            //   Invalid expressions (trailing/leading/consecutive operators) → None
             let mut depth = 1;
             let mut has_comma = false;
+            // Set to true when an operator (Plus/Minus/Star) is encountered anywhere inside
+            // the braces. Used to reject mixed comma+operator subscripts like {1-1,2}.
+            let mut has_operator = false;
             // Arithmetic expression builder
             let mut expr = String::new();
-            // Track the last "kind" of token appended to expr, to detect implicit multiplication.
-            // 0 = nothing, 1 = Num, 2 = Ident
+            // Track the last "kind" of token appended to expr:
+            //   0 = nothing / last was operator, 1 = Num, 2 = Ident
+            // Used to detect implicit multiplication and to validate expression structure
+            // (no leading operator, no consecutive operators, no trailing operator).
             let mut last_kind: u8 = 0;
+            // Set when an invalid operator position is detected (leading, consecutive, etc.)
+            let mut invalid_expr = false;
             // For comma mode
             let mut parts: Vec<String> = Vec::new();
             let mut current: Option<String> = None;
@@ -814,8 +821,8 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                             // Note: in practice the lexer consumes alphanumeric sequences
                             // as a single Ident token (e.g. "N2" → Ident("N2")), so a
                             // bare Ident immediately followed by Num only arises when an
-                            // explicit operator like `-` or `+` separates them; the
-                            // last_kind==2 branch here is a safety net for future changes.
+                            // explicit operator separates them; the last_kind==2 branch is
+                            // a safety net for future lexer changes.
                             if last_kind == 2 {
                                 expr.push('*');
                             }
@@ -840,21 +847,34 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                         i += 1;
                     }
                     Token::Plus => {
+                        has_operator = true;
                         if !has_comma {
+                            // Leading or consecutive operator → invalid expression.
+                            if last_kind == 0 {
+                                invalid_expr = true;
+                            }
                             expr.push('+');
                             last_kind = 0;
                         }
                         i += 1;
                     }
                     Token::Minus => {
+                        has_operator = true;
                         if !has_comma {
+                            if last_kind == 0 {
+                                invalid_expr = true;
+                            }
                             expr.push('-');
                             last_kind = 0;
                         }
                         i += 1;
                     }
                     Token::Star => {
+                        has_operator = true;
                         if !has_comma {
+                            if last_kind == 0 {
+                                invalid_expr = true;
+                            }
                             expr.push('*');
                             last_kind = 0;
                         }
@@ -869,7 +889,12 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                 return None;
             }
             // If a comma was found, use the original comma-separated logic.
+            // Reject mixed comma+operator subscripts (e.g. {1-1,2}) to prevent
+            // silent corruption of the subscript value.
             if has_comma {
+                if has_operator {
+                    return None;
+                }
                 match parts.len() {
                     1 => Some((parts.remove(0), i)),
                     2 if !has_ident => {
@@ -880,8 +905,8 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                 }
             } else {
                 // Arithmetic mode: return the expression string built above.
-                // Empty expression (e.g. bare "{}") → None.
-                if expr.is_empty() {
+                // Reject empty, trailing-operator ({N-}), or invalid ({2**N}) expressions.
+                if expr.is_empty() || last_kind == 0 || invalid_expr {
                     None
                 } else {
                     Some((expr, i))
@@ -3545,6 +3570,41 @@ mod tests {
             a.size,
             vec!["2*n-1".to_string()],
             "array size should be 2*n-1"
+        );
+    }
+
+    /// {N-} trailing operator → ok: false (invalid arithmetic expression)
+    #[test]
+    fn arithmetic_subscript_trailing_operator_is_not_ok() {
+        let raw = "N\nA_1 A_2 \\ldots A_{N-}\n";
+        let spec = scalar_ok(raw);
+        assert!(
+            !spec.ok,
+            "trailing operator in subscript should give ok=false"
+        );
+    }
+
+    /// {2**N} consecutive operators → ok: false
+    #[test]
+    fn arithmetic_subscript_consecutive_operators_is_not_ok() {
+        let raw = "N\nA_1 A_2 \\ldots A_{2**N}\n";
+        let spec = scalar_ok(raw);
+        assert!(
+            !spec.ok,
+            "consecutive operators in subscript should give ok=false"
+        );
+    }
+
+    /// {1-1,2} comma + operator mix → treated as None subscript, not a valid 2D subscript
+    #[test]
+    fn arithmetic_subscript_comma_operator_mix_is_not_ok() {
+        // {1-1,2} must not silently corrupt to {11,2} and produce a spurious Array2DRow.
+        // The whole line should fail to parse as Array2DRow and fall through to ok:false.
+        let raw = "A_{1-1,2} A_{1-1,3}\n";
+        let spec = scalar_ok(raw);
+        assert!(
+            !spec.ok,
+            "comma+operator subscript mix should give ok=false"
         );
     }
 
