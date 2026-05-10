@@ -760,8 +760,10 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
             // Arithmetic mode (no Comma) — build an expression string:
             //   Adjacent Num then Ident (no operator between) → insert "*"
             //   Plus/Minus/Star → append the operator character as-is
-            //   All Ident tokens are lowercased in the result
-            //   Examples: {2N} → "2*n", {N-1} → "n-1", {2N-1} → "2*n-1"
+            //   Ident tokens are kept in their original case; lowercasing is deferred to
+            //   normalize_expr() in the resolve phase so that collision-avoidance
+            //   (normalize_name keeps uppercase when N and n coexist) is respected.
+            //   Examples: {2N} → "2*N", {N-1} → "N-1", {2N-1} → "2*N-1"
             //   Invalid expressions (trailing/leading/consecutive operators) → None
             let mut depth = 1;
             let mut has_comma = false;
