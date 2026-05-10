@@ -1954,7 +1954,7 @@ fn detect_triangular(block0: &str, constraints: &str) -> Option<TriangularSpec> 
             true
         } else {
             // Try as another triangular row with same var name and consistent bound
-            matches!(detect_triangular_row(lines[2]), Some((n, _)) if n == var_math)
+            matches!(detect_triangular_row(lines[2]), Some((n, b)) if n == var_math && b == bound_raw)
         }
     };
     if !line2_ok {
@@ -1999,7 +1999,7 @@ fn detect_triangular(block0: &str, constraints: &str) -> Option<TriangularSpec> 
         let is_vdots = toks.len() == 1 && matches!(toks[0], Token::Vdots | Token::Cdots);
         if !is_vdots {
             match detect_triangular_row(line) {
-                Some((n, _)) if n == var_math => {}
+                Some((n, b)) if n == var_math && b == bound_raw => {}
                 _ => return None,
             }
         }
@@ -4160,6 +4160,31 @@ mod tests {
         assert!(
             spec.triangular.is_none(),
             "expected triangular=None when last line has extra tokens, got: {spec:?}"
+        );
+    }
+
+    /// Line 2 has a different bound than line 1 — must NOT be detected as triangular.
+    #[test]
+    fn triangular_inconsistent_bound_line2_is_not_triangular() {
+        // Line 1 bound = N, line 2 bound = M — different
+        let raw =
+            "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, M}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when line 2 has a different bound, got: {spec:?}"
+        );
+    }
+
+    /// An intermediate row has a different bound than line 1 — must NOT be detected as triangular.
+    #[test]
+    fn triangular_inconsistent_bound_intermediate_is_not_triangular() {
+        // Lines: size, row1 (bound N), row2 (bound M), vdots, last
+        let raw = "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\nA_{3, 4} \\ldots A_{3, M}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when an intermediate row has a different bound, got: {spec:?}"
         );
     }
 
