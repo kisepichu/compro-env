@@ -175,9 +175,10 @@ Initialized abc334 (AtCoder) — 6 problems: a b c d e f
 | 2 | `query_types` が非空 | `query({n})` — n は種別数 |
 | 3 | `query_body` が非空 | `query` |
 | 4 | `testcase_body` が非空 | `testcase` |
-| 5 | `iteration_ops` が非空 | `iter` |
-| 6 | `ops` に `loop_begin` を含む | `loop` |
-| 7 | それ以外 (`ok=true`、ループなし) | `plain` |
+| 5 | `triangular` が非空 | `triangle` |
+| 6 | `iteration_ops` が非空 | `iter` |
+| 7 | `ops` に `loop_begin` を含む | `loop` |
+| 8 | それ以外 (`ok=true`、ループなし) | `plain` |
 
 `input_format_raw` が取得できなかった問題は `ok=false` 扱いとして `FAIL` を表示する。
 
@@ -207,6 +208,7 @@ Initialized abc334 (AtCoder) — 6 problems: a b c d e f
 | `input_format.query_types`    | クエリ種別リスト (詳細後述、クエリ型以外は空リスト)                                                                                                    | パーサー             |
 | `input_format.query_body`     | 単一形式ループの変数リスト (スカラーのみの非数値先頭 sub-block、`query_types` 非空または `iteration_ops` 非空のときは空)                                 | パーサー             |
 | `input_format.testcase_body`  | 簡易 T-testcases 型の本体変数リスト (ブロック[0]=単一スカラー かつ ブロック[1] がスカラーのみ、それ以外は空リスト)                                       | パーサー             |
+| `input_format.triangular`     | 三角行列仕様 (`{name, math, var_type, bound}`)。三角行列型以外は `null`。`triangular` が非空のとき `vars`/`ops` は size 変数のみ含む                    | パーサー             |
 | `input_format.iteration_vars` | 複雑な繰り返し本体の変数リスト (最初に採用された非数値 sub-block にループ・配列が含まれる場合。`query_types`/`query_body`/`testcase_body` が非空のときは空) | パーサー             |
 | `input_format.iteration_ops`  | 複雑な繰り返し本体の読み取り命令列 (`vars`・`ops` と同形式。`query_types`/`query_body`/`testcase_body` が非空のときは空。テンプレートが for ループ内でレンダリングする) | パーサー             |
 
@@ -223,9 +225,24 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │
   ▼  前処理
   │    \hspace{...}\vdots → \vdots に正規化 (LaTeX spacing コマンドを除去)
+  │    … (U+2026 HORIZONTAL ELLIPSIS) → \ldots に正規化
+  │    CDOTS トークンのみで構成される行 (前後 SPACE を無視) → VDOTS として正規化
+  │      ※ \ldots を縦区切りとして使う問題 (abc451_e 等) に対応
   │    \n\n で分割してブロック列にする
   │
-  ▼  Phase 2 早期検出 (ok: false にフォールバック)
+  ▼  Phase 2 早期検出
+  │    ブロック数 == 1 かつブロック[0] が三角行列パターン:
+  │      行[0]: Ident 1 個 (size 変数)
+  │      行[1]: TriangularRow (同名変数の `Var_{1,col}...(cdots)...Var_{1,bound}`)
+  │      行[2]: TriangularRow (first_idx=2) または VDOTS (省略形)
+  │      VDOTS を経て最終行: 同名変数の単一要素 (comma 添字、no cdots)
+  │      → TriangularMatrix として解析 (ok: true):
+  │          triangular = { name (lower), math, var_type (制約推定), bound (normalize_expr 済み) }
+  │          vars = [size 変数 VarDecl (is_size: true)]
+  │          ops = [ReadLine(size 変数)]
+  │      ※ TriangularRow 判定: 同名変数・先頭添字が Num・CDOTS あり
+  │      ※ bound: 行[1] の最後の要素の第 2 添字を normalize_expr して取得
+  │      ※ var_type: 制約テキストから推定 (デフォルト "int")。GridRow と異なり "str" に固定しない
   │    ブロック数 > 1 かつブロック[1] が数字始まり かつ ブロック[0] に loop marker なし
   │      → 非対応クエリサブ形式 (typical90-L の q_i パターン等)
   │    ブロック数 > 1 かつブロック[0] が単一 Ident トークン かつ loop marker なし
@@ -581,6 +598,96 @@ a s
 - ループ変数 (ループ上限) は `vars[0].name` (例: `t`)。テンプレートは `for _ in 0..t { ... }` を生成
 - 変数の命名規則・型推定はメイン `vars` と同一ルールを適用するが、スコープは独立
 
+#### `triangular` の形式 (JSON 例)
+
+上三角行列型のとき。それ以外は `null`。
+
+入力例 (abc451_e 形式):
+
+```
+N
+A_{1, 2} A_{1, 3} \ldots A_{1, N}
+A_{2, 3} \ldots A_{2, N}
+\vdots
+A_{N-1,N}
+```
+
+生成される `triangular`:
+
+```json
+{ "name": "a", "math": "A", "var_type": "int", "bound": "n" }
+```
+
+生成される `vars`:
+
+```json
+[{ "name": "n", "math": "N", "var_type": "int", "dim": 0, "size": [], "is_size": true }]
+```
+
+生成される `ops`:
+
+```json
+[{ "tag": "read_line", "depth": 0, "vars": [{ "name": "n", "dim": 0 }] }]
+```
+
+入力例 (abc236_d 形式):
+
+```
+N
+A_{1, 2} A_{1, 3} A_{1, 4} \cdots A_{1, 2N}
+A_{2, 3} A_{2, 4} \cdots A_{2, 2N}
+A_{3, 4} \cdots A_{3, 2N}
+\vdots
+A_{2N-1, 2N}
+```
+
+生成される `triangular`:
+
+```json
+{ "name": "a", "math": "A", "var_type": "int", "bound": "2*n" }
+```
+
+フィールド:
+
+- `name`: 小文字化した変数名
+- `math`: 元の表記 (大文字)
+- `var_type`: 制約テキストから推定 (デフォルト `"int"`。GridRow と異なり `"str"` に固定しない)
+- `bound`: 第 2 添字の上限式 (normalize_expr 済み)。ループ上限 = `{bound}-1`、行 i の長さ = `{bound}-1-_i`
+
+テンプレートが生成する Rust コード (abc451_e 形式):
+
+```rust
+fn solve(n: usize, a: Vec<Vec<i64>>) -> String { ... }
+
+fn main() {
+    input! { n: usize, }
+    let mut a: Vec<Vec<i64>> = Vec::new();
+    for _i in 0..n-1 {
+        input! { _row: [i64; n-1-_i], }
+        a.push(_row);
+    }
+    print!("{}", solve(n, a));
+}
+```
+
+テンプレートが生成する Rust コード (abc236_d 形式、bound = `"2*n"`):
+
+```rust
+fn main() {
+    input! { n: usize, }
+    let mut a: Vec<Vec<i64>> = Vec::new();
+    for _i in 0..2*n-1 {
+        input! { _row: [i64; 2*n-1-_i], }
+        a.push(_row);
+    }
+    print!("{}", solve(n, a));
+}
+```
+
+- `triangular` の変数はメイン `vars` には含まれない。`solve` 引数・`main` での読み取りはテンプレートが `triangular` フィールドを参照して別途生成する
+- `solve` の引数順: `vars` の変数を先に並べ、`triangular.name` を末尾に追加
+- `main` での `print!` 呼び出し: `solve({{ vars | map("name") | join(", ") }}, {{ triangular.name }})`
+
 #### `iteration_vars` / `iteration_ops` の形式
 
 ループマーカーがブロック[0] にあり、かつ最初に採用された非数値 sub-block がスカラーパースに失敗した (ループ・配列を含む) 場合に生成される。`query_types`・`query_body`・`testcase_body` のいずれかが非空のときは空リスト。
@@ -728,6 +835,8 @@ fn solve(a: Vec<Vec<i64>>) -> String { ... }
 | ループマーカー付きクエリ型 (`\text{X}_N` / `\mathrm{X}_N` / `query_N` / `{\rm Query}_N`)、numbered sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D, abc212-D, abc453-G |
 | 簡易 T-testcases 型 (ブロック[0]=単一スカラー `T`、ブロック[1]=スカラー変数のみ)                    | `T\n\na s`                                                                        | abc238-D                     |
 | 複雑な繰り返し本体 (ループマーカー付き、ブロック[1] にループ・配列含む)                             | `T\n\mathrm{case}_T\n\nN K\nA_1 \ldots A_N`                                      | abc456-F, abc456-E           |
+| 上三角行列 (triangular matrix、bound が変数名)                                                       | `N\nA_{1,2}\ldots A_{1,N}\nA_{2,3}\ldots A_{2,N}\n\vdots\nA_{N-1,N}`             | abc451-E                     |
+| 上三角行列 (triangular matrix、bound が算術式 `2N`)                                                  | `N\nA_{1,2} A_{1,3} \cdots A_{1,2N}\nA_{2,3}\cdots A_{2,2N}\n\vdots\nA_{2N-1,2N}` | abc236-D                   |
 
 **前処理**: `\hspace{0.4cm}\vdots` は `\vdots` に正規化する。また `:` のみの行も `\vdots` と等価に扱う (トークナイザーレベルで正規化)。
 
@@ -752,8 +861,7 @@ fn solve(a: Vec<Vec<i64>>) -> String { ... }
 | 非対応パターン                                                      | 例                                   | 確認問題    |
 | ------------------------------------------------------------------- | ------------------------------------ | ----------- |
 | ループマーカーなし plain-text 添字 (`q_i` など、`\text{}`/`\mathrm{}` もなし) | `Q\nq_1\n:\nq_Q`                       | typical90-L |
-| 可変長行 (サイズが変数)                                                       | `T_i K_i A_{i,1} \ldots A_{i,K_i}`    | abc226-C    |
-| 斜め・上三角行列                                                              | `A_{1,2} \cdots A_{1,2N}` / `\vdots`  | abc236-D    |
+| 可変長行 (行ごとに要素数が異なり、サイズが別変数に依存)                          | `T_i K_i A_{i,1} \ldots A_{i,K_i}`    | abc226-C    |
 | 繰り返し本体 (iteration_ops) 内のネストループ 2 段以上                        | ループ内にさらにループ                 | —           |
 | `{Num,Num}` 以外のカンマ添字                                                  | `A_{i,j}`, `A_{1,N}`                  | —           |
 | 2D 固定グリッドで行数 1 またはセル数が 1 行の場合                             | 1 行のみ `A_{1,1}...A_{1,6}`          | —           |
@@ -777,7 +885,7 @@ edition = "2021"
 
 `src/main.rs.tera` 例 (proconio 使用):
 
-`ok=true` のとき: `solve` を純粋な引数関数として生成し、`main` で `input!` → `solve(args...)` と呼ぶ。
+`ok=true` のとき: `solve` を純粋な引数関数として生成し、`main` で `input!` → `solve(args...)` と呼ぶ。`triangular` が非空のとき、`solve` 引数末尾に `Vec<Vec<T>>` を追加し、`main` に三角行列読み取りループを生成する。
 `ok=false` のとき: フォールバックとして `solve` が `src` を受け取る従来スタイルを生成する。
 `solve` 本文は `with_output(|| { ... })` で包まれる。本文内で `out!(answer)` を呼ぶと 1 行出力として `String` に蓄積され、`with_output` が最後にその `String` を返す。`out!(a, b)` は空白区切り、`out!(vec)` / `out!(slice)` / `out!((a, b))` は要素を空白区切りで出力する。
 
@@ -811,6 +919,9 @@ fn solve(
     {{ vd.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}>,
     {%- endif %}
     {%- endfor %}
+    {%- if input_format.triangular %}
+    {{ input_format.triangular.name }}: Vec<Vec<{% if input_format.triangular.var_type == "str" %}String{% else %}i64{% endif %}>>,
+    {%- endif %}
 ) -> String {
     with_output(|| {
         {% if query_loop_end != "" -%}
@@ -966,7 +1077,19 @@ fn main() {
     {% endif -%}
     {% endif -%}
     {% endfor -%}
+    {% if input_format.triangular -%}
+    {# 三角行列: for ループで行ごとに読み取り #}
+    {% set tri = input_format.triangular -%}
+    {% set tri_type = "String" if tri.var_type == "str" else "i64" -%}
+    let mut {{ tri.name }}: Vec<Vec<{{ tri_type }}>> = Vec::new();
+    for _i in 0..{{ tri.bound }}-1 {
+        input! { _row: [{{ tri_type }}; {{ tri.bound }}-1-_i], }
+        {{ tri.name }}.push(_row);
+    }
+    print!("{}", solve({{ input_format.vars | map(attribute="name") | join(sep=", ") }}, {{ tri.name }}));
+    {% else -%}
     print!("{}", solve({{ input_format.vars | map(attribute="name") | join(sep=", ") }}));
+    {% endif -%}
 }
 {% else -%}
 fn solve<R: std::io::BufRead>(src: &mut impl proconio::source::Source<R>) -> String {

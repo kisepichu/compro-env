@@ -1,4 +1,6 @@
-use domain::entity::{InputOp, InputSpec, OpTag, QueryTypeDecl, VarDecl, VarRef, VarType};
+use domain::entity::{
+    InputOp, InputSpec, OpTag, QueryTypeDecl, TriangularSpec, VarDecl, VarRef, VarType,
+};
 
 // ── Lexer ──────────────────────────────────────────────────────────────────────
 
@@ -1489,6 +1491,7 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
             testcase_body: vec![],
             iteration_vars: vec![],
             iteration_ops: vec![],
+            triangular: None,
         };
     }
 
@@ -1500,6 +1503,53 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
 
     // Phase 2 early detection
     let block0 = blocks[0];
+
+    // Triangular matrix early detection: single-block only
+    if blocks.len() == 1
+        && let Some(tri) = detect_triangular(block0, constraints)
+    {
+        // Build the size VarDecl from line[0] of block0
+        let size_math = block0
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("");
+        let all_math = vec![size_math.to_string()];
+        let size_name = normalize_name(size_math, &all_math);
+        let size_var = VarDecl {
+            name: size_name.clone(),
+            math: size_math.to_string(),
+            var_type: VarType::Int,
+            dim: 0,
+            size: vec![],
+            is_size: true,
+        };
+        let size_op = InputOp {
+            tag: OpTag::ReadLine,
+            depth: 0,
+            vars: vec![VarRef {
+                name: size_name,
+                dim: 0,
+                size: None,
+                index: None,
+            }],
+            loop_var: None,
+            begin: None,
+            end: None,
+        };
+        return InputSpec {
+            raw: raw.to_string(),
+            ok: true,
+            vars: vec![size_var],
+            ops: vec![size_op],
+            query_types: vec![],
+            query_body: vec![],
+            testcase_body: vec![],
+            iteration_vars: vec![],
+            iteration_ops: vec![],
+            triangular: Some(tri),
+        };
+    }
 
     // Whether block0 contains a query-placeholder marker.
     // Evaluated only when blocks.len() > 1 (short-circuit &&) to avoid the tokenize +
@@ -1853,13 +1903,356 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
         testcase_body,
         iteration_vars,
         iteration_ops,
+        triangular: None,
     }
 }
 
+/// Detect an upper-triangular matrix input pattern and return a `TriangularSpec` if matched.
+///
+/// The pattern is:
+/// ```text
+/// N
+/// A_{1, 2} A_{1, 3} \ldots A_{1, bound}
+/// A_{2, 3} \ldots A_{2, bound}
+/// \vdots
+/// A_{bound-1, bound}
+/// ```
+/// where `bound` is an expression like "N" or "2N".
+///
+/// Returns `Some(TriangularSpec)` when all structural checks pass, `None` otherwise.
+fn detect_triangular(block0: &str, constraints: &str) -> Option<TriangularSpec> {
+    // Collect non-empty lines
+    let lines: Vec<&str> = block0
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    // Need at least 4 lines: size, first data row, line2 (vdots or another row), last element
+    if lines.len() < 4 {
+        return None;
+    }
+
+    // Line 0: single Ident token (size variable, e.g. "N")
+    let size_tokens = strip_spaces(&tokenize_line(lines[0]));
+    let size_math = match size_tokens.as_slice() {
+        [Token::Ident(s)] => s.clone(),
+        _ => return None,
+    };
+
+    // Line 1: a triangular row — check it has the right structure
+    // and extract: var_name (math), bound expression (string from last element's second subscript)
+    let (var_math, bound_raw) = detect_triangular_row(lines[1])?;
+
+    // Verify all idents in bound_raw refer to the size variable only.
+    // An unknown ident would generate an undefined variable reference in the template.
+    if !expr_idents(&bound_raw)
+        .iter()
+        .all(|id| id.eq_ignore_ascii_case(&size_math))
+    {
+        return None;
+    }
+
+    // Line 2: either another triangular row OR a vdots-like line
+    // Check that line 2 is either vdots-like or a triangular row with the same var name
+    let line2_ok = {
+        let toks = strip_spaces(&tokenize_line(lines[2]));
+        // Is it a vdots-like line?
+        let is_vdots = toks.len() == 1 && matches!(toks[0], Token::Vdots | Token::Cdots);
+        if is_vdots {
+            true
+        } else {
+            // Try as another triangular row with same var name and consistent bound
+            matches!(detect_triangular_row(lines[2]), Some((n, b)) if n == var_math && b == bound_raw)
+        }
+    };
+    if !line2_ok {
+        return None;
+    }
+
+    // Last non-empty line: single element "VAR_{first_idx, bound}" (no Cdots)
+    // Fix 2: parse with read_comma_brace_parts to verify:
+    //   (a) second subscript matches bound_raw (same canonical form)
+    //   (b) no extra tokens remain after RBrace
+    let last_line = lines[lines.len() - 1];
+    {
+        let toks = strip_spaces(&tokenize_line(last_line));
+        // Must not contain cdots
+        if toks.contains(&Token::Cdots) {
+            return None;
+        }
+        // Must start with same var name
+        match toks.first() {
+            Some(Token::Ident(n)) if n == &var_math => {}
+            _ => return None,
+        }
+        // Must have a subscript followed by LBrace
+        if toks.get(1) != Some(&Token::Subscript) || toks.get(2) != Some(&Token::LBrace) {
+            return None;
+        }
+        // Parse the brace subscript: expect exactly (part1, part2) with no trailing tokens
+        let (_, last_second, advance) = read_comma_brace_parts(&toks[3..])?;
+        // advance includes RBrace; no tokens should remain
+        if 3 + advance != toks.len() {
+            return None;
+        }
+        // Second subscript of last element must match bound_raw (same canonical string)
+        if last_second != bound_raw {
+            return None;
+        }
+    }
+
+    // All intermediate lines (between line 1 and last) must be vdots-like or triangular rows
+    for &line in &lines[2..lines.len() - 1] {
+        let toks = strip_spaces(&tokenize_line(line));
+        let is_vdots = toks.len() == 1 && matches!(toks[0], Token::Vdots | Token::Cdots);
+        if !is_vdots {
+            match detect_triangular_row(line) {
+                Some((n, b)) if n == var_math && b == bound_raw => {}
+                _ => return None,
+            }
+        }
+    }
+
+    // All checks passed — build the TriangularSpec
+    // Normalize names: size variable and bound expression
+    // For simplicity, all math names here are just size_math and the bound idents
+    let all_math = vec![size_math.clone()];
+
+    // Normalize the bound: parse bound_raw as an expression
+    // bound_raw is already in arithmetic form (e.g. "N", "2*N")
+    // We need to lowercase the ident part(s) using normalize_name
+    let bound = normalize_expr(&bound_raw, &all_math);
+
+    let var_name = normalize_name(&var_math, &all_math);
+
+    // Infer var_type from constraints
+    let var_type = {
+        let mut decls = vec![VarDecl {
+            name: var_name.clone(),
+            math: var_math.clone(),
+            var_type: VarType::Unknown,
+            dim: 2,
+            size: vec![],
+            is_size: false,
+        }];
+        infer_types(&mut decls, constraints);
+        // Fall back to Int when constraints give no type information (Unknown).
+        // The spec says triangular.var_type defaults to "int".
+        if decls[0].var_type == VarType::Unknown {
+            VarType::Int
+        } else {
+            decls[0].var_type.clone()
+        }
+    };
+
+    Some(TriangularSpec {
+        name: var_name,
+        math: var_math,
+        var_type,
+        bound,
+    })
+}
+
+/// Detect a single triangular row line.
+/// A triangular row looks like: `A_{1, 2} A_{1, 3} \ldots A_{1, N}`
+/// Returns `Some((var_math, bound_raw))` where `bound_raw` is the arithmetic
+/// expression for the second subscript of the last element (e.g. "N", "2*N").
+fn detect_triangular_row(line: &str) -> Option<(String, String)> {
+    let tokens = strip_spaces(&tokenize_line(line));
+
+    // Must contain exactly one Cdots
+    let cdots_count = tokens.iter().filter(|t| **t == Token::Cdots).count();
+    if cdots_count != 1 {
+        return None;
+    }
+
+    // Scan tokens sequentially, skipping Space tokens.
+    // Each non-Space, non-Cdots token sequence is expected to form one element:
+    //   Ident Subscript LBrace <part1> Comma <part2> RBrace
+    // A single Cdots in the stream is allowed; elements may appear before and after it.
+    let mut var_math: Option<String> = None;
+    let mut first_idx: Option<String> = None; // first subscript (row index, must be ASCII digits)
+    let mut last_second_sub: Option<String> = None; // second subscript of last element (the bound)
+    let mut found_cdots = false;
+    let mut found_element_after_cdots = false;
+
+    let mut i = 0;
+    while i < tokens.len() {
+        // Skip spaces
+        while i < tokens.len() && tokens[i] == Token::Space {
+            i += 1;
+        }
+        if i >= tokens.len() {
+            break;
+        }
+
+        // Cdots
+        if tokens[i] == Token::Cdots {
+            found_cdots = true;
+            i += 1;
+            continue;
+        }
+
+        // Element: Ident Subscript { first_part , second_part }
+        let name = match &tokens[i] {
+            Token::Ident(n) => n.clone(),
+            _ => return None,
+        };
+        i += 1;
+
+        if i >= tokens.len() || tokens[i] != Token::Subscript {
+            return None;
+        }
+        i += 1;
+
+        // Read the subscript: must be brace form with comma
+        if i >= tokens.len() || tokens[i] != Token::LBrace {
+            return None;
+        }
+        i += 1; // skip LBrace
+
+        // Read until matching RBrace, collecting tokens for the two parts
+        let (part1_raw, part2_raw, advance) = read_comma_brace_parts(&tokens[i..])?;
+        i += advance;
+
+        // Fix 3: first subscript (row index) must be purely numeric (e.g. "1", "2", not "i" or "2N")
+        if !part1_raw.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+
+        // Validate var name consistency
+        match &var_math {
+            None => var_math = Some(name.clone()),
+            Some(n) if n != &name => return None,
+            _ => {}
+        }
+
+        // Validate first index (row) consistency: all elements on this row must have same first subscript
+        match &first_idx {
+            None => first_idx = Some(part1_raw.clone()),
+            Some(f) if f != &part1_raw => return None,
+            _ => {}
+        }
+
+        // Track last second subscript (the bound)
+        last_second_sub = Some(part2_raw);
+
+        // Fix 1: track whether at least one element appears after cdots
+        if found_cdots {
+            found_element_after_cdots = true;
+        }
+    }
+
+    // Fix 1: must have found cdots AND at least one element after it
+    if !found_cdots || !found_element_after_cdots {
+        return None;
+    }
+
+    let _var = var_math?;
+    let bound_expr = last_second_sub?;
+
+    // Convert the bound_expr tokens string to arithmetic form
+    // bound_expr is already a string like "N" or "2*N" from read_comma_brace_parts
+    Some((_var, bound_expr))
+}
+
+/// Read the two parts of a comma-separated brace subscript `{part1, part2}`.
+/// Assumes the opening `{` has already been consumed.
+/// Returns `(part1_str, part2_str, tokens_consumed_including_RBrace)`.
+/// `part1_str` / `part2_str` are arithmetic expressions (e.g. "N", "2*N", "N-1").
+fn read_comma_brace_parts(tokens: &[Token]) -> Option<(String, String, usize)> {
+    let mut i = 0;
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut last_kind: u8 = 0; // 0=start/op, 1=num, 2=ident
+
+    while i < tokens.len() {
+        match &tokens[i] {
+            Token::RBrace => {
+                i += 1;
+                if !current.is_empty() {
+                    parts.push(current.clone());
+                }
+                break;
+            }
+            Token::Comma => {
+                if current.is_empty() {
+                    return None; // leading comma
+                }
+                parts.push(current.clone());
+                current = String::new();
+                last_kind = 0;
+                i += 1;
+            }
+            Token::Space => {
+                // ignore spaces inside braces
+                i += 1;
+            }
+            Token::Num(n) => {
+                if last_kind == 2 {
+                    current.push('*');
+                }
+                current.push_str(n);
+                last_kind = 1;
+                i += 1;
+            }
+            Token::Ident(s) => {
+                if last_kind == 1 {
+                    current.push('*');
+                }
+                current.push_str(s);
+                last_kind = 2;
+                i += 1;
+            }
+            Token::Plus => {
+                if last_kind == 0 {
+                    return None;
+                }
+                current.push('+');
+                last_kind = 0;
+                i += 1;
+            }
+            Token::Minus => {
+                if last_kind == 0 {
+                    return None;
+                }
+                current.push('-');
+                last_kind = 0;
+                i += 1;
+            }
+            Token::Star => {
+                if last_kind == 0 {
+                    return None;
+                }
+                current.push('*');
+                last_kind = 0;
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    if parts.len() != 2 {
+        return None;
+    }
+    Some((parts[0].clone(), parts[1].clone(), i))
+}
+
+/// Normalize raw input-format text before tokenization.
+///
+/// Transformations applied:
+/// - Replaces Unicode horizontal ellipsis (U+2026) with `\ldots`
+/// - Replaces `\hspace{...}\vdots` sequences with `\vdots`
 fn preprocess(raw: &str) -> String {
+    // Replace Unicode horizontal ellipsis (U+2026) with \ldots
+    let raw = &raw.replace('\u{2026}', "\\ldots");
+
     // Replace \hspace{...}\vdots with \vdots
     let mut result = String::new();
-    let mut rest = raw;
+    let mut rest = raw.as_str();
 
     while let Some(pos) = rest.find("\\hspace{") {
         result.push_str(&rest[..pos]);
@@ -2206,6 +2599,7 @@ fn not_ok(raw: &str) -> InputSpec {
         testcase_body: vec![],
         iteration_vars: vec![],
         iteration_ops: vec![],
+        triangular: None,
     }
 }
 
@@ -2278,7 +2672,7 @@ fn ensure_var_decl(decls: &mut Vec<VarDecl>, name: &str, math: &str, dim: u8, si
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::entity::{OpTag, VarType};
+    use domain::entity::{InputFormatKind, OpTag, VarType};
 
     // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -3694,6 +4088,173 @@ mod tests {
         assert!(
             spec.iteration_ops.is_empty(),
             "iteration_ops must be empty when query_types present"
+        );
+    }
+
+    // ── triangular matrix ──────────────────────────────────────────────────────
+
+    /// ABC451-E style: N rows, upper-triangular, bound = N → bound = "n"
+    #[test]
+    fn triangular_abc451e_bound_n() {
+        let raw =
+            "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N}";
+        let constraints = "All input values are integers";
+        let spec = with_constraints(raw, constraints);
+        assert!(spec.ok, "expected ok=true; spec={spec:?}");
+        assert!(spec.triangular.is_some(), "expected triangular to be Some");
+        let tri = spec.triangular.as_ref().unwrap();
+        assert_eq!(tri.name, "a", "triangular name should be 'a'");
+        assert_eq!(tri.bound, "n", "triangular bound should be 'n'");
+        assert_eq!(
+            tri.var_type,
+            VarType::Int,
+            "triangular var_type should be Int"
+        );
+        assert_eq!(spec.vars.len(), 1, "expected exactly 1 var (size)");
+        assert_eq!(spec.vars[0].name, "n", "size var name should be 'n'");
+        assert!(spec.vars[0].is_size, "size var should have is_size=true");
+        assert_eq!(spec.ops.len(), 1, "expected exactly 1 op (ReadLine for n)");
+        assert_eq!(
+            spec.kind(),
+            InputFormatKind::Triangle,
+            "expected kind Triangle"
+        );
+    }
+
+    /// ABC236-D style: 2N-1 rows, upper-triangular with bound = 2N → bound = "2*n"
+    #[test]
+    fn triangular_abc236d_bound_2n() {
+        let raw = "N\nA_{1, 2} A_{1, 3} A_{1, 4} \\cdots A_{1, 2N}\nA_{2, 3} A_{2, 4} \\cdots A_{2, 2N}\nA_{3, 4} \\cdots A_{3, 2N}\n\\vdots\nA_{2N-1, 2N}";
+        let constraints = "All input values are integers";
+        let spec = with_constraints(raw, constraints);
+        assert!(spec.ok, "expected ok=true; spec={spec:?}");
+        assert!(spec.triangular.is_some(), "expected triangular to be Some");
+        let tri = spec.triangular.as_ref().unwrap();
+        assert_eq!(tri.bound, "2*n", "triangular bound should be '2*n'");
+        assert_eq!(tri.name, "a", "triangular name should be 'a'");
+    }
+
+    /// A line consisting only of \ldots (cdots tokens) should be treated as Vdots
+    /// and accepted as the vertical separator in a triangular matrix pattern.
+    #[test]
+    fn triangular_cdots_only_line_as_vdots() {
+        let raw = "N\nA_{1, 2} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\n\\ldots\nA_{N-1,N}";
+        let spec = scalar_ok(raw);
+        assert!(spec.ok, "expected ok=true; spec={spec:?}");
+        assert!(
+            spec.triangular.is_some(),
+            "expected triangular to be Some when \\ldots used as vertical separator"
+        );
+    }
+
+    /// Trailing cdots with no element after — must NOT be detected as triangular.
+    #[test]
+    fn triangular_trailing_cdots_no_element_after_is_not_ok() {
+        // "A_{1,2} \ldots" — cdots at end, no bound element following
+        let raw = "N\nA_{1, 2} \\ldots\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when cdots has no element after it, got: {spec:?}"
+        );
+    }
+
+    /// First subscript that is an ident (not a number) — must NOT be detected as triangular.
+    #[test]
+    fn triangular_ident_first_subscript_is_not_triangular() {
+        // "A_{i, j}" style — first subscript is a variable, not a literal number
+        let raw =
+            "N\nA_{i, 2} A_{i, 3} \\ldots A_{i, N}\nA_{j, 3} \\ldots A_{j, N}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when first subscript is ident, got: {spec:?}"
+        );
+    }
+
+    /// Last line with extra tokens after the subscript — must NOT be detected as triangular.
+    #[test]
+    fn triangular_last_line_extra_tokens_is_not_triangular() {
+        // "A_{N-1,N} extra" — trailing token after the subscript
+        let raw = "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N} X";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when last line has extra tokens, got: {spec:?}"
+        );
+    }
+
+    /// Line 2 has a different bound than line 1 — must NOT be detected as triangular.
+    #[test]
+    fn triangular_inconsistent_bound_line2_is_not_triangular() {
+        // Line 1 bound = N, line 2 bound = M — different
+        let raw =
+            "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, M}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when line 2 has a different bound, got: {spec:?}"
+        );
+    }
+
+    /// An intermediate row has a different bound than line 1 — must NOT be detected as triangular.
+    #[test]
+    fn triangular_inconsistent_bound_intermediate_is_not_triangular() {
+        // Lines: size, row1 (bound N), row2 (bound M), vdots, last
+        let raw = "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\nA_{3, 4} \\ldots A_{3, M}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when an intermediate row has a different bound, got: {spec:?}"
+        );
+    }
+
+    /// bound_raw references a variable that is not the size variable — must NOT be detected.
+    #[test]
+    fn triangular_bound_unknown_ident_is_not_triangular() {
+        // bound is "M" but size variable is "N" — M is undefined in the template context
+        let raw = "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, M}\n\\vdots\nA_{N-1,M}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when bound references an unknown ident, got: {spec:?}"
+        );
+    }
+
+    /// When constraints are empty, var_type should default to Int (not Unknown).
+    #[test]
+    fn triangular_unknown_var_type_falls_back_to_int() {
+        let raw =
+            "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N}";
+        // Pass empty constraints so infer_types produces Unknown
+        let spec = with_constraints(raw, "");
+        assert!(
+            spec.triangular.is_some(),
+            "expected triangular to be detected; spec={spec:?}"
+        );
+        let tri = spec.triangular.unwrap();
+        assert_eq!(
+            tri.var_type,
+            VarType::Int,
+            "expected var_type=Int when constraints are empty, got: {:?}",
+            tri.var_type
+        );
+    }
+
+    /// Unicode horizontal ellipsis (U+2026) should be substituted for \ldots before tokenization.
+    #[test]
+    fn triangular_unicode_ellipsis() {
+        // Replace \ldots with the actual Unicode … character (U+2026)
+        let raw = "N\nA_{1, 2} A_{1, 3} \u{2026} A_{1, N}\nA_{2, 3} \u{2026} A_{2, N}\n\\vdots\nA_{N-1,N}";
+        let constraints = "All input values are integers";
+        let spec = with_constraints(raw, constraints);
+        assert!(
+            spec.ok,
+            "expected ok=true with Unicode ellipsis; spec={spec:?}"
+        );
+        assert!(
+            spec.triangular.is_some(),
+            "expected triangular to be Some when Unicode … used instead of \\ldots"
         );
     }
 }
