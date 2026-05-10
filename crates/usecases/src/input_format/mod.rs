@@ -1944,6 +1944,15 @@ fn detect_triangular(block0: &str, constraints: &str) -> Option<TriangularSpec> 
     // and extract: var_name (math), bound expression (string from last element's second subscript)
     let (var_math, bound_raw) = detect_triangular_row(lines[1])?;
 
+    // Verify all idents in bound_raw refer to the size variable only.
+    // An unknown ident would generate an undefined variable reference in the template.
+    if !expr_idents(&bound_raw)
+        .iter()
+        .all(|id| id.eq_ignore_ascii_case(&size_math))
+    {
+        return None;
+    }
+
     // Line 2: either another triangular row OR a vdots-like line
     // Check that line 2 is either vdots-like or a triangular row with the same var name
     let line2_ok = {
@@ -2028,7 +2037,13 @@ fn detect_triangular(block0: &str, constraints: &str) -> Option<TriangularSpec> 
             is_size: false,
         }];
         infer_types(&mut decls, constraints);
-        decls[0].var_type.clone()
+        // Fall back to Int when constraints give no type information (Unknown).
+        // The spec says triangular.var_type defaults to "int".
+        if decls[0].var_type == VarType::Unknown {
+            VarType::Int
+        } else {
+            decls[0].var_type.clone()
+        }
     };
 
     Some(TriangularSpec {
@@ -4185,6 +4200,38 @@ mod tests {
         assert!(
             spec.triangular.is_none(),
             "expected triangular=None when an intermediate row has a different bound, got: {spec:?}"
+        );
+    }
+
+    /// bound_raw references a variable that is not the size variable — must NOT be detected.
+    #[test]
+    fn triangular_bound_unknown_ident_is_not_triangular() {
+        // bound is "M" but size variable is "N" — M is undefined in the template context
+        let raw = "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, M}\n\\vdots\nA_{N-1,M}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when bound references an unknown ident, got: {spec:?}"
+        );
+    }
+
+    /// When constraints are empty, var_type should default to Int (not Unknown).
+    #[test]
+    fn triangular_unknown_var_type_falls_back_to_int() {
+        let raw =
+            "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N}";
+        // Pass empty constraints so infer_types produces Unknown
+        let spec = with_constraints(raw, "");
+        assert!(
+            spec.triangular.is_some(),
+            "expected triangular to be detected; spec={spec:?}"
+        );
+        let tri = spec.triangular.unwrap();
+        assert_eq!(
+            tri.var_type,
+            VarType::Int,
+            "expected var_type=Int when constraints are empty, got: {:?}",
+            tri.var_type
         );
     }
 
