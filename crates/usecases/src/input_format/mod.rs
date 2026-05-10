@@ -1928,8 +1928,8 @@ fn detect_triangular(block0: &str, constraints: &str) -> Option<TriangularSpec> 
         .filter(|l| !l.is_empty())
         .collect();
 
-    // Need at least 3 lines: size, first data row, vdots/last row
-    if lines.len() < 3 {
+    // Need at least 4 lines: size, first data row, line2 (vdots or another row), last element
+    if lines.len() < 4 {
         return None;
     }
 
@@ -2239,7 +2239,11 @@ fn read_comma_brace_parts(tokens: &[Token]) -> Option<(String, String, usize)> {
     Some((parts[0].clone(), parts[1].clone(), i))
 }
 
-/// Check whether the token slice starts with a comma subscript form `{..., ...}`.
+/// Normalize raw input-format text before tokenization.
+///
+/// Transformations applied:
+/// - Replaces Unicode horizontal ellipsis (U+2026) with `\ldots`
+/// - Replaces `\hspace{...}\vdots` sequences with `\vdots`
 fn preprocess(raw: &str) -> String {
     // Replace Unicode horizontal ellipsis (U+2026) with \ldots
     let raw = &raw.replace('\u{2026}', "\\ldots");
