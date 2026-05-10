@@ -15,7 +15,7 @@ S_{1,1}S_{1,2}\dots S_{1,W}
 S_{H,1}S_{H,2}\dots S_{H,W}
 ```
 
-`S_{1,1}S_{1,2}\dots S_{1,W}` のように cdots の前の `Ident_{Num,Num}` 要素がスペースなし隣接している
+`S_{1,1}S_{1,2}\dots S_{1,W}` のように cdots の前の `Ident_{2D}` 要素がスペースなし隣接している
 形式を現在の `try_parse_grid_row` が認識できない。
 
 - TASK-028 で追加した `had_space` ガードが、スペースなし隣接を `ok: false` にフォールバックさせている
