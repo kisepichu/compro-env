@@ -819,12 +819,15 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                     }
                     Token::Num(n) => {
                         if !has_comma {
-                            // Arithmetic mode: insert "*" when Ident precedes Num.
-                            // Note: in practice the lexer consumes alphanumeric sequences
-                            // as a single Ident token (e.g. "N2" → Ident("N2")), so a
-                            // bare Ident immediately followed by Num only arises when an
-                            // explicit operator separates them; the last_kind==2 branch is
-                            // a safety net for future lexer changes.
+                            // Arithmetic mode: insert "*" when Ident precedes Num
+                            // (last_kind == 2). Space tokens inside braces are silently
+                            // skipped without resetting last_kind, so "N 2" and "N2"
+                            // both trigger this branch.
+                            // Note: in practice the lexer merges alphanumeric runs into
+                            // a single Ident (e.g. "N2" → Ident("N2")), so the bare
+                            // Ident→Num adjacency path primarily fires when whitespace
+                            // separates them inside braces; the branch also serves as a
+                            // safety net for future lexer changes.
                             if last_kind == 2 {
                                 expr.push('*');
                             }
