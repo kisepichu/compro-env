@@ -551,10 +551,10 @@ mod tests {
             contents.contains("fn solve("),
             "expected plain 'fn solve(' signature, got:\n{contents}"
         );
-        // test harness should use LineSource (not panic) for triangular
+        // test harness must not contain any panic stub
         assert!(
-            !contents.contains("panic!(\"TODO: triangular"),
-            "expected real test harness (LineSource), not panic stub, got:\n{contents}"
+            !contents.contains("panic!"),
+            "expected no panic! in generated code (real LineSource harness), got:\n{contents}"
         );
         assert!(
             contents.contains("LineSource"),

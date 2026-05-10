@@ -2067,8 +2067,10 @@ fn detect_triangular_row(line: &str) -> Option<(String, String)> {
         return None;
     }
 
-    // Parse elements: split on Space, collect groups
-    // Each element: Ident Subscript LBrace ... RBrace (comma subscript)
+    // Scan tokens sequentially, skipping Space tokens.
+    // Each non-Space, non-Cdots token sequence is expected to form one element:
+    //   Ident Subscript LBrace <part1> Comma <part2> RBrace
+    // A single Cdots in the stream is allowed; elements may appear before and after it.
     let mut var_math: Option<String> = None;
     let mut first_idx: Option<String> = None; // first subscript (row index, must be ASCII digits)
     let mut last_second_sub: Option<String> = None; // second subscript of last element (the bound)
