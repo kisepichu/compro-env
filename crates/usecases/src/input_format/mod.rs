@@ -10,6 +10,9 @@ enum Token {
     LBrace,
     RBrace,
     Comma,
+    Plus,
+    Minus,
+    Star,
     Cdots,
     Vdots,
     Space,
@@ -44,6 +47,18 @@ fn tokenize_line(line: &str) -> Vec<Token> {
             ',' => {
                 chars.next();
                 tokens.push(Token::Comma);
+            }
+            '+' => {
+                chars.next();
+                tokens.push(Token::Plus);
+            }
+            '-' => {
+                chars.next();
+                tokens.push(Token::Minus);
+            }
+            '*' => {
+                chars.next();
+                tokens.push(Token::Star);
             }
             '.' => {
                 // Count dots
@@ -733,13 +748,29 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
         Some(Token::Num(n)) => Some((n.clone(), 1)),
         Some(Token::Ident(s)) => Some((s.clone(), 1)),
         Some(Token::LBrace) => {
-            // Read until matching RBrace, collecting comma-separated parts.
-            // {Num} or {Ident} (1 part) → single subscript value (Ident used as loop bound, e.g. {N}).
-            // {Num,Num} (2 parts, all numeric) → 2D numeric: returned as "row,col" for Array2DRow.
-            // {Num,Ident} or {Ident,Num} or {Ident,Ident} (2 parts with any Ident) → None.
-            // 3+ parts → None.
-            // Unclosed brace or empty comma-separated part (e.g. {1,} or {,1}) → None.
+            // Read until matching RBrace.
+            //
+            // Two modes depending on whether a Comma is found:
+            //
+            // Comma mode — collect comma-separated parts (for 2D subscripts):
+            //   {Num} or {Ident}    → single subscript value
+            //   {Num,Num}           → 2D numeric: "row,col" for Array2DRow
+            //   {Num,Ident} etc.    → None (unsupported)
+            //
+            // Arithmetic mode (no Comma) — build an expression string:
+            //   Adjacent Num then Ident (no operator between) → insert "*"
+            //   Adjacent Ident then Num (no operator between) → insert "*"
+            //   Plus/Minus/Star → append the operator character as-is
+            //   All Ident tokens are lowercased in the result
+            //   Examples: {2N} → "2*n", {N-1} → "n-1", {2N-1} → "2*n-1"
             let mut depth = 1;
+            let mut has_comma = false;
+            // Arithmetic expression builder
+            let mut expr = String::new();
+            // Track the last "kind" of token appended to expr, to detect implicit multiplication.
+            // 0 = nothing, 1 = Num, 2 = Ident
+            let mut last_kind: u8 = 0;
+            // For comma mode
             let mut parts: Vec<String> = Vec::new();
             let mut current: Option<String> = None;
             let mut has_ident = false;
@@ -757,7 +788,7 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                         if depth == 0 {
                             closed = true;
                             // Trailing comma: parts exist but current is empty
-                            if !parts.is_empty() && current.is_none() {
+                            if has_comma && !parts.is_empty() && current.is_none() {
                                 has_empty_part = true;
                             }
                             if let Some(s) = current.take() {
@@ -766,22 +797,60 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                         }
                         i += 1;
                     }
-                    Token::Num(n) => {
-                        current = Some(current.map_or_else(|| n.clone(), |c| c + n));
-                        i += 1;
-                    }
-                    Token::Ident(s) => {
-                        has_ident = true;
-                        current = Some(current.map_or_else(|| s.clone(), |c| c + s));
-                        i += 1;
-                    }
                     Token::Comma => {
+                        has_comma = true;
                         // Leading or consecutive comma → empty part before this separator
                         if current.is_none() {
                             has_empty_part = true;
                         }
                         if let Some(s) = current.take() {
                             parts.push(s);
+                        }
+                        i += 1;
+                    }
+                    Token::Num(n) => {
+                        if !has_comma {
+                            // Arithmetic mode: insert "*" when Ident precedes Num
+                            if last_kind == 2 {
+                                expr.push('*');
+                            }
+                            expr.push_str(n);
+                            last_kind = 1;
+                        }
+                        current = Some(current.map_or_else(|| n.clone(), |c| c + n));
+                        i += 1;
+                    }
+                    Token::Ident(s) => {
+                        has_ident = true;
+                        if !has_comma {
+                            // Arithmetic mode: insert "*" when Num precedes Ident
+                            if last_kind == 1 {
+                                expr.push('*');
+                            }
+                            expr.push_str(&s.to_lowercase());
+                            last_kind = 2;
+                        }
+                        current = Some(current.map_or_else(|| s.clone(), |c| c + s));
+                        i += 1;
+                    }
+                    Token::Plus => {
+                        if !has_comma {
+                            expr.push('+');
+                            last_kind = 0;
+                        }
+                        i += 1;
+                    }
+                    Token::Minus => {
+                        if !has_comma {
+                            expr.push('-');
+                            last_kind = 0;
+                        }
+                        i += 1;
+                    }
+                    Token::Star => {
+                        if !has_comma {
+                            expr.push('*');
+                            last_kind = 0;
                         }
                         i += 1;
                     }
@@ -793,13 +862,24 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
             if !closed || has_empty_part {
                 return None;
             }
-            match parts.len() {
-                1 => Some((parts.remove(0), i)),
-                2 if !has_ident => {
-                    // {Num,Num} — 2D numeric subscript, returned as "row,col"
-                    Some((format!("{},{}", parts[0], parts[1]), i))
+            // If a comma was found, use the original comma-separated logic.
+            if has_comma {
+                match parts.len() {
+                    1 => Some((parts.remove(0), i)),
+                    2 if !has_ident => {
+                        // {Num,Num} — 2D numeric subscript, returned as "row,col"
+                        Some((format!("{},{}", parts[0], parts[1]), i))
+                    }
+                    _ => None, // Ident parts or 3+ parts → unsupported
                 }
-                _ => None, // Ident parts or 3+ parts → unsupported
+            } else {
+                // Arithmetic mode: return the expression string built above.
+                // Empty expression (e.g. bare "{}") → None.
+                if expr.is_empty() {
+                    None
+                } else {
+                    Some((expr, i))
+                }
             }
         }
         _ => None,
@@ -1614,15 +1694,29 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     // Type inference
     infer_types(&mut var_decls, constraints);
 
-    // Compute is_size: a var is a size var if its name appears in any other VarDecl's size,
-    // or if it is the `end` of any LoopBegin op.
+    // Compute is_size: a var is a size var if its name (or an identifier extracted from an
+    // arithmetic expression) appears in any other VarDecl's size or in a LoopBegin end.
+    // For plain names like "n" this is a direct match; for expressions like "2*n" or "n-1"
+    // we extract the alphabetic identifiers so that "n" is still marked as is_size.
     let size_names: std::collections::HashSet<String> = var_decls
         .iter()
-        .flat_map(|v| v.size.iter().cloned())
+        .flat_map(|v| v.size.iter())
+        .flat_map(|s| {
+            expr_idents(s)
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        })
         .chain(
             ops.iter()
                 .filter(|o| o.tag == OpTag::LoopBegin)
-                .filter_map(|o| o.end.clone()),
+                .filter_map(|o| o.end.as_deref())
+                .flat_map(|s| {
+                    expr_idents(s)
+                        .into_iter()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                }),
         )
         .collect();
     for v in &mut var_decls {
@@ -1641,6 +1735,8 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
 
     // Any remaining LoopBegin ops will be emitted directly by the template, so validate
     // their bounds before reporting ok=true.
+    // Accepts: literal digit strings, declared scalar var names, or arithmetic expressions
+    // (e.g. "n-1", "2*n", "n+1") where all identifiers are declared scalars.
     let valid_loop_bounds = ops.iter().filter(|o| o.tag == OpTag::LoopBegin).all(|o| {
         let end = match o.end.as_deref().map(str::trim) {
             Some(end) if !end.is_empty() => end,
@@ -1648,6 +1744,9 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
         };
         end.chars().all(|c| c.is_ascii_digit())
             || var_decls.iter().any(|v| v.name == end && v.dim == 0)
+            || expr_idents(end)
+                .iter()
+                .all(|id| var_decls.iter().any(|v| v.name == *id && v.dim == 0))
     });
     if !valid_loop_bounds {
         return not_ok(raw);
@@ -2039,6 +2138,27 @@ fn not_ok(raw: &str) -> InputSpec {
         iteration_vars: vec![],
         iteration_ops: vec![],
     }
+}
+
+/// Extract all alphabetic identifiers from an arithmetic expression string.
+/// For a plain name like "n" returns ["n"]; for "2*n" returns ["n"]; for "n-1" returns ["n"].
+/// Used for is_size computation and valid_loop_bounds validation.
+fn expr_idents(expr: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, c) in expr.char_indices() {
+        if c.is_ascii_alphabetic() {
+            if start.is_none() {
+                start = Some(i);
+            }
+        } else if let Some(s) = start.take() {
+            result.push(&expr[s..i]);
+        }
+    }
+    if let Some(s) = start {
+        result.push(&expr[s..]);
+    }
+    result
 }
 
 fn collect_math_names(ops: &[IntermOp]) -> Vec<String> {
@@ -3332,6 +3452,85 @@ mod tests {
         assert_eq!(spec.query_types[2].type_id, "3");
         assert!(spec.query_types[2].ok);
         assert_eq!(spec.query_types[2].vars.len(), 3);
+    }
+
+    // ── arithmetic expression subscripts ─────────────────────────────────────
+
+    /// abc448_d: `N / A_1 \dots A_N / U_1 V_1 / \vdots / U_{N-1} V_{N-1}`
+    /// {N-1} subscript → loop end = "n-1", ok=true
+    #[test]
+    fn arithmetic_subscript_n_minus_1_loop() {
+        let raw = "N\nA_1 A_2 \\dots A_N\nU_1 V_1\nU_2 V_2\n\\vdots\nU_{N-1} V_{N-1}\n";
+        let spec = scalar_ok(raw);
+        assert!(spec.ok, "expected ok=true for {{N-1}} loop bound");
+        // n should be is_size (used as array size for A, and in expression for U/V)
+        let n = spec.vars.iter().find(|v| v.name == "n").expect("n var");
+        assert!(n.is_size, "n should be is_size");
+        // u and v should be dim=1
+        let u = spec.vars.iter().find(|v| v.name == "u").expect("u var");
+        let v = spec.vars.iter().find(|v| v.name == "v").expect("v var");
+        assert_eq!(u.dim, 1);
+        assert_eq!(v.dim, 1);
+        // loop_begin end should be "n-1"
+        let lb = spec
+            .ops
+            .iter()
+            .find(|o| o.tag == OpTag::LoopBegin)
+            .expect("LoopBegin");
+        assert_eq!(lb.end.as_deref(), Some("n-1"), "loop end should be n-1");
+    }
+
+    /// tupc2024_k: `N / A_1 A_2 \ldots A_{2N}`
+    /// {2N} subscript → array size = "2*n", ok=true, n.is_size=true
+    #[test]
+    fn arithmetic_subscript_2n_array_size() {
+        let raw = "N\nA_1 A_2 \\ldots A_{2N}\n";
+        let spec = scalar_ok(raw);
+        assert!(spec.ok, "expected ok=true for {{2N}} array size");
+        let a = spec.vars.iter().find(|v| v.name == "a").expect("a var");
+        assert_eq!(a.dim, 1);
+        assert_eq!(a.size, vec!["2*n".to_string()], "array size should be 2*n");
+        // n should be is_size (referenced in expression "2*n")
+        let n = spec.vars.iter().find(|v| v.name == "n").expect("n var");
+        assert!(
+            n.is_size,
+            "n should be is_size when referenced in 2*n expression"
+        );
+        // ReadLine for a: size = "2*n"
+        let rl = spec
+            .ops
+            .iter()
+            .find(|o| o.vars.iter().any(|v| v.name == "a"))
+            .expect("ReadLine for a");
+        assert_eq!(rl.vars[0].size.as_deref(), Some("2*n"));
+    }
+
+    /// {N+1} subscript → loop end = "n+1", ok=true
+    #[test]
+    fn arithmetic_subscript_n_plus_1() {
+        let raw = "N\nA_1 A_2 \\dots A_N\nX_1\nX_2\n\\vdots\nX_{N+1}\n";
+        let spec = scalar_ok(raw);
+        assert!(spec.ok, "expected ok=true for {{N+1}} loop bound");
+        let lb = spec
+            .ops
+            .iter()
+            .find(|o| o.tag == OpTag::LoopBegin)
+            .expect("LoopBegin");
+        assert_eq!(lb.end.as_deref(), Some("n+1"), "loop end should be n+1");
+    }
+
+    /// {2N-1} complex: Num * Ident - Num
+    #[test]
+    fn arithmetic_subscript_2n_minus_1() {
+        let raw = "N\nA_1 A_2 \\ldots A_{2N-1}\n";
+        let spec = scalar_ok(raw);
+        assert!(spec.ok, "expected ok=true for {{2N-1}} array size");
+        let a = spec.vars.iter().find(|v| v.name == "a").expect("a var");
+        assert_eq!(
+            a.size,
+            vec!["2*n-1".to_string()],
+            "array size should be 2*n-1"
+        );
     }
 
     /// Numbered query_types → iteration_vars/ops always empty.

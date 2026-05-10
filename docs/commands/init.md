@@ -240,6 +240,9 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │    SUBSCRIPT   _ (添字開始)
   │    LBRACE/RBRACE  { }
   │    COMMA       ,
+  │    PLUS        +
+  │    MINUS       -
+  │    STAR        *
   │    CDOTS       \ldots \dots \cdots ...
   │    VDOTS       \vdots : ⋮  (正規化済み)
   │    NEWLINE
@@ -269,6 +272,14 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │
   ▼  Semantic Analysis (ブロック[0])
   │    変数テーブル (dim / size 解決)
+  │      VarDecl.size には算術式文字列 (例: `"2*n"`, `"n-1"`) が入ることがある
+  │    is_size 計算: VarDecl.size 要素と LoopBegin.end から識別子を抽出して判定
+  │      算術式 (`"2*n"`, `"n-1"` 等) は英字部分を抽出して対象変数を特定する
+  │      例: `"2*n"` → `n` が is_size=true; `"n-1"` → `n` が is_size=true
+  │    valid_loop_bounds 検証: LoopBegin.end が以下のいずれかならOK、それ以外は ok: false
+  │      1. 全桁数字リテラル (例: `"3"`)
+  │      2. 宣言済みスカラー変数名 (例: `"n"`, `"q"`)
+  │      3. 算術式 — 式中の全ての識別子が宣言済みスカラー変数 (例: `"n-1"`, `"2*n"`, `"2*n-1"`)
   │    制約テキストから型推定
   │    subscript → loop_var / begin / end 解決 (0-indexed に正規化)
   │    QueryLine vdots ブロック → LoopBegin(end=<loop_bound>) + LoopEnd (body なし)
@@ -326,9 +337,19 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
 | 単一英字                       | `_i`, `_j`               | ループ変数添字         | `LoopRow` / `Array1D` のインデックス    |
 | 単一数値                       | `_1`, `_3`               | 1D 数値添字            | `Array1D` または `Scalars` の要素       |
 | `{Num}`                        | `_{1}`, `_{12}`          | 1D 数値添字            | 同上                                    |
+| `{Num Ident}` (隣接)           | `_{2N}`, `_{3M}`         | 算術式添字             | `*` を自動挿入 → `"2*n"` — 配列サイズ・ループ上限として使用 |
+| `{Ident OP Num}` / `{Ident OP Ident}` | `_{N-1}`, `_{N+1}`, `_{M-2}` | 算術式添字 | 演算子を保持 → `"n-1"`, `"n+1"` — 配列サイズ・ループ上限として使用 |
+| `{Num OP Ident}` など          | `_{2N-1}`                | 算術式添字 (複合)      | `"2*n-1"` — 同上                        |
 | `{Num,Num}`                    | `_{1,1}`, `_{2,6}`       | 2D numeric 添字        | `Array2DRow` 行・列インデックス         |
 | `{Num,Ident}` / `{Ident,Num}`  | `_{1,W}`, `_{H,1}`       | GridRow 範囲式の端点   | `GridRow` 検出 (文字グリッド) で対応済み |
 | `{Ident,Ident}` など           | `_{i,j}`, `_{H,W}`       | 非対応 (Phase 2)       | `ok: false`                             |
+
+**算術式添字の構築ルール** (`{...}` ブランチ内):
+- `PLUS`(`+`) / `MINUS`(`-`) / `STAR`(`*`) はそのまま式文字列に連結
+- 隣接する `NUM IDENT` (演算子なし) → `*` を自動挿入 (`2N` → `"2*N"`)
+- 隣接する `IDENT NUM` (演算子なし) → `*` を自動挿入 (`N2` → `"N*2"`)
+- 最終的に全 IDENT を小文字化して返す (`"2*N-1"` → `"2*n-1"`)
+- カンマを含む場合は算術式としてではなく 2D 添字として扱う (上記カンマ添字ルールが優先)
 
 **カンマ添字の文脈依存性**: カンマ添字の解釈はコンテキストによって異なる。
 
@@ -696,6 +717,8 @@ fn solve(a: Vec<Vec<i64>>) -> String { ... }
 | 文字グリッド (2D 添字、先頭複数要素・スペースあり)                           | `S_{1,1} S_{1,2} \ldots S_{1,W}` / `\vdots` / `S_{H,1} S_{H,2} \ldots S_{H,W}` | abc453-D           |
 | 文字グリッド (2D 添字、先頭複数要素・スペースなし)                           | `S_{1,1}S_{1,2}\ldots S_{1,W}` / `\vdots` / `S_{H,1}S_{H,2}\ldots S_{H,W}`     | abc450-C           |
 | 2D 固定グリッド (comma 添字, no cdots)                                    | `A_{1,1} A_{1,2} A_{1,3}` × 3 行 (dots 不可, dim=2, `[[T; 3]; 3]`)             | abc456-B           |
+| 1D 配列 (算術式サイズ `{NumIdent}`)                                        | `A_1 A_2 \ldots A_{2N}` → `[i64; 2*n]`                                          | tupc2024-K         |
+| 多変数ループ (`\vdots`) + 算術式添字 `{Ident-Num}`                          | `U_1 V_1` / `\vdots` / `U_{N-1} V_{N-1}` → `for _ in 0..n-1`                   | abc448-D           |
 | 添字付きスカラー (アルファベット添字)                                     | `A_x A_y`                                                                      | abc246-E           |
 | 添字付きスカラー (数値添字・vdots なし)                                   | `r_1 c_1` / `r_2 c_2` (各行独立)                                               | abc176-D           |
 | ループマーカー付きクエリ型 (`\text{X}_N` / `\mathrm{X}_N` / `query_N` / `{\rm Query}_N`)、numbered sub-block 自動解析 | `N Q` + `\text{query}_1` / `\vdots` / `\text{query}_Q` + `1 x` / `2 x k` / ... | abc241-D, abc248-D, abc212-D, abc453-G |
