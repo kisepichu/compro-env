@@ -810,7 +810,12 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                     }
                     Token::Num(n) => {
                         if !has_comma {
-                            // Arithmetic mode: insert "*" when Ident precedes Num
+                            // Arithmetic mode: insert "*" when Ident precedes Num.
+                            // Note: in practice the lexer consumes alphanumeric sequences
+                            // as a single Ident token (e.g. "N2" → Ident("N2")), so a
+                            // bare Ident immediately followed by Num only arises when an
+                            // explicit operator like `-` or `+` separates them; the
+                            // last_kind==2 branch here is a safety net for future changes.
                             if last_kind == 2 {
                                 expr.push('*');
                             }
@@ -823,7 +828,8 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                     Token::Ident(s) => {
                         has_ident = true;
                         if !has_comma {
-                            // Arithmetic mode: insert "*" when Num precedes Ident
+                            // Arithmetic mode: insert "*" when Num precedes Ident.
+                            // Example: {2N} → Num("2") then Ident("N") → "2*n".
                             if last_kind == 1 {
                                 expr.push('*');
                             }
@@ -2147,7 +2153,16 @@ fn expr_idents(expr: &str) -> Vec<&str> {
     let mut result = Vec::new();
     let mut start: Option<usize> = None;
     for (i, c) in expr.char_indices() {
-        if c.is_ascii_alphabetic() {
+        // An identifier starts with an ASCII letter and continues with alphanumerics,
+        // matching the lexer's Ident token definition (which also consumes trailing digits).
+        // This ensures "n2" is extracted as ["n2"] rather than ["n"], preventing false
+        // positives in valid_loop_bounds and is_size when expressions like "n2" appear.
+        let in_ident = if start.is_some() {
+            c.is_ascii_alphanumeric()
+        } else {
+            c.is_ascii_alphabetic()
+        };
+        if in_ident {
             if start.is_none() {
                 start = Some(i);
             }
