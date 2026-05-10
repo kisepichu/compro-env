@@ -1962,10 +1962,13 @@ fn detect_triangular(block0: &str, constraints: &str) -> Option<TriangularSpec> 
     }
 
     // Last non-empty line: single element "VAR_{first_idx, bound}" (no Cdots)
+    // Fix 2: parse with read_comma_brace_parts to verify:
+    //   (a) second subscript matches bound_raw (same canonical form)
+    //   (b) no extra tokens remain after RBrace
     let last_line = lines[lines.len() - 1];
     {
         let toks = strip_spaces(&tokenize_line(last_line));
-        // Must be: Ident(_) Subscript LBrace ... Comma ... RBrace (no Cdots)
+        // Must not contain cdots
         if toks.contains(&Token::Cdots) {
             return None;
         }
@@ -1974,13 +1977,18 @@ fn detect_triangular(block0: &str, constraints: &str) -> Option<TriangularSpec> 
             Some(Token::Ident(n)) if n == &var_math => {}
             _ => return None,
         }
-        // Must have a subscript
-        if toks.get(1) != Some(&Token::Subscript) {
+        // Must have a subscript followed by LBrace
+        if toks.get(1) != Some(&Token::Subscript) || toks.get(2) != Some(&Token::LBrace) {
             return None;
         }
-        // The subscript must be a comma form (two parts)
-        let sub_tokens = &toks[2..];
-        if !has_comma_subscript(sub_tokens) {
+        // Parse the brace subscript: expect exactly (part1, part2) with no trailing tokens
+        let (_, last_second, advance) = read_comma_brace_parts(&toks[3..])?;
+        // advance includes RBrace; no tokens should remain
+        if 3 + advance != toks.len() {
+            return None;
+        }
+        // Second subscript of last element must match bound_raw (same canonical string)
+        if last_second != bound_raw {
             return None;
         }
     }
@@ -2047,9 +2055,10 @@ fn detect_triangular_row(line: &str) -> Option<(String, String)> {
     // Parse elements: split on Space, collect groups
     // Each element: Ident Subscript LBrace ... RBrace (comma subscript)
     let mut var_math: Option<String> = None;
-    let mut first_idx: Option<String> = None; // first subscript (row index, e.g. "1" or "2N-1")
+    let mut first_idx: Option<String> = None; // first subscript (row index, must be ASCII digits)
     let mut last_second_sub: Option<String> = None; // second subscript of last element (the bound)
     let mut found_cdots = false;
+    let mut found_element_after_cdots = false;
 
     let mut i = 0;
     while i < tokens.len() {
@@ -2090,6 +2099,11 @@ fn detect_triangular_row(line: &str) -> Option<(String, String)> {
         let (part1_raw, part2_raw, advance) = read_comma_brace_parts(&tokens[i..])?;
         i += advance;
 
+        // Fix 3: first subscript (row index) must be purely numeric (e.g. "1", "2", not "i" or "2N")
+        if !part1_raw.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+
         // Validate var name consistency
         match &var_math {
             None => var_math = Some(name.clone()),
@@ -2106,10 +2120,15 @@ fn detect_triangular_row(line: &str) -> Option<(String, String)> {
 
         // Track last second subscript (the bound)
         last_second_sub = Some(part2_raw);
+
+        // Fix 1: track whether at least one element appears after cdots
+        if found_cdots {
+            found_element_after_cdots = true;
+        }
     }
 
-    // Must have found cdots and at least one element after it
-    if !found_cdots {
+    // Fix 1: must have found cdots AND at least one element after it
+    if !found_cdots || !found_element_after_cdots {
         return None;
     }
 
@@ -2206,13 +2225,6 @@ fn read_comma_brace_parts(tokens: &[Token]) -> Option<(String, String, usize)> {
 }
 
 /// Check whether the token slice starts with a comma subscript form `{..., ...}`.
-fn has_comma_subscript(tokens: &[Token]) -> bool {
-    if tokens.first() != Some(&Token::LBrace) {
-        return false;
-    }
-    read_comma_brace_parts(&tokens[1..]).is_some()
-}
-
 fn preprocess(raw: &str) -> String {
     // Replace Unicode horizontal ellipsis (U+2026) with \ldots
     let raw = &raw.replace('\u{2026}', "\\ldots");
@@ -4111,6 +4123,43 @@ mod tests {
         assert!(
             spec.triangular.is_some(),
             "expected triangular to be Some when \\ldots used as vertical separator"
+        );
+    }
+
+    /// Trailing cdots with no element after — must NOT be detected as triangular.
+    #[test]
+    fn triangular_trailing_cdots_no_element_after_is_not_ok() {
+        // "A_{1,2} \ldots" — cdots at end, no bound element following
+        let raw = "N\nA_{1, 2} \\ldots\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when cdots has no element after it, got: {spec:?}"
+        );
+    }
+
+    /// First subscript that is an ident (not a number) — must NOT be detected as triangular.
+    #[test]
+    fn triangular_ident_first_subscript_is_not_triangular() {
+        // "A_{i, j}" style — first subscript is a variable, not a literal number
+        let raw =
+            "N\nA_{i, 2} A_{i, 3} \\ldots A_{i, N}\nA_{j, 3} \\ldots A_{j, N}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when first subscript is ident, got: {spec:?}"
+        );
+    }
+
+    /// Last line with extra tokens after the subscript — must NOT be detected as triangular.
+    #[test]
+    fn triangular_last_line_extra_tokens_is_not_triangular() {
+        // "A_{N-1,N} extra" — trailing token after the subscript
+        let raw = "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N} X";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when last line has extra tokens, got: {spec:?}"
         );
     }
 
