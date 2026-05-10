@@ -153,6 +153,20 @@ pub struct InputOp {
     pub end: Option<String>,
 }
 
+/// Upper-triangular matrix input specification.
+/// Row i (0-indexed) contains `bound-1-i` elements: A_{i+1, i+2} ... A_{i+1, bound}.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TriangularSpec {
+    /// Lowercase variable name (e.g. "a").
+    pub name: String,
+    /// Original math notation (e.g. "A").
+    pub math: String,
+    pub var_type: VarType,
+    /// Normalized upper-bound expression for the second subscript (e.g. "n", "2*n").
+    /// Row count = bound-1; row i length = bound-1-i.
+    pub bound: String,
+}
+
 /// One query sub-type decoded from a numbered sub-block (e.g. "1 x" or "2 x k").
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct QueryTypeDecl {
@@ -186,6 +200,8 @@ pub struct InputSpec {
     pub iteration_vars: Vec<VarDecl>,
     /// Read ops corresponding to `iteration_vars`.  Same structure as `ops`.
     pub iteration_ops: Vec<InputOp>,
+    /// Some when the input is an upper-triangular matrix pattern.
+    pub triangular: Option<TriangularSpec>,
 }
 
 /// Derived format kind of a parsed `InputSpec` — used for `ce init` summary output.
@@ -199,6 +215,8 @@ pub enum InputFormatKind {
     Query,
     /// testcase_body is non-empty (simple T-testcases pattern)
     Testcase,
+    /// triangular is Some (upper-triangular matrix)
+    Triangle,
     /// iteration_ops is non-empty (complex loop body)
     Iter,
     /// ops contains a LoopBegin (empty-body loop stub)
@@ -214,6 +232,7 @@ impl std::fmt::Display for InputFormatKind {
             InputFormatKind::QueryTypes(n) => write!(f, "query({n})"),
             InputFormatKind::Query => write!(f, "query"),
             InputFormatKind::Testcase => write!(f, "testcase"),
+            InputFormatKind::Triangle => write!(f, "triangle"),
             InputFormatKind::Iter => write!(f, "iter"),
             InputFormatKind::Loop => write!(f, "loop"),
             InputFormatKind::Plain => write!(f, "plain"),
@@ -235,6 +254,9 @@ impl InputSpec {
         }
         if !self.testcase_body.is_empty() {
             return InputFormatKind::Testcase;
+        }
+        if self.triangular.is_some() {
+            return InputFormatKind::Triangle;
         }
         if !self.iteration_ops.is_empty() {
             return InputFormatKind::Iter;
@@ -318,6 +340,7 @@ mod input_spec_tests {
             testcase_body: vec![],
             iteration_vars: vec![],
             iteration_ops: vec![],
+            triangular: None,
         };
         assert!(!spec.ok);
         assert!(spec.vars.is_empty());
@@ -397,6 +420,7 @@ mod input_spec_tests {
             testcase_body: vec![],
             iteration_vars: vec![],
             iteration_ops: vec![],
+            triangular: None,
         };
         assert!(spec.ok);
         let json = serde_json::to_value(&spec).unwrap();
@@ -416,6 +440,7 @@ mod input_spec_tests {
             testcase_body: vec![],
             iteration_vars: vec![],
             iteration_ops: vec![],
+            triangular: None,
         }
     }
 
@@ -546,6 +571,65 @@ mod input_spec_tests {
         let t = OpTag::ReadLine;
         let json = serde_json::to_value(&t).unwrap();
         assert_eq!(json, "read_line");
+    }
+
+    fn make_triangular() -> TriangularSpec {
+        TriangularSpec {
+            name: "a".to_string(),
+            math: "A".to_string(),
+            var_type: VarType::Int,
+            bound: "n".to_string(),
+        }
+    }
+
+    // TriangularSpec serializes to JSON with expected fields
+    #[test]
+    fn triangular_spec_serializes() {
+        let ts = make_triangular();
+        let json = serde_json::to_value(&ts).unwrap();
+        assert_eq!(json["name"], "a");
+        assert_eq!(json["math"], "A");
+        assert_eq!(json["var_type"], "int");
+        assert_eq!(json["bound"], "n");
+    }
+
+    // InputFormatKind::Triangle when triangular is Some
+    #[test]
+    fn kind_triangle() {
+        let mut spec = make_spec(true);
+        spec.triangular = Some(make_triangular());
+        assert_eq!(spec.kind(), InputFormatKind::Triangle);
+    }
+
+    // Display for Triangle variant
+    #[test]
+    fn kind_triangle_display() {
+        assert_eq!(InputFormatKind::Triangle.to_string(), "triangle");
+    }
+
+    // Triangle takes priority over Iter when both are set
+    #[test]
+    fn kind_triangle_priority_over_iter() {
+        let mut spec = make_spec(true);
+        spec.triangular = Some(make_triangular());
+        spec.iteration_ops = vec![InputOp {
+            tag: OpTag::ReadLine,
+            depth: 0,
+            vars: vec![],
+            loop_var: None,
+            begin: None,
+            end: None,
+        }];
+        assert_eq!(spec.kind(), InputFormatKind::Triangle);
+    }
+
+    // Testcase takes priority over Triangle when both are set
+    #[test]
+    fn kind_testcase_priority_over_triangle() {
+        let mut spec = make_spec(true);
+        spec.testcase_body = vec![make_var()];
+        spec.triangular = Some(make_triangular());
+        assert_eq!(spec.kind(), InputFormatKind::Testcase);
     }
 }
 
