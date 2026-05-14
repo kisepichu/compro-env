@@ -188,6 +188,7 @@ InputFormatKind                     ← 導出値 (ce init 出力用、InputSpec
   query({n})                        query_types が非空 (n = 種別数)
   query                             query_body が非空
   testcase                          testcase_body が非空
+  jagged                            ops に loop_jagged を含む
   iter                              iteration_ops が非空
   loop                              ops に loop_begin を含む (上記いずれも非空でない)
   plain                             それ以外 (ok=true、ループなし)
@@ -205,16 +206,22 @@ VarDecl                             ← Value Object
   var_type: VarType                 Int | Str | Unknown
   dim: u8                           0=スカラー, 1=1D配列, 2=2D固定グリッド (size=["cols","rows"])
   size: Vec<String>                 各次元のサイズ式 (小文字化済み変数名)
-  is_size: bool                     他の var の size または LoopBegin の end に自分の name が現れるなら true
-                                    (テンプレートで usize/Vec<T> 等の型決定に使用)
+  is_size: bool                     他の var の size、LoopBegin の end、または loop_jagged の size_var に
+                                    自分の name が現れるなら true
+                                    dim=0 → usize、dim=1 → Vec<usize> の型決定に使用
+  is_jagged: bool                   loop_jagged の elem_var に一致する場合 true (デフォルト false)
+                                    dim=1 かつ is_jagged=true → Vec<Vec<T>>
 
 InputOp                             ← Value Object
-  tag: OpTag                        ReadLine | LoopBegin | LoopEnd
+  tag: OpTag                        ReadLine | LoopBegin | LoopEnd | LoopJagged
   depth: u8                         ネスト深さ
   vars: Vec<VarRef>                 ReadLine 時のみ有効
   loop_var: Option<String>          LoopBegin 時のみ有効
   begin: Option<String>             LoopBegin 時のみ有効 (常に "0")
-  end: Option<String>               LoopBegin 時のみ有効 (小文字化済み変数名)
+  end: Option<String>               LoopBegin / LoopJagged 時のみ有効 (小文字化済み変数名)
+  scalars: Option<Vec<VarRef>>      LoopJagged 時のみ有効 (SIZE_VAR 以外の per-row スカラー列)
+  size_var: Option<VarRef>          LoopJagged 時のみ有効 (ジャギーサイズ変数)
+  elem_var: Option<VarRef>          LoopJagged 時のみ有効 (ジャギー配列変数)
 
 VarRef                              ← Value Object
   name: String
@@ -388,7 +395,7 @@ infrastructure/
 | --- | --- |
 | クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 (ループマーカーなし) | typical90-L |
 | T-testcases 型: pre[0]=`T` 単独 + pre[1]=ケース形式 | abc238-D |
-| 可変長行: `T_i K_i A_{i,1} \ldots A_{i,K_i}` | abc226-C |
+| ジャギー配列で SIZE_VAR がスカラー列に存在しない | — |
 | 斜め・上三角行列: 行ごとに長さが異なる (カンマ添字内の算術式 `{2N-1, 2N}` 等) | abc236-D |
 | ネストループ 2段以上 | — |
 
@@ -396,6 +403,7 @@ infrastructure/
 - 算術式添字 (`{2N}`, `{N-1}`, `{N+1}`, `{2N-1}` 等): 配列サイズ・ループ上限として使用可能
   - `{NumIdent}` → `*` を自動挿入 (例: `{2N}` → `2*n`)
   - `{Ident±Num}` → 演算子を保持 (例: `{N-1}` → `n-1`)
+- ジャギー配列 (vdots ボディ末尾行の右端添字 `{row_idx, SIZE_VAR_{row_idx}}` で検出): abc226-C, abc446-B, abc457-B
 
 ---
 

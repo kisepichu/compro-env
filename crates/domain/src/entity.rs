@@ -125,6 +125,7 @@ pub struct VarDecl {
     pub dim: u8,
     pub size: Vec<String>,
     pub is_size: bool,
+    pub is_jagged: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -141,6 +142,7 @@ pub enum OpTag {
     ReadLine,
     LoopBegin,
     LoopEnd,
+    LoopJagged,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -151,6 +153,9 @@ pub struct InputOp {
     pub loop_var: Option<String>,
     pub begin: Option<String>,
     pub end: Option<String>,
+    pub scalars: Vec<VarRef>,
+    pub size_var: Option<VarRef>,
+    pub elem_var: Option<VarRef>,
 }
 
 /// Upper-triangular matrix input specification.
@@ -223,6 +228,8 @@ pub enum InputFormatKind {
     Loop,
     /// ok=true with no loop/query/iteration markers
     Plain,
+    /// ops contains a LoopJagged (jagged array loop)
+    Jagged,
 }
 
 impl std::fmt::Display for InputFormatKind {
@@ -236,6 +243,7 @@ impl std::fmt::Display for InputFormatKind {
             InputFormatKind::Iter => write!(f, "iter"),
             InputFormatKind::Loop => write!(f, "loop"),
             InputFormatKind::Plain => write!(f, "plain"),
+            InputFormatKind::Jagged => write!(f, "jagged"),
         }
     }
 }
@@ -260,6 +268,9 @@ impl InputSpec {
         }
         if !self.iteration_ops.is_empty() {
             return InputFormatKind::Iter;
+        }
+        if self.ops.iter().any(|op| op.tag == OpTag::LoopJagged) {
+            return InputFormatKind::Jagged;
         }
         if self.ops.iter().any(|op| op.tag == OpTag::LoopBegin) {
             return InputFormatKind::Loop;
@@ -361,6 +372,7 @@ mod input_spec_tests {
                     dim: 0,
                     size: vec![],
                     is_size: false,
+                    is_jagged: false,
                 },
                 VarDecl {
                     name: "a".to_string(),
@@ -369,6 +381,7 @@ mod input_spec_tests {
                     dim: 1,
                     size: vec!["n".to_string()],
                     is_size: false,
+                    is_jagged: false,
                 },
             ],
             ops: vec![
@@ -384,6 +397,9 @@ mod input_spec_tests {
                     loop_var: None,
                     begin: None,
                     end: None,
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
                 },
                 InputOp {
                     tag: OpTag::LoopBegin,
@@ -392,6 +408,9 @@ mod input_spec_tests {
                     loop_var: Some("i".to_string()),
                     begin: Some("0".to_string()),
                     end: Some("n".to_string()),
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
                 },
                 InputOp {
                     tag: OpTag::ReadLine,
@@ -405,6 +424,9 @@ mod input_spec_tests {
                     loop_var: None,
                     begin: None,
                     end: None,
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
                 },
                 InputOp {
                     tag: OpTag::LoopEnd,
@@ -413,6 +435,9 @@ mod input_spec_tests {
                     loop_var: None,
                     begin: None,
                     end: None,
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
                 },
             ],
             query_types: vec![],
@@ -452,6 +477,9 @@ mod input_spec_tests {
             loop_var: Some("i".to_string()),
             begin: Some("0".to_string()),
             end: Some("t".to_string()),
+            scalars: vec![],
+            size_var: None,
+            elem_var: None,
         }
     }
 
@@ -463,6 +491,7 @@ mod input_spec_tests {
             dim: 0,
             size: vec![],
             is_size: false,
+            is_jagged: false,
         }
     }
 
@@ -518,6 +547,9 @@ mod input_spec_tests {
             loop_var: None,
             begin: None,
             end: None,
+            scalars: vec![],
+            size_var: None,
+            elem_var: None,
         }];
         assert_eq!(spec.kind(), InputFormatKind::Iter);
     }
@@ -541,6 +573,9 @@ mod input_spec_tests {
             loop_var: None,
             begin: None,
             end: None,
+            scalars: vec![],
+            size_var: None,
+            elem_var: None,
         }];
         assert_eq!(spec.kind(), InputFormatKind::Plain);
     }
@@ -619,6 +654,9 @@ mod input_spec_tests {
             loop_var: None,
             begin: None,
             end: None,
+            scalars: vec![],
+            size_var: None,
+            elem_var: None,
         }];
         assert_eq!(spec.kind(), InputFormatKind::Triangle);
     }

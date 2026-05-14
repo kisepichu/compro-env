@@ -176,9 +176,10 @@ Initialized abc334 (AtCoder) — 6 problems: a b c d e f
 | 3 | `query_body` が非空 | `query` |
 | 4 | `testcase_body` が非空 | `testcase` |
 | 5 | `triangular` が非空 | `triangle` |
-| 6 | `iteration_ops` が非空 | `iter` |
-| 7 | `ops` に `loop_begin` を含む | `loop` |
-| 8 | それ以外 (`ok=true`、ループなし) | `plain` |
+| 6 | `ops` に `loop_jagged` を含む | `jagged` |
+| 7 | `iteration_ops` が非空 | `iter` |
+| 8 | `ops` に `loop_begin` を含む | `loop` |
+| 9 | それ以外 (`ok=true`、ループなし) | `plain` |
 
 `input_format_raw` が取得できなかった問題は `ok=false` 扱いとして `FAIL` を表示する。
 
@@ -212,7 +213,7 @@ Initialized abc334 (AtCoder) — 6 problems: a b c d e f
 | `input_format.iteration_vars` | 複雑な繰り返し本体の変数リスト (最初に採用された非数値 sub-block にループ・配列が含まれる場合。`query_types`/`query_body`/`testcase_body` が非空のときは空) | パーサー             |
 | `input_format.iteration_ops`  | 複雑な繰り返し本体の読み取り命令列 (`vars`・`ops` と同形式。`query_types`/`query_body`/`testcase_body` が非空のときは空。テンプレートが for ループ内でレンダリングする) | パーサー             |
 
-`input_format.ok` が `false` のとき `vars`・`ops`・`query_types`・`query_body`・`testcase_body`・`iteration_vars`・`iteration_ops` は全て空リスト。テンプレートは `{% if input_format.ok %}` で分岐する。
+`input_format.ok` が `false` のとき `vars`・`ops`・`query_types`・`query_body`・`testcase_body`・`iteration_vars`・`iteration_ops` は全て空リスト (`ops` に `loop_jagged` が含まれることもない)。テンプレートは `{% if input_format.ok %}` で分岐する。
 
 ### 入力形式パース
 
@@ -282,10 +283,21 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │      ※ 先頭に 2D 添字要素が 2 個以上ある拡張形式 (スペースあり: S_{1,1} S_{1,2} \ldots S_{1,W}、スペースなし: S_{1,1}S_{1,2}\ldots S_{1,W}) も対象
   │      ※ cdots 前の追加要素は名前・行インデックス (2D 添字の先頭パーツ) が全要素で一致していること
   │      ※ 追加要素間のスペースは任意 (あり・なし両方対応)
+  │    JaggedRow: vdots ボディの最終行の右端要素が `{row_idx, SIZE_VAR_{row_idx}}` 添字を持つ場合
+  │      ※ 右端添字の形式: LBRACE + row_idx(Num|Ident) + COMMA + Ident(SIZE_VAR) + SUBSCRIPT + row_idx(同値) + RBRACE
+  │      ※ GridRow の `{row_idx, Ident}` (SIZE_VAR が添字なし) とは別パターン
+  │      → SIZE_VAR を jagged サイズ変数として抽出
   │
   ▼  多行グルーピング (block_to_ops)
   │    連続する Array2DRow: 同名・row 添字が 1 始まり連番 → VarDecl(dim=2) + ReadLine(dim=2) 1 命令
   │    (テンプレートは `[[T; cols]; rows]` として proconio で一括読み)
+  │    vdots ボディ末尾行が JaggedRow → loop_jagged op を生成 (QueryLine より優先)
+  │      ボディ = vdots より後に続く行群 (1 行以上)。先行する vdots 前の繰り返し行は無視
+  │      ボディの最終行: JaggedRow (cdots 含む、右端添字が `{row_idx, SIZE_VAR_{row_idx}}`)
+  │      ボディの残り: JaggedRow 行の JaggedRow より前のトークン + ボディの非最終行すべて → スカラー列
+  │        スカラー列には loop-subscript スカラー (loop 変数で添字付き) のみ許容
+  │        SIZE_VAR がスカラー列のいずれかの変数名と一致しなければ ok: false
+  │      loop bound: vdots 末尾行の row subscript (Ident 部分) から決定。normalize_name 済み
   │
   ▼  Semantic Analysis (ブロック[0])
   │    変数テーブル (dim / size 解決)
@@ -293,10 +305,15 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   │    is_size 計算: VarDecl.size 要素と LoopBegin.end から識別子を抽出して判定
   │      算術式 (`"2*n"`, `"n-1"` 等) は英字部分を抽出して対象変数を特定する
   │      例: `"2*n"` → `n` が is_size=true; `"n-1"` → `n` が is_size=true
+  │      loop_jagged の size_var に一致する変数も is_size=true (dim=1 でも同様)
+  │        → テンプレートで dim=1, is_size=true → Vec<usize> として生成
+  │    is_jagged 計算: loop_jagged の elem_var に一致する変数の is_jagged を true に設定
+  │        → テンプレートで dim=1, is_jagged=true → Vec<Vec<T>> として生成
   │    valid_loop_bounds 検証: LoopBegin.end が以下のいずれかならOK、それ以外は ok: false
   │      1. 全桁数字リテラル (例: `"3"`)
   │      2. 宣言済みスカラー変数名 (例: `"n"`, `"q"`)
   │      3. 算術式 — 式中の全ての識別子が宣言済みスカラー変数 (例: `"n-1"`, `"2*n"`, `"2*n-1"`)
+  │      ※ loop_jagged の end も同条件で検証
   │    制約テキストから型推定
   │    subscript → loop_var / begin / end 解決 (0-indexed に正規化)
   │    QueryLine vdots ブロック → LoopBegin(end=<loop_bound>) + LoopEnd (body なし)
@@ -422,7 +439,8 @@ input_format_raw (文字列、複数 pre ブロックは \n\n 区切りで結合
   - dim=0: `[]`
   - dim=1: `["n"]` (可変) または `["3"]` (固定リテラル)
   - dim=2: `["6", "3"]` — `[cols, rows]` の順。両要素とも固定リテラル
-- `is_size`: 他の var の `size` または `loop_begin` の `end` に自分の `name` が現れるなら `true`。テンプレートで `usize` / `Vec<T>` の型決定に使用する。固定リテラルサイズの場合は `is_size` は持たない (変数ではないため)
+- `is_size`: 他の var の `size`、`loop_begin` の `end`、または `loop_jagged` の `size_var` に自分の `name` が現れるなら `true`。dim=0 → `usize`、dim=1 → `Vec<usize>` の型決定に使用する。固定リテラルサイズの場合は `is_size` は持たない (変数ではないため)
+- `is_jagged`: `loop_jagged` の `elem_var` に一致する場合 `true` (デフォルト `false`)。dim=1 かつ `is_jagged=true` → `Vec<Vec<T>>`
 
 #### `ops` の形式 (JSON 例)
 
@@ -483,6 +501,69 @@ VarRef フィールド:
 - `dim == 1`, 一括読み (水平 cdots または固定サイズ): `{"name":"a","dim":1,"size":"n"}` または `{"name":"a","dim":1,"size":"3"}` — 1 行を split して配列全体を読む
 - `dim == 1`, 要素読み (ループ内): `{"name":"a","dim":1,"index":"i"}` — `a[i]` を 1 つ読む
 - `dim == 2` (2D 固定グリッド): `{"name":"a","dim":2}` — サイズは VarDecl.size[0] (cols) と size[1] (rows) から参照。テンプレートは `a: [[T; cols]; rows]` を生成する
+
+ジャギー配列あり (`loop_jagged`) — `loop_begin`/`loop_end` の代わりに `loop_jagged` タグ 1 命令で表現する。`read_line` では表現できないため専用タグを使う。
+
+```json
+[
+  {
+    "tag": "read_line",
+    "depth": 0,
+    "vars": [{ "name": "n", "dim": 0 }]
+  },
+  {
+    "tag": "loop_jagged",
+    "depth": 0,
+    "end": "n",
+    "scalars": [{ "name": "t", "dim": 0 }],
+    "size_var": { "name": "k", "dim": 0 },
+    "elem_var": { "name": "a", "dim": 0 }
+  },
+  {
+    "tag": "read_line",
+    "depth": 0,
+    "vars": [{ "name": "x", "dim": 0 }, { "name": "y", "dim": 0 }]
+  }
+]
+```
+
+`loop_jagged` フィールド:
+
+- `end`: ループ上限 (normalize_name 済みスカラー変数名。宣言済みスカラーであること)
+- `scalars`: ボディ内の SIZE_VAR 以外のスカラー VarRef 列 (0 個以上、出現順)
+- `size_var`: ジャギーサイズ変数の VarRef (SIZE_VAR。`is_size=true` に設定済み)
+- `elem_var`: ジャギー配列変数の VarRef (`is_jagged=true` に設定済み)
+
+テンプレートが生成するコード (abc226_c 形式: `scalars=[t], size_var=k, elem_var=a`):
+
+```rust
+let mut t: Vec<i64> = Vec::new();
+let mut k: Vec<usize> = Vec::new();
+let mut a: Vec<Vec<i64>> = Vec::new();
+for _ in 0..n {
+    input! { ti: i64, ki: usize, }
+    input! { ai: [i64; ki], }
+    t.push(ti);
+    k.push(ki);
+    a.push(ai);
+}
+```
+
+abc457_b 形式 (`scalars=[], size_var=l, elem_var=a`、末尾 `X Y`):
+
+```rust
+let mut l: Vec<usize> = Vec::new();
+let mut a: Vec<Vec<i64>> = Vec::new();
+for _ in 0..n {
+    input! { li: usize, }
+    input! { ai: [i64; li], }
+    l.push(li);
+    a.push(ai);
+}
+input! { x: i64, y: i64, }
+```
+
+proconio の LineSource では `input!` を連続呼び出しすると同一行の残りトークンを続けて消費するため、同行レイアウト (abc457_b、abc226_c) と改行レイアウト (abc446_b) で生成コードは共通になる。
 
 #### `query_types` の形式 (JSON 例)
 
@@ -837,6 +918,9 @@ fn solve(a: Vec<Vec<i64>>) -> String { ... }
 | 複雑な繰り返し本体 (ループマーカー付き、ブロック[1] にループ・配列含む)                             | `T\n\mathrm{case}_T\n\nN K\nA_1 \ldots A_N`                                      | abc456-F, abc456-E           |
 | 上三角行列 (triangular matrix、bound が変数名)                                                       | `N\nA_{1,2}\ldots A_{1,N}\nA_{2,3}\ldots A_{2,N}\n\vdots\nA_{N-1,N}`             | abc451-E                     |
 | 上三角行列 (triangular matrix、bound が算術式 `2N`)                                                  | `N\nA_{1,2} A_{1,3} \cdots A_{1,2N}\nA_{2,3}\cdots A_{2,2N}\n\vdots\nA_{2N-1,2N}` | abc236-D                   |
+| ジャギー配列 (同行レイアウト、スカラー 1 個)                                                         | `N\nL_1 A_{1,1}\ldots A_{1,L_1}\n\vdots\nL_N A_{N,1}\ldots A_{N,L_N}`             | abc457-B                     |
+| ジャギー配列 (改行レイアウト、スカラー 1 個)                                                         | `N M\nL_1\nX_{1,1}\cdots X_{1,L_1}\n\vdots\nL_N\nX_{N,1}\cdots X_{N,L_N}`       | abc446-B                     |
+| ジャギー配列 (同行レイアウト、スカラー 2 個以上)                                                     | `N\nT_1 K_1 A_{1,1}\ldots A_{1,K_1}\n\vdots\nT_N K_N A_{N,1}\ldots A_{N,K_N}`   | abc226-C                     |
 
 **前処理**: `\hspace{0.4cm}\vdots` は `\vdots` に正規化する。また `:` のみの行も `\vdots` と等価に扱う (トークナイザーレベルで正規化)。
 
@@ -861,9 +945,9 @@ fn solve(a: Vec<Vec<i64>>) -> String { ... }
 | 非対応パターン                                                      | 例                                   | 確認問題    |
 | ------------------------------------------------------------------- | ------------------------------------ | ----------- |
 | ループマーカーなし plain-text 添字 (`q_i` など、`\text{}`/`\mathrm{}` もなし) | `Q\nq_1\n:\nq_Q`                       | typical90-L |
-| 可変長行 (行ごとに要素数が異なり、サイズが別変数に依存)                          | `T_i K_i A_{i,1} \ldots A_{i,K_i}`    | abc226-C    |
+| ジャギー配列で SIZE_VAR がスカラー列に存在しない                               | `A_{i,1} \ldots A_{i,K_i}` (K_i 未宣言) | —          |
 | 繰り返し本体 (iteration_ops) 内のネストループ 2 段以上                        | ループ内にさらにループ                 | —           |
-| `{Num,Num}` 以外のカンマ添字                                                  | `A_{i,j}`, `A_{1,N}`                  | —           |
+| `{Num,Num}` 以外のカンマ添字 (JaggedRow / GridRow 以外のコンテキスト)        | `A_{i,j}`, `A_{1,N}`                  | —           |
 | 2D 固定グリッドで行数 1 またはセル数が 1 行の場合                             | 1 行のみ `A_{1,1}...A_{1,6}`          | —           |
 
 ### テンプレート例 (Rust)
