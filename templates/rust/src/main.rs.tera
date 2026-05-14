@@ -169,7 +169,7 @@ fn solve(
     {% if vd.dim == 0 -%}
     {{ vd.name }}: {% if vd.is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
     {%- elif vd.dim == 1 -%}
-    {{ vd.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}>,
+    {{ vd.name }}: {% if vd.is_jagged %}Vec<Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}>>{% elif vd.is_size %}Vec<usize>{% else %}Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}>{% endif %},
     {%- elif vd.dim == 2 -%}
     {{ vd.name }}: Vec<Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}>>,
     {%- endif %}
@@ -344,6 +344,44 @@ fn main() {
         {% endfor -%}
     }
     {% endif -%}
+    {% elif op.tag == "loop_jagged" -%}
+    {% for sv in op.scalars -%}
+    {% set vd = input_format.vars | filter(attribute="name", value=sv.name) | first -%}
+    let mut {{ sv.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}> = Vec::new();
+    {% endfor -%}
+    {% if op.size_var -%}
+    let mut {{ op.size_var.name }}: Vec<usize> = Vec::new();
+    {% endif -%}
+    {% if op.elem_var -%}
+    {% set evd = input_format.vars | filter(attribute="name", value=op.elem_var.name) | first -%}
+    let mut {{ op.elem_var.name }}: Vec<Vec<{% if evd.var_type == "str" %}String{% else %}i64{% endif %}>> = Vec::new();
+    {% endif -%}
+    for _ in 0..{{ op.end }} {
+        {% if op.scalars | length > 0 or op.size_var -%}
+        input! {
+            {% for sv in op.scalars -%}
+            {% set vd = input_format.vars | filter(attribute="name", value=sv.name) | first -%}
+            __tmp_{{ sv.name }}: {% if vd.var_type == "str" %}String{% else %}i64{% endif %},
+            {% endfor -%}
+            {% if op.size_var -%}
+            __tmp_{{ op.size_var.name }}: usize,
+            {% endif -%}
+        }
+        {% endif -%}
+        {% if op.elem_var -%}
+        {% set evd = input_format.vars | filter(attribute="name", value=op.elem_var.name) | first -%}
+        input! { __tmp_{{ op.elem_var.name }}: [{% if evd.var_type == "str" %}String{% else %}i64{% endif %}; __tmp_{{ op.size_var.name }}], }
+        {% endif -%}
+        {% for sv in op.scalars -%}
+        {{ sv.name }}.push(__tmp_{{ sv.name }});
+        {% endfor -%}
+        {% if op.size_var -%}
+        {{ op.size_var.name }}.push(__tmp_{{ op.size_var.name }});
+        {% endif -%}
+        {% if op.elem_var -%}
+        {{ op.elem_var.name }}.push(__tmp_{{ op.elem_var.name }});
+        {% endif -%}
+    }
     {% endif -%}
     {% endfor -%}
     {% if input_format.triangular -%}
@@ -415,7 +453,7 @@ mod tests {
                     {{ tri.name }}.push(_row);
                 }
                 solve({% if input_format.vars %}{{ input_format.vars | map(attribute="name") | join(sep=", ") }}, {% endif %}{{ tri.name }})
-                {% elif input_format.ops | filter(attribute="tag", value="loop_begin") | length > 0 -%}
+                {% elif input_format.ops | filter(attribute="tag", value="loop_begin") | length > 0 or input_format.ops | filter(attribute="tag", value="loop_jagged") | length > 0 -%}
                 // TODO: loop input — test harness with loops is not auto-generated; write manually
                 panic!("TODO: loop input sample test harness is not implemented")
                 {% else -%}
