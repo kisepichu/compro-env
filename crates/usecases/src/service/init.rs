@@ -1,5 +1,5 @@
 use anyhow::Result;
-use domain::entity::{Language, OJKind, Solution};
+use domain::entity::{InputFormatKind, Language, OJKind, Solution};
 
 use super::Service;
 
@@ -17,6 +17,9 @@ pub struct InitResult {
     /// True when the contest was already initialized (`.ce.toml` exists); no
     /// files were modified during this run.
     pub already_initialized: bool,
+    /// Input format kind per problem, in problem order: (problem_code, kind).
+    /// Empty when `already_initialized` is true.
+    pub input_fmt_kinds: Vec<(String, InputFormatKind)>,
 }
 
 impl Service {
@@ -42,6 +45,7 @@ impl Service {
                 created_solutions: vec![],
                 total_sample_files: 0,
                 already_initialized: true,
+                input_fmt_kinds: vec![],
             });
         }
 
@@ -149,6 +153,18 @@ fn build_result(
 ) -> Result<InitResult> {
     let total_sample_files: usize = problems.iter().map(|p| p.samples.len() * 2).sum();
     let oj_kind = oj.clone();
+
+    // Derive input format kinds before moving problems into the Contest.
+    let input_fmt_kinds: Vec<(String, domain::entity::InputFormatKind)> = problems
+        .iter()
+        .map(|p| {
+            let raw = p.input_format_raw.as_deref().unwrap_or("");
+            let constraints = p.constraints_raw.as_deref().unwrap_or("");
+            let spec = crate::input_format::parse(raw, constraints);
+            (p.code.clone(), spec.kind())
+        })
+        .collect();
+
     let contest = domain::entity::Contest {
         id: contest_id.to_string(),
         online_judge: oj,
@@ -183,6 +199,7 @@ fn build_result(
         created_solutions,
         total_sample_files,
         already_initialized: false,
+        input_fmt_kinds,
     })
 }
 
@@ -621,6 +638,51 @@ mod tests {
         assert!(
             msg.contains("no problems found"),
             "expected 'no problems found' in error, got: {msg}"
+        );
+    }
+
+    /// InitResult.input_fmt_kinds has one entry per problem in order.
+    /// Problems with input_format_raw=None → Fail.
+    /// Problems with plain format → Plain.
+    #[test]
+    fn init_result_has_input_fmt_kinds() {
+        use domain::entity::InputFormatKind;
+
+        let mut plain_problem = make_problem("a");
+        plain_problem.input_format_raw = Some("N M\n".to_string());
+
+        let mut fail_problem = make_problem("b");
+        fail_problem.input_format_raw = None;
+
+        let service = make_service(
+            StubOJ {
+                problems: vec![plain_problem, fail_problem],
+                start_time: None,
+            },
+            None,
+            make_contest_repo(),
+            StubSolutionRepo {
+                created: RefCell::new(vec![]),
+            },
+        );
+
+        let result = service
+            .init(
+                "abc001",
+                OJKind::AtCoder,
+                &Language::new("rust"),
+                NO_PROGRESS,
+            )
+            .unwrap();
+
+        assert_eq!(result.input_fmt_kinds.len(), 2);
+        assert_eq!(
+            result.input_fmt_kinds[0],
+            ("a".to_string(), InputFormatKind::Plain)
+        );
+        assert_eq!(
+            result.input_fmt_kinds[1],
+            ("b".to_string(), InputFormatKind::Fail)
         );
     }
 }

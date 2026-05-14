@@ -175,23 +175,53 @@ InputSpec                           ← Value Object (usecases/input_format/ で
   ok: bool                          パース成功フラグ
   vars: Vec<VarDecl>                変数宣言リスト (ok=false のとき空)
   ops: Vec<InputOp>                 読み取り命令列 (ok=false のとき空)
+  query_types: Vec<QueryTypeDecl>   クエリ種別リスト (numbered sub-block がある場合のみ非空; ok=false のとき空)
+                                    ループマーカー認識形式: \text{X}_N / \mathrm{X}_N / query_N / {query}_N ({\rm Query}_N 等; \rm 等の未知コマンドは無視されるため {query}_N に等価)
+  query_body: Vec<VarDecl>          単一形式ループのスカラー本体変数 (非数値先頭 sub-block がある場合のみ非空; ok=false のとき空)
+                                    query_types が非空のときは常に空; iteration_ops が非空のときも常に空
+  testcase_body: Vec<VarDecl>       簡易 T-testcases の本体変数 (block[0]=単一スカラー かつ block[1]=スカラーのみ; ok=false のとき空)
+  iteration_vars: Vec<VarDecl>      複雑な繰り返し本体の変数リスト (最初に採用された非数値 sub-block にループ・配列を含む場合; query_types/query_body/testcase_body が非空のときは空)
+  iteration_ops: Vec<InputOp>       複雑な繰り返し本体の読み取り命令列 (vars/ops と同形式; query_types/query_body/testcase_body が非空のときは空)
+
+InputFormatKind                     ← 導出値 (ce init 出力用、InputSpec から決定)
+  FAIL                              ok=false
+  query({n})                        query_types が非空 (n = 種別数)
+  query                             query_body が非空
+  testcase                          testcase_body が非空
+  jagged                            ops に loop_jagged を含む
+  iter                              iteration_ops が非空
+  loop                              ops に loop_begin を含む (上記いずれも非空でない)
+  plain                             それ以外 (ok=true、ループなし)
+
+QueryTypeDecl                       ← Value Object (クエリ型入力のサブ形式)
+  type_id: String                   クエリ種別番号 ("1", "2", "3")
+  ok: bool                          sub-block のパース成功フラグ
+  vars: Vec<VarDecl>                このクエリ種別のローカル変数 (ok=false のとき空)
+                                    dim は常に 0 (スカラー); is_size は常に false
+                                    var_type は constraints テキストから型推定 (main の vars と同一推定器)
 
 VarDecl                             ← Value Object
   name: String                      コード用変数名 (小文字化、衝突時は大文字のまま)
   math: String                      数学表記の変数名 ("N", "A", "S_X" 等)
   var_type: VarType                 Int | Str | Unknown
-  dim: u8                           0=スカラー, 1=1D配列
+  dim: u8                           0=スカラー, 1=1D配列, 2=2D固定グリッド (size=["cols","rows"])
   size: Vec<String>                 各次元のサイズ式 (小文字化済み変数名)
-  is_size: bool                     他の var の size または LoopBegin の end に自分の name が現れるなら true
-                                    (テンプレートで usize/Vec<T> 等の型決定に使用)
+  is_size: bool                     他の var の size、LoopBegin の end、または loop_jagged の size_var に
+                                    自分の name が現れるなら true
+                                    dim=0 → usize、dim=1 → Vec<usize> の型決定に使用
+  is_jagged: bool                   loop_jagged の elem_var に一致する場合 true (デフォルト false)
+                                    dim=1 かつ is_jagged=true → Vec<Vec<T>>
 
 InputOp                             ← Value Object
-  tag: OpTag                        ReadLine | LoopBegin | LoopEnd
+  tag: OpTag                        ReadLine | LoopBegin | LoopEnd | LoopJagged
   depth: u8                         ネスト深さ
   vars: Vec<VarRef>                 ReadLine 時のみ有効
   loop_var: Option<String>          LoopBegin 時のみ有効
   begin: Option<String>             LoopBegin 時のみ有効 (常に "0")
-  end: Option<String>               LoopBegin 時のみ有効 (小文字化済み変数名)
+  end: Option<String>               LoopBegin / LoopJagged 時のみ有効 (小文字化済み変数名)
+  scalars: Option<Vec<VarRef>>      LoopJagged 時のみ有効 (SIZE_VAR 以外の per-row スカラー列)
+  size_var: Option<VarRef>          LoopJagged 時のみ有効 (ジャギーサイズ変数)
+  elem_var: Option<VarRef>          LoopJagged 時のみ有効 (ジャギー配列変数)
 
 VarRef                              ← Value Object
   name: String
@@ -363,11 +393,17 @@ infrastructure/
 
 | 非対応パターン | 確認問題 |
 | --- | --- |
-| クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 (`\text{}` マーカーなし) | typical90-L |
+| クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 (ループマーカーなし) | typical90-L |
 | T-testcases 型: pre[0]=`T` 単独 + pre[1]=ケース形式 | abc238-D |
-| 可変長行: `T_i K_i A_{i,1} \ldots A_{i,K_i}` | abc226-C |
-| 斜め・上三角行列: 行ごとに長さが異なる | abc236-D |
+| ジャギー配列で SIZE_VAR がスカラー列に存在しない | — |
+| 斜め・上三角行列: 行ごとに長さが異なる (カンマ添字内の算術式 `{2N-1, 2N}` 等) | abc236-D |
 | ネストループ 2段以上 | — |
+
+**Phase 1 対応済み** (以前は非対応だったが対応済み):
+- 算術式添字 (`{2N}`, `{N-1}`, `{N+1}`, `{2N-1}` 等): 配列サイズ・ループ上限として使用可能
+  - `{NumIdent}` → `*` を自動挿入 (例: `{2N}` → `2*n`)
+  - `{Ident±Num}` → 演算子を保持 (例: `{N-1}` → `n-1`)
+- ジャギー配列 (vdots ボディ末尾行の右端添字 `{row_idx, SIZE_VAR_{row_idx}}` で検出): abc226-C, abc446-B, abc457-B
 
 ---
 

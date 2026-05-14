@@ -506,4 +506,59 @@ mod tests {
         );
         assert!(contents.contains(".push("), "expected push: {contents}");
     }
+
+    #[test]
+    #[serial]
+    fn create_generates_triangular_loop_for_upper_triangular_matrix() {
+        let dir = setup_temp_root_with_real_main_template();
+        let root = dir.path();
+        let repo = SolutionRepositoryImpl::new(root.to_path_buf());
+
+        let solution = make_solution("abc451", "e", "main", Language::new("rust"));
+        // abc451_e style: upper triangular matrix, bound = n
+        repo.create(
+            &solution,
+            &[],
+            "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N}",
+            "All input values are integers",
+        )
+        .unwrap();
+
+        let main_rs = root.join("solutions/abc451/e/main/src/main.rs");
+        let contents = fs::read_to_string(&main_rs).unwrap();
+
+        assert!(
+            contents.contains("Vec<Vec<i64>>"),
+            "expected Vec<Vec<i64>> for triangular matrix, got:\n{contents}"
+        );
+        assert!(
+            contents.contains("for _i in 0..n-1"),
+            "expected triangular reading loop 'for _i in 0..n-1', got:\n{contents}"
+        );
+        assert!(
+            contents.contains("n-1-_i"),
+            "expected row-length expression 'n-1-_i', got:\n{contents}"
+        );
+        assert!(
+            contents.contains("a.push("),
+            "expected 'a.push(' for triangular accumulation, got:\n{contents}"
+        );
+        assert!(
+            contents.contains("solve(n, a)"),
+            "expected 'solve(n, a)' call in main, got:\n{contents}"
+        );
+        assert!(
+            contents.contains("fn solve("),
+            "expected plain 'fn solve(' signature, got:\n{contents}"
+        );
+        // test harness must not contain any panic stub
+        assert!(
+            !contents.contains("panic!"),
+            "expected no panic! in generated code (real LineSource harness), got:\n{contents}"
+        );
+        assert!(
+            contents.contains("LineSource"),
+            "expected LineSource in test harness for triangular, got:\n{contents}"
+        );
+    }
 }

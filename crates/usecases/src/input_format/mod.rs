@@ -1,4 +1,6 @@
-use domain::entity::{InputOp, InputSpec, OpTag, VarDecl, VarRef, VarType};
+use domain::entity::{
+    InputOp, InputSpec, OpTag, QueryTypeDecl, TriangularSpec, VarDecl, VarRef, VarType,
+};
 
 // ── Lexer ──────────────────────────────────────────────────────────────────────
 
@@ -10,6 +12,9 @@ enum Token {
     LBrace,
     RBrace,
     Comma,
+    Plus,
+    Minus,
+    Star,
     Cdots,
     Vdots,
     Space,
@@ -44,6 +49,18 @@ fn tokenize_line(line: &str) -> Vec<Token> {
             ',' => {
                 chars.next();
                 tokens.push(Token::Comma);
+            }
+            '+' => {
+                chars.next();
+                tokens.push(Token::Plus);
+            }
+            '-' => {
+                chars.next();
+                tokens.push(Token::Minus);
+            }
+            '*' => {
+                chars.next();
+                tokens.push(Token::Star);
             }
             '.' => {
                 // Count dots
@@ -177,6 +194,23 @@ enum RawLine {
     /// Signals a Q-iteration loop of queries; `loop_bound` is the subscript variable
     /// (e.g. "Q" from `\text{query}_Q`).
     QueryLine { loop_bound: String },
+    /// One row of a fixed 2D grid: A_{row,1} A_{row,2} ... A_{row,cols}
+    /// All elements share the same base name and fixed row index; col subscripts are 1-based sequential.
+    Array2DRow {
+        name: String,
+        row_idx: String,
+        col_count: usize,
+    },
+    /// A jagged-array row: optional scalar vars followed by an array whose last element has
+    /// subscript `{row_idx, SIZE_VAR_{row_idx}}`.
+    /// Example: `L_N A_{N,1} ... A_{N,L_N}` → row_idx="N", size_var_math="L", elem_var_math="A",
+    ///          scalars_before=[RawVar { math:"L", subscript:Some("N") }]
+    JaggedRow {
+        row_idx: String,
+        size_var_math: String,
+        elem_var_math: String,
+        scalars_before: Vec<RawVar>,
+    },
 }
 
 /// Parse errors cause ok=false
@@ -184,6 +218,13 @@ enum RawLine {
 enum ParseError {
     NonNumericSubscript,
     Unknown,
+}
+
+/// Returns true when `s` is the literal word "query" (case-insensitive).
+/// Used by `parse_line` for QueryLine detection; `has_query_marker` is consistent
+/// by delegating to `parse_line` rather than calling this directly.
+fn is_query_ident(s: &str) -> bool {
+    s.eq_ignore_ascii_case("query")
 }
 
 fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
@@ -198,28 +239,87 @@ fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
         return Ok(RawLine::Scalars(vec![]));
     }
 
-    // Check for \text{} or \mathrm{} tokens → query placeholder line.
-    // A valid query line is exactly: \text{...}_<subscript> or \mathrm{...}_<subscript>.
-    // Anything else (extra tokens, missing subscript) falls through to Err.
-    let query_pos = tokens.iter().position(
+    // Strip leading `{Ident}` grouping (e.g. `{\rm Query}_Q` where \rm is ignored by the
+    // tokenizer, leaving `[LBrace, Space, Ident("Query"), RBrace, ...]`).
+    // If tokens start with `{` and the content up to the first `}` contains exactly one
+    // Ident (and nothing else besides spaces), unwrap the braces so downstream detection
+    // (plain_query_pos) sees `[Ident(...), ...]` directly.
+    let tokens = if tokens.first() == Some(&Token::LBrace) {
+        if let Some(rbrace_rel) = tokens[1..].iter().position(|t| t == &Token::RBrace) {
+            let inner = &tokens[1..1 + rbrace_rel]; // tokens between { and }
+            let mut non_space = inner.iter().filter(|t| **t != Token::Space);
+            let sole = non_space.next().cloned(); // first non-space token (cloned eagerly)
+            let has_more = non_space.next().is_some(); // ensure it's the only one
+            if !has_more {
+                if let Some(Token::Ident(_)) = &sole {
+                    let mut unwrapped = vec![sole.unwrap()];
+                    unwrapped.extend_from_slice(&tokens[1 + rbrace_rel + 1..]);
+                    unwrapped
+                } else {
+                    tokens
+                }
+            } else {
+                tokens
+            }
+        } else {
+            tokens
+        }
+    } else {
+        tokens
+    };
+
+    // Check for LaTeX query placeholder tokens → QueryLine.
+    // \text{...} / \mathrm{...} must be followed by _<subscript>; without one → malformed error.
+    let latex_query_pos = tokens.iter().position(
         |t| matches!(t, Token::Ident(s) if s.starts_with("\\text{") || s.starts_with("\\mathrm{")),
     );
-    if let Some(pos) = query_pos {
-        // Must be the only meaningful token (at position 0 after strip_spaces)
+    if let Some(pos) = latex_query_pos {
         if pos != 0 {
             return Err(ParseError::Unknown);
         }
-        // Expect: _<subscript> and nothing after
         if tokens.get(pos + 1) == Some(&Token::Subscript) {
             let (loop_bound, advance) =
                 read_subscript_value(&tokens[pos + 2..]).ok_or(ParseError::Unknown)?;
-            // Nothing should follow
             if pos + 2 + advance != tokens.len() {
                 return Err(ParseError::Unknown);
             }
             return Ok(RawLine::QueryLine { loop_bound });
         }
-        return Err(ParseError::Unknown);
+        return Err(ParseError::Unknown); // LaTeX query form without subscript is malformed
+    }
+
+    // Check for plain-text "query" as a query marker, but only when followed by _<subscript>.
+    // Without a subscript, fall through to normal scalar parsing so that a variable literally
+    // named `query` is not misidentified as a loop marker.
+    let plain_query_pos = tokens.iter().enumerate().find_map(|(i, t)| {
+        if let Token::Ident(s) = t {
+            if is_query_ident(s) && tokens.get(i + 1) == Some(&Token::Subscript) {
+                Some(i)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    });
+    if let Some(pos) = plain_query_pos {
+        if pos != 0 {
+            return Err(ParseError::Unknown);
+        }
+        // tokens[pos+1] is Token::Subscript (guaranteed by find_map above)
+        let (loop_bound, advance) =
+            read_subscript_value(&tokens[pos + 2..]).ok_or(ParseError::Unknown)?;
+        if pos + 2 + advance != tokens.len() {
+            return Err(ParseError::Unknown);
+        }
+        return Ok(RawLine::QueryLine { loop_bound });
+    }
+
+    // Try to detect a jagged-array row: optional scalars + elem_{row_idx,1} ... elem_{row_idx,SIZE_{row_idx}}
+    // Must be checked BEFORE try_parse_grid_row because the grid detector can match some jagged
+    // patterns (e.g. X_{1,1} ... X_{1,L_1} looks like a GridRow with subscript "1").
+    if let Some(result) = try_parse_jagged_row(&tokens) {
+        return result;
     }
 
     // Try to detect a character grid row: X_{row,col_start}...X_{row,col_end}
@@ -228,9 +328,20 @@ fn parse_line(tokens: &[Token]) -> Result<RawLine, ParseError> {
         return result;
     }
 
+    // Try to detect a fixed 2D grid row: A_{row,1} A_{row,2} ... A_{row,cols}
+    // (before array1d and array1d_no_cdots, since comma subscripts look like multi-subscript vars)
+    if let Some(result) = try_parse_array2d_row(&tokens) {
+        return result;
+    }
+
     // Try to detect 1D horizontal array: pattern like Ident_Num ... Ident_Num [Cdots] Ident_Num
     // or Ident_Num Space Ident_Num Space Cdots
     if let Some(result) = try_parse_array1d(&tokens) {
+        return result;
+    }
+
+    // Try to detect 1D fixed array without cdots: A_1 A_2 A_3
+    if let Some(result) = try_parse_array1d_no_cdots(&tokens) {
         return result;
     }
 
@@ -327,6 +438,147 @@ fn try_parse_array1d(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
     }
 }
 
+/// Try to detect a fixed-size 1D array without cdots: `A_1 A_2 A_3`
+/// Requires ≥ 2 elements, same base name, numeric subscripts sequential from 1.
+/// Returns Some(Ok(Array1D { size: last_idx })) when matched, None otherwise.
+fn try_parse_array1d_no_cdots(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
+    // Must not contain Cdots (those are handled by try_parse_array1d)
+    if tokens.contains(&Token::Cdots) {
+        return None;
+    }
+
+    let mut base_name: Option<String> = None;
+    let mut subscripts: Vec<u64> = Vec::new();
+    let mut need_separator = false;
+    let mut i = 0;
+
+    while i < tokens.len() {
+        match &tokens[i] {
+            Token::Space => {
+                need_separator = false;
+                i += 1;
+            }
+            Token::Ident(name) => {
+                // Adjacent elements without a Space between them → unsupported
+                // (consistent with "空白なし隣接要素 → ok:false" rule).
+                if need_separator {
+                    return Some(Err(ParseError::Unknown));
+                }
+                // Must have a subscript next
+                if i + 1 >= tokens.len() || tokens[i + 1] != Token::Subscript {
+                    return None;
+                }
+                let (sub, advance) = read_subscript_value(&tokens[i + 2..])?;
+                i += 2 + advance;
+
+                // Subscript must be a pure numeric literal (no commas)
+                let n: u64 = sub.parse().ok()?;
+
+                // Base name must be consistent
+                match &base_name {
+                    None => base_name = Some(name.clone()),
+                    Some(bn) if bn != name => return None,
+                    _ => {}
+                }
+                subscripts.push(n);
+                need_separator = true;
+            }
+            _ => return None,
+        }
+    }
+
+    let base = base_name?;
+    if subscripts.len() < 2 {
+        return None;
+    }
+
+    // Subscripts must be sequential starting from 1
+    let expected: Vec<u64> = (1..=subscripts.len() as u64).collect();
+    if subscripts != expected {
+        return None;
+    }
+
+    let size = subscripts.last()?.to_string();
+    Some(Ok(RawLine::Array1D { name: base, size }))
+}
+
+/// Try to detect one row of a fixed 2D grid: `A_{row,1} A_{row,2} ... A_{row,cols}`
+/// Requires ≥ 2 elements, same base name, fixed row subscript (numeric), col subscripts sequential from 1.
+/// Returns Some(Ok(Array2DRow { ... })) when matched, None otherwise.
+fn try_parse_array2d_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
+    // Must not contain Cdots
+    if tokens.contains(&Token::Cdots) {
+        return None;
+    }
+
+    let mut base_name: Option<String> = None;
+    let mut row_idx: Option<String> = None;
+    let mut col_count: usize = 0;
+    let mut need_separator = false;
+    let mut i = 0;
+
+    while i < tokens.len() {
+        match &tokens[i] {
+            Token::Space => {
+                need_separator = false;
+                i += 1;
+            }
+            Token::Ident(name) => {
+                // Adjacent elements without a Space token between them → unsupported
+                // (consistent with "空白なし隣接要素 → ok:false" rule).
+                if need_separator {
+                    return Some(Err(ParseError::Unknown));
+                }
+                // Must have a subscript next
+                if i + 1 >= tokens.len() || tokens[i + 1] != Token::Subscript {
+                    return None;
+                }
+                let (sub, advance) = read_subscript_value(&tokens[i + 2..])?;
+                i += 2 + advance;
+
+                // Subscript must be "row,col" form (both numeric)
+                let (row_s, col_s) = sub.split_once(',')?;
+                let _row_n: u64 = row_s.parse().ok()?;
+                let col_n: u64 = col_s.parse().ok()?;
+
+                // Base name consistent
+                match &base_name {
+                    None => base_name = Some(name.clone()),
+                    Some(bn) if bn != name => return None,
+                    _ => {}
+                }
+
+                // Row idx consistent
+                match &row_idx {
+                    None => row_idx = Some(row_s.to_string()),
+                    Some(r) if r != row_s => return None,
+                    _ => {}
+                }
+
+                // Col must be sequential from 1
+                col_count += 1;
+                if col_n != col_count as u64 {
+                    return None;
+                }
+                need_separator = true;
+            }
+            _ => return None,
+        }
+    }
+
+    let name = base_name?;
+    let row = row_idx?;
+    if col_count < 2 {
+        return None;
+    }
+
+    Some(Ok(RawLine::Array2DRow {
+        name,
+        row_idx: row,
+        col_count,
+    }))
+}
+
 /// Try to detect a character grid row: `X_{row col_start} ... X_{row col_end}`
 /// Returns Some(Ok(GridRow)) when the whole line is exactly this pattern.
 /// Returns None when not applicable (falls through to parse_var_list).
@@ -357,14 +609,36 @@ fn try_parse_grid_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
     let (row_start, advance1, is_2d_1) = read_2d_subscript_row_part(&tokens[i..])?;
     i += advance1;
 
-    // Skip spaces, then Cdots
-    while tokens.get(i) == Some(&Token::Space) {
-        i += 1;
-    }
-    if tokens.get(i) != Some(&Token::Cdots) {
+    // Consume any additional prefix elements before Cdots.
+    // e.g. S_{1,1} S_{1,2} \ldots S_{1,W} — the S_{1,2} must be consumed before Cdots.
+    // Both space-separated and no-space adjacent prefix elements are recognized.
+    loop {
+        while tokens.get(i) == Some(&Token::Space) {
+            i += 1;
+        }
+        // If next is Cdots, break out to existing logic (no space required before Cdots).
+        if tokens.get(i) == Some(&Token::Cdots) {
+            break;
+        }
+        // If next is Ident(same name), try to consume as an extra prefix element.
+        if let Some(Token::Ident(n)) = tokens.get(i)
+            && n == &first_name
+        {
+            let j = i + 1;
+            if tokens.get(j) == Some(&Token::Subscript)
+                && let Some((extra_row, adv, extra_is_2d)) =
+                    read_2d_subscript_row_part(&tokens[j + 1..])
+                && extra_is_2d
+                && extra_row == row_start
+            {
+                i = j + 1 + adv;
+                continue;
+            }
+        }
+        // Not Cdots and not a matching extra prefix element — not a GridRow.
         return None;
     }
-    i += 1;
+    i += 1; // consume Cdots
     while tokens.get(i) == Some(&Token::Space) {
         i += 1;
     }
@@ -412,6 +686,220 @@ fn try_parse_grid_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
         math: first_name,
         subscript: Some(row_part),
     })))
+}
+
+/// Detect a jagged-array line: optional loop-subscripted scalars followed by a 1D array whose
+/// last element's subscript has the form `{row_idx, SIZE_VAR_{row_idx}}`.
+///
+/// Pattern for the jagged part (tokens at position `p`):
+///   `Ident(elem) Subscript LBrace Ident(row_idx) Comma Ident(size_var) Subscript Ident(row_idx) RBrace`
+/// preceded by `Cdots` and optionally a space.
+///
+/// Scalars before the cdots segment must be loop-subscripted vars with the same `row_idx`.
+fn try_parse_jagged_row(tokens: &[Token]) -> Option<Result<RawLine, ParseError>> {
+    // Must contain Cdots
+    if !tokens.contains(&Token::Cdots) {
+        return None;
+    }
+
+    // Find the suffix pattern: Cdots [Space] Ident(elem) _ { row_idx , size_var _ row_idx }
+    // We scan from the end backwards to find the closing RBrace of {row_idx, size_var_row_idx}.
+    // The structure at the end must be:
+    //   ... Cdots [Space] Ident Subscript LBrace Ident Comma Ident Subscript Ident RBrace
+    //                                             row_idx      size_var      row_idx
+    let n = tokens.len();
+    // Minimum suffix length (no space): Cdots(1) Ident(1) _(1) {(1) Ident(1) ,(1) Ident(1) _(1) Ident(1) }(1) = 10
+    if n < 10 {
+        return None;
+    }
+
+    // Work backwards: find the last RBrace and check the suffix
+    // Tokens at positions n-10..n (no-space variant) or n-11..n (with space after Cdots)
+    // Let's just scan for the required suffix pattern programmatically.
+
+    // Scan from the right: we expect the last 9 tokens (excluding possible Space) to be:
+    //   Ident(elem) Subscript LBrace Ident(row) Comma Ident(size) Subscript Ident(row) RBrace
+    let suffix_start = {
+        let mut found = None;
+        // Try without space: tokens[p..p+9] is the suffix, preceded by Cdots at tokens[p-1]
+        // Try with space: tokens[p..p+9] is the suffix, preceded by Space at tokens[p-1] and Cdots at tokens[p-2]
+        for p in 0..n {
+            if n - p < 9 {
+                break;
+            }
+            // Check if tokens[p..p+9] matches:
+            //   Ident _ { (Ident|Num) , Ident _ (Ident|Num) }
+            // The row_idx positions (3 and 7) can be either Ident or Num (e.g. "1" or "N").
+            let slice = &tokens[p..p + 9];
+            let is_ident_or_num = |t: &Token| matches!(t, Token::Ident(_) | Token::Num(_));
+            let matches_suffix = matches!(&slice[0], Token::Ident(_))
+                && slice[1] == Token::Subscript
+                && slice[2] == Token::LBrace
+                && is_ident_or_num(&slice[3])
+                && slice[4] == Token::Comma
+                && matches!(&slice[5], Token::Ident(_))
+                && slice[6] == Token::Subscript
+                && is_ident_or_num(&slice[7])
+                && p + 9 == n; // must be at the end
+            if !matches_suffix {
+                continue;
+            }
+            // Extract names
+            let elem_name = match &slice[0] {
+                Token::Ident(s) => s.clone(),
+                _ => unreachable!(),
+            };
+            let row_idx_1 = match &slice[3] {
+                Token::Ident(s) | Token::Num(s) => s.clone(),
+                _ => unreachable!(),
+            };
+            let size_var = match &slice[5] {
+                Token::Ident(s) => s.clone(),
+                _ => unreachable!(),
+            };
+            let row_idx_2 = match &slice[7] {
+                Token::Ident(s) | Token::Num(s) => s.clone(),
+                _ => unreachable!(),
+            };
+            // row_idx must match on both sides
+            if row_idx_1 != row_idx_2 {
+                continue;
+            }
+            // The tokens before p must end with: ... Cdots [Space]
+            // i.e. tokens[p-1] == Space && tokens[p-2] == Cdots, or tokens[p-1] == Cdots
+            let cdots_pos =
+                if p >= 2 && tokens[p - 1] == Token::Space && tokens[p - 2] == Token::Cdots {
+                    p - 2
+                } else if p >= 1 && tokens[p - 1] == Token::Cdots {
+                    p - 1
+                } else {
+                    continue;
+                };
+            found = Some((p, elem_name, row_idx_1, size_var, cdots_pos));
+            break;
+        }
+        found
+    }?;
+
+    let (_suffix_pos, elem_var_math, row_idx, size_var_math, cdots_pos) = suffix_start;
+
+    // Everything before cdots_pos: should be optional prefix of loop-subscripted scalars
+    // plus the start of the jagged array (elem__{row_idx,1} ... style before cdots).
+    // We need to parse the prefix tokens[0..cdots_pos] for:
+    //   - scalars: zero or more `Ident _ Ident(row_idx)` separated by spaces
+    //   - the first element of the jagged array: `Ident(elem) _ { row_idx , Num }` or similar
+    //     (we don't strictly require it — presence of cdots + suffix is enough)
+    // For simplicity: parse prefix as space-separated subscripted scalars where all subscripts == row_idx.
+    // Allow the elem var to appear as first element too (it won't be added to scalars_before).
+
+    let prefix = &tokens[..cdots_pos];
+    let prefix = if prefix.last() == Some(&Token::Space) {
+        &prefix[..prefix.len() - 1]
+    } else {
+        prefix
+    };
+
+    // Parse prefix: space-separated vars of the form `Ident _ Subscript_value`
+    // The subscript_value may be:
+    //   - Simple: Ident(row_idx) or Num(row_idx) — a scalar with that row index
+    //   - 2D start: `{ (Ident|Num) , (Num|Ident) }` — the first element of the jagged array
+    //     (e.g. A_{N,1} or A_{1,1}). We identify this as the elem_var's first occurrence.
+    // We extract only the scalars_before (non-elem vars with subscript == row_idx).
+    let mut scalars_before: Vec<RawVar> = Vec::new();
+    let mut pi = 0;
+    let prefix = strip_spaces(prefix);
+    let prefix = prefix.as_slice();
+    while pi < prefix.len() {
+        // Skip spaces
+        while pi < prefix.len() && prefix[pi] == Token::Space {
+            pi += 1;
+        }
+        if pi >= prefix.len() {
+            break;
+        }
+        // Expect Ident
+        let var_name = match &prefix[pi] {
+            Token::Ident(s) => s.clone(),
+            _ => return Some(Err(ParseError::Unknown)),
+        };
+        pi += 1;
+        // Expect Subscript
+        if pi >= prefix.len() || prefix[pi] != Token::Subscript {
+            return Some(Err(ParseError::Unknown));
+        }
+        pi += 1;
+
+        // Try to read a 2D `{ row_idx , col }` subscript first (for elem_var first occurrence).
+        // read_subscript_value returns None for `{Ident,Num}` patterns, so we handle it specially.
+        if prefix.get(pi) == Some(&Token::LBrace) {
+            // Check pattern: { (Ident|Num) , (Ident|Num) }  (any combination with a comma)
+            let brace_match = if let (
+                Some(Token::LBrace),
+                Some(Token::Ident(_) | Token::Num(_)),
+                Some(Token::Comma),
+                Some(Token::Ident(_) | Token::Num(_)),
+                Some(Token::RBrace),
+            ) = (
+                prefix.get(pi),
+                prefix.get(pi + 1),
+                prefix.get(pi + 2),
+                prefix.get(pi + 3),
+                prefix.get(pi + 4),
+            ) {
+                let row_part = match &prefix[pi + 1] {
+                    Token::Ident(s) | Token::Num(s) => s.clone(),
+                    _ => unreachable!(),
+                };
+                Some((row_part, 5usize))
+            } else {
+                None
+            };
+
+            if let Some((brace_row, advance)) = brace_match {
+                pi += advance;
+                // If this is the elem_var and the row part matches row_idx, skip it
+                if var_name == elem_var_math && brace_row == row_idx {
+                    continue;
+                }
+                // Otherwise treat as unexpected — not a valid prefix var
+                return None;
+            }
+            // Fall through to read_subscript_value for other brace patterns
+            let (sub_val, advance) = read_subscript_value(&prefix[pi..])?;
+            pi += advance;
+            if sub_val == row_idx {
+                scalars_before.push(RawVar {
+                    math: var_name,
+                    subscript: Some(row_idx.clone()),
+                });
+            } else {
+                return None;
+            }
+        } else {
+            // Simple subscript: Ident or Num
+            let (sub_val, advance) = match read_subscript_value(&prefix[pi..]) {
+                Some(r) => r,
+                None => return Some(Err(ParseError::Unknown)),
+            };
+            pi += advance;
+            if sub_val == row_idx {
+                scalars_before.push(RawVar {
+                    math: var_name,
+                    subscript: Some(row_idx.clone()),
+                });
+            } else {
+                // Unexpected subscript — not a valid jagged row prefix
+                return None;
+            }
+        }
+    }
+
+    Some(Ok(RawLine::JaggedRow {
+        row_idx,
+        size_var_math,
+        elem_var_math,
+        scalars_before,
+    }))
 }
 
 /// Read a subscript brace `{content}` and return `(row_part, tokens_consumed, is_2d)`.
@@ -493,9 +981,43 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
         Some(Token::Num(n)) => Some((n.clone(), 1)),
         Some(Token::Ident(s)) => Some((s.clone(), 1)),
         Some(Token::LBrace) => {
-            // Read until matching RBrace, collecting content
+            // Read until matching RBrace.
+            //
+            // Two modes depending on whether a Comma is found:
+            //
+            // Comma mode — collect comma-separated parts (for 2D subscripts):
+            //   {Num} or {Ident}    → single subscript value
+            //   {Num,Num}           → 2D numeric: "row,col" for Array2DRow
+            //   {Num,Ident} etc.    → None (unsupported)
+            //
+            // Arithmetic mode (no Comma) — build an expression string:
+            //   Adjacent Num then Ident (no operator between) → insert "*"
+            //   Plus/Minus/Star → append the operator character as-is
+            //   Ident tokens are kept in their original case; lowercasing is deferred to
+            //   normalize_expr() in the resolve phase so that collision-avoidance
+            //   (normalize_name keeps uppercase when N and n coexist) is respected.
+            //   Examples: {2N} → "2*N", {N-1} → "N-1", {2N-1} → "2*N-1"
+            //   Invalid expressions (trailing/leading/consecutive operators) → None
             let mut depth = 1;
-            let mut content_parts: Vec<String> = Vec::new();
+            let mut has_comma = false;
+            // Set to true when an operator (Plus/Minus/Star) is encountered anywhere inside
+            // the braces. Used to reject mixed comma+operator subscripts like {1-1,2}.
+            let mut has_operator = false;
+            // Arithmetic expression builder
+            let mut expr = String::new();
+            // Track the last "kind" of token appended to expr:
+            //   0 = nothing / last was operator, 1 = Num, 2 = Ident
+            // Used to detect implicit multiplication and to validate expression structure
+            // (no leading operator, no consecutive operators, no trailing operator).
+            let mut last_kind: u8 = 0;
+            // Set when an invalid operator position is detected (leading, consecutive, etc.)
+            let mut invalid_expr = false;
+            // For comma mode
+            let mut parts: Vec<String> = Vec::new();
+            let mut current: Option<String> = None;
+            let mut has_ident = false;
+            let mut has_empty_part = false;
+            let mut closed = false;
             let mut i = 1;
             while i < tokens.len() && depth > 0 {
                 match &tokens[i] {
@@ -505,30 +1027,128 @@ fn read_subscript_value(tokens: &[Token]) -> Option<(String, usize)> {
                     }
                     Token::RBrace => {
                         depth -= 1;
-                        i += 1;
-                    }
-                    Token::Num(n) => {
-                        content_parts.push(n.clone());
-                        i += 1;
-                    }
-                    Token::Ident(s) => {
-                        content_parts.push(s.clone());
+                        if depth == 0 {
+                            closed = true;
+                            // Trailing comma: parts exist but current is empty
+                            if has_comma && !parts.is_empty() && current.is_none() {
+                                has_empty_part = true;
+                            }
+                            if let Some(s) = current.take() {
+                                parts.push(s);
+                            }
+                        }
                         i += 1;
                     }
                     Token::Comma => {
-                        // A_{1,1} style — not supported (phase 2)
-                        return None;
+                        has_comma = true;
+                        // Leading or consecutive comma → empty part before this separator
+                        if current.is_none() {
+                            has_empty_part = true;
+                        }
+                        if let Some(s) = current.take() {
+                            parts.push(s);
+                        }
+                        i += 1;
+                    }
+                    Token::Num(n) => {
+                        if !has_comma {
+                            // Arithmetic mode: insert "*" when Ident precedes Num
+                            // (last_kind == 2). Space tokens inside braces are silently
+                            // skipped without resetting last_kind, so "N 2" and "N2"
+                            // both trigger this branch.
+                            // Note: in practice the lexer merges alphanumeric runs into
+                            // a single Ident (e.g. "N2" → Ident("N2")), so the bare
+                            // Ident→Num adjacency path primarily fires when whitespace
+                            // separates them inside braces; the branch also serves as a
+                            // safety net for future lexer changes.
+                            if last_kind == 2 {
+                                expr.push('*');
+                            }
+                            expr.push_str(n);
+                            last_kind = 1;
+                        }
+                        current = Some(current.map_or_else(|| n.clone(), |c| c + n));
+                        i += 1;
+                    }
+                    Token::Ident(s) => {
+                        has_ident = true;
+                        if !has_comma {
+                            // Arithmetic mode: insert "*" when Num precedes Ident.
+                            // Example: {2N} → Num("2") then Ident("N") → "2*n".
+                            if last_kind == 1 {
+                                expr.push('*');
+                            }
+                            expr.push_str(s);
+                            last_kind = 2;
+                        }
+                        current = Some(current.map_or_else(|| s.clone(), |c| c + s));
+                        i += 1;
+                    }
+                    Token::Plus => {
+                        has_operator = true;
+                        if !has_comma {
+                            // Leading or consecutive operator → invalid expression.
+                            if last_kind == 0 {
+                                invalid_expr = true;
+                            }
+                            expr.push('+');
+                            last_kind = 0;
+                        }
+                        i += 1;
+                    }
+                    Token::Minus => {
+                        has_operator = true;
+                        if !has_comma {
+                            if last_kind == 0 {
+                                invalid_expr = true;
+                            }
+                            expr.push('-');
+                            last_kind = 0;
+                        }
+                        i += 1;
+                    }
+                    Token::Star => {
+                        has_operator = true;
+                        if !has_comma {
+                            if last_kind == 0 {
+                                invalid_expr = true;
+                            }
+                            expr.push('*');
+                            last_kind = 0;
+                        }
+                        i += 1;
                     }
                     _ => {
                         i += 1;
                     }
                 }
             }
-            if content_parts.len() == 1 {
-                Some((content_parts[0].clone(), i))
+            if !closed || has_empty_part {
+                return None;
+            }
+            // If a comma was found, use the original comma-separated logic.
+            // Reject mixed comma+operator subscripts (e.g. {1-1,2}) to prevent
+            // silent corruption of the subscript value.
+            if has_comma {
+                if has_operator {
+                    return None;
+                }
+                match parts.len() {
+                    1 => Some((parts.remove(0), i)),
+                    2 if !has_ident => {
+                        // {Num,Num} — 2D numeric subscript, returned as "row,col"
+                        Some((format!("{},{}", parts[0], parts[1]), i))
+                    }
+                    _ => None, // Ident parts or 3+ parts → unsupported
+                }
             } else {
-                // Multiple parts (comma-separated) — not handled
-                None
+                // Arithmetic mode: return the expression string built above.
+                // Reject empty, trailing-operator ({N-}), or invalid ({2**N}) expressions.
+                if expr.is_empty() || last_kind == 0 || invalid_expr {
+                    None
+                } else {
+                    Some((expr, i))
+                }
             }
         }
         _ => None,
@@ -551,6 +1171,12 @@ fn parse_var_list(tokens: &[Token]) -> Result<RawLine, ParseError> {
                 if i + 1 < tokens.len() && tokens[i + 1] == Token::Subscript {
                     let (sub, advance) =
                         read_subscript_value(&tokens[i + 2..]).ok_or(ParseError::Unknown)?;
+                    // Comma-containing subscripts (e.g. "1,2" from A_{1,2}) must not reach
+                    // name normalization — they would generate invalid Rust identifiers.
+                    // Such subscripts are only valid inside Array2DRow; reject them here.
+                    if sub.contains(',') {
+                        return Err(ParseError::Unknown);
+                    }
                     i += 2 + advance;
 
                     vars.push(RawVar {
@@ -607,6 +1233,20 @@ enum IntermOp {
     ///   name_seed — used by normalize_name to derive the Rust variable name (e.g. "Ax", "r1")
     ///   base_math — original base name stored in VarDecl.math for constraint inference (e.g. "A", "r")
     ReadSubscriptedScalars(Vec<(String, String)>),
+    /// Fixed 2D grid: consecutive Array2DRow lines with same name, sequential row indices 1..rows.
+    ReadGrid {
+        name: String,
+        rows: usize,
+        cols: usize,
+    },
+    /// Jagged-array loop: each row i has `size_var[i]` elements in `elem_var[i]`,
+    /// plus zero or more scalar arrays (one element per row) in `scalars_math`.
+    LoopJagged {
+        end: String,               // loop bound (math form, e.g. "N")
+        scalars_math: Vec<String>, // scalar array math names (not including size_var)
+        size_var_math: String,     // SIZE_VAR math name
+        elem_var_math: String,     // element var math name
+    },
 }
 
 fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError> {
@@ -637,21 +1277,28 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
         RawLine::GridRow(_) => true,
         // Query placeholder lines (\text{query}_Q etc.) are always eligible for a vdots block.
         RawLine::QueryLine { .. } => true,
+        // JaggedRow is always eligible for a vdots block (it IS a loop-body row).
+        RawLine::JaggedRow { .. } => true,
         _ => false,
     };
 
-    /// Row kind: distinguishes LoopRow, GridRow, and QueryLine for block-extension checks.
+    /// Row kind: distinguishes LoopRow, GridRow, QueryLine, and JaggedRow for block-extension checks.
     #[derive(PartialEq)]
     enum RowKind {
         Loop,
         Grid,
         Query,
+        Jagged,
     }
     let row_kind = |rl: &RawLine| match rl {
         RawLine::GridRow(_) => RowKind::Grid,
         RawLine::QueryLine { .. } => RowKind::Query,
+        RawLine::JaggedRow { .. } => RowKind::Jagged,
         _ => RowKind::Loop,
     };
+
+    // Returns true when `kind` is compatible with a jagged block (LoopRow or JaggedRow).
+    let is_jagged_compatible = |kind: &RowKind| matches!(kind, RowKind::Loop | RowKind::Jagged);
 
     let mut vdots_blocks: Vec<(usize, usize, usize)> = Vec::new(); // (block_start, vdots_idx, after_end)
     {
@@ -660,15 +1307,29 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
             if matches!(raw_lines[j], RawLine::Vdots) {
                 // Find consecutive LoopRows/GridRows/QueryLines before this vdots.
                 // Stop extending when the kind (LoopRow vs GridRow vs QueryLine) changes.
+                // Exception: for jagged blocks, LoopRow and JaggedRow are both allowed.
                 let last_kind = if j > 0 {
                     row_kind(&raw_lines[j - 1])
                 } else {
                     RowKind::Loop
                 };
+                // A jagged block is detected when the row immediately before the vdots is a
+                // JaggedRow (last_kind == Jagged).  In a jagged block, both LoopRow and
+                // JaggedRow are allowed so that multi-row bodies like:
+                //   L_1            ← LoopRow
+                //   X_{1,1}...X_{1,L_1}  ← JaggedRow
+                // are included in the same block.
+                let is_jagged_block = last_kind == RowKind::Jagged;
                 let mut block_start = j;
                 while block_start > 0 {
                     let prev = &raw_lines[block_start - 1];
-                    if is_loop_or_grid(prev) && row_kind(prev) == last_kind {
+                    let prev_kind = row_kind(prev);
+                    let compatible = if is_jagged_block {
+                        is_loop_or_grid(prev) && is_jagged_compatible(&prev_kind)
+                    } else {
+                        is_loop_or_grid(prev) && prev_kind == last_kind
+                    };
+                    if compatible {
                         block_start -= 1;
                     } else {
                         break;
@@ -683,7 +1344,13 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
                 let mut after_end = j + 1;
                 while after_end < raw_lines.len() {
                     let next = &raw_lines[after_end];
-                    if is_loop_or_grid(next) && row_kind(next) == last_kind {
+                    let next_kind = row_kind(next);
+                    let compatible = if is_jagged_block {
+                        is_loop_or_grid(next) && is_jagged_compatible(&next_kind)
+                    } else {
+                        is_loop_or_grid(next) && next_kind == last_kind
+                    };
+                    if compatible {
                         after_end += 1;
                     } else {
                         break;
@@ -710,7 +1377,112 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
             let is_grid = matches!(raw_lines[block_start], RawLine::GridRow(_));
             let is_query = matches!(raw_lines[block_start], RawLine::QueryLine { .. });
 
-            // Verify all lines in the block are the same kind
+            // Check if the last "after" row is a JaggedRow — if so, emit LoopJagged.
+            // A jagged block has `after_end > vdots_idx + 1` and the final row is JaggedRow.
+            let last_after_is_jagged = after_end > vdots_idx + 1
+                && matches!(raw_lines[after_end - 1], RawLine::JaggedRow { .. });
+            // Also check if the last "before" row (before vdots) is JaggedRow (for the
+            // case where there are no "after" rows).
+            let last_before_is_jagged = after_end == vdots_idx + 1
+                && vdots_idx > block_start
+                && matches!(raw_lines[vdots_idx - 1], RawLine::JaggedRow { .. });
+
+            if last_after_is_jagged || last_before_is_jagged {
+                // Jagged block: use the after rows (or before rows) to determine structure.
+                // The last row must be JaggedRow; preceding rows are LoopRow scalars.
+                let jagged_row = if last_after_is_jagged {
+                    match &raw_lines[after_end - 1] {
+                        RawLine::JaggedRow {
+                            row_idx,
+                            size_var_math,
+                            elem_var_math,
+                            scalars_before,
+                        } => (
+                            row_idx.clone(),
+                            size_var_math.clone(),
+                            elem_var_math.clone(),
+                            scalars_before.clone(),
+                        ),
+                        _ => return Err(ParseError::Unknown),
+                    }
+                } else {
+                    match &raw_lines[vdots_idx - 1] {
+                        RawLine::JaggedRow {
+                            row_idx,
+                            size_var_math,
+                            elem_var_math,
+                            scalars_before,
+                        } => (
+                            row_idx.clone(),
+                            size_var_math.clone(),
+                            elem_var_math.clone(),
+                            scalars_before.clone(),
+                        ),
+                        _ => return Err(ParseError::Unknown),
+                    }
+                };
+                let (row_idx, size_var_math, elem_var_math, scalars_before_raw) = jagged_row;
+
+                // Collect scalar math names from:
+                // 1. scalars_before in the JaggedRow (e.g. L_N → "L")
+                // 2. Non-JaggedRow "after" body rows (raw_lines[vdots_idx+1..after_end-1])
+                // 3. (For the no-after case, non-JaggedRow "before" rows: block_start..vdots_idx-1)
+                let mut all_scalars_math: Vec<String> = Vec::new();
+
+                // From non-jagged body rows (after vdots, excluding the last JaggedRow)
+                if last_after_is_jagged {
+                    for rl in raw_lines.iter().take(after_end - 1).skip(vdots_idx + 1) {
+                        match rl {
+                            RawLine::LoopRow(vars) => {
+                                for v in vars {
+                                    all_scalars_math.push(v.math.clone());
+                                }
+                            }
+                            _ => return Err(ParseError::Unknown),
+                        }
+                    }
+                } else {
+                    // last_before_is_jagged: non-jagged body rows are block_start..vdots_idx-1
+                    for rl in raw_lines.iter().take(vdots_idx - 1).skip(block_start) {
+                        match rl {
+                            RawLine::LoopRow(vars) => {
+                                for v in vars {
+                                    all_scalars_math.push(v.math.clone());
+                                }
+                            }
+                            _ => return Err(ParseError::Unknown),
+                        }
+                    }
+                }
+
+                // From scalars_before in the JaggedRow itself
+                for v in &scalars_before_raw {
+                    all_scalars_math.push(v.math.clone());
+                }
+
+                // Verify SIZE_VAR is among the collected scalar math names
+                if !all_scalars_math.contains(&size_var_math) {
+                    return Err(ParseError::Unknown);
+                }
+
+                // Remove SIZE_VAR from scalars to get the "other scalars"
+                let other_scalars: Vec<String> = all_scalars_math
+                    .into_iter()
+                    .filter(|s| s != &size_var_math)
+                    .collect();
+
+                ops.push(IntermOp::LoopJagged {
+                    end: row_idx,
+                    scalars_math: other_scalars,
+                    size_var_math,
+                    elem_var_math,
+                });
+
+                i = after_end;
+                continue;
+            }
+
+            // Verify all lines in the block are the same kind (non-jagged blocks)
             for idx in (block_start..vdots_idx).chain(vdots_idx + 1..after_end) {
                 let line_is_grid = matches!(raw_lines[idx], RawLine::GridRow(_));
                 let line_is_query = matches!(raw_lines[idx], RawLine::QueryLine { .. });
@@ -824,9 +1596,54 @@ fn build_intermediate(raw_lines: &[RawLine]) -> Result<Vec<IntermOp>, ParseError
                 // GridRow not matched to a vdots block — treat as unsupported
                 return Err(ParseError::Unknown);
             }
+            RawLine::JaggedRow { .. } => {
+                // JaggedRow not matched to a vdots block — treat as unsupported
+                return Err(ParseError::Unknown);
+            }
             RawLine::QueryLine { .. } => {
                 // QueryLine not matched to a vdots block — treat as unsupported
                 return Err(ParseError::Unknown);
+            }
+            RawLine::Array2DRow {
+                name,
+                row_idx,
+                col_count,
+            } => {
+                // Collect consecutive Array2DRow lines with same name, sequential rows from "1".
+                if row_idx != "1" {
+                    return Err(ParseError::Unknown);
+                }
+                let base_name = name.clone();
+                let cols = *col_count;
+                let mut rows = 1usize;
+                let mut j = i + 1;
+                loop {
+                    match raw_lines.get(j) {
+                        Some(RawLine::Array2DRow {
+                            name: n2,
+                            row_idx: r2,
+                            col_count: c2,
+                        }) if n2 == &base_name => {
+                            let expected_row = (rows + 1).to_string();
+                            if r2 != &expected_row || *c2 != cols {
+                                return Err(ParseError::Unknown);
+                            }
+                            rows += 1;
+                            j += 1;
+                        }
+                        _ => break,
+                    }
+                }
+                if rows < 2 {
+                    return Err(ParseError::Unknown);
+                }
+                ops.push(IntermOp::ReadGrid {
+                    name: base_name,
+                    rows,
+                    cols,
+                });
+                i = j;
+                continue;
             }
         }
     }
@@ -849,6 +1666,39 @@ fn normalize_name(math: &str, all_math_names: &[String]) -> String {
     } else {
         lower
     }
+}
+
+/// Apply `normalize_name` to each identifier within an arithmetic expression string.
+/// For a plain name like `"N"` this is equivalent to `normalize_name("N", ...)`.
+/// For `"N-1"` the `"N"` part is normalized individually and the rest (`"-1"`) is kept as-is,
+/// so the result respects collision-avoidance (e.g. `"N-1"` → `"N-1"` when `N` and `n` coexist).
+fn normalize_expr(expr: &str, all_math_names: &[String]) -> String {
+    let mut result = String::new();
+    let mut pos = 0;
+    let mut ident_start: Option<usize> = None;
+    for (i, c) in expr.char_indices() {
+        let in_ident = if ident_start.is_some() {
+            c.is_ascii_alphanumeric()
+        } else {
+            c.is_ascii_alphabetic()
+        };
+        if in_ident {
+            if ident_start.is_none() {
+                ident_start = Some(i);
+            }
+        } else if let Some(s) = ident_start.take() {
+            result.push_str(&expr[pos..s]);
+            result.push_str(&normalize_name(&expr[s..i], all_math_names));
+            pos = i;
+        }
+    }
+    if let Some(s) = ident_start {
+        result.push_str(&expr[pos..s]);
+        result.push_str(&normalize_name(&expr[s..], all_math_names));
+    } else {
+        result.push_str(&expr[pos..]);
+    }
+    result
 }
 
 // ── Type inference ─────────────────────────────────────────────────────────────
@@ -1011,6 +1861,12 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
             ok: false,
             vars: vec![],
             ops: vec![],
+            query_types: vec![],
+            query_body: vec![],
+            testcase_body: vec![],
+            iteration_vars: vec![],
+            iteration_ops: vec![],
+            triangular: None,
         };
     }
 
@@ -1023,28 +1879,91 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     // Phase 2 early detection
     let block0 = blocks[0];
 
-    // Whether block0 contains a query-placeholder marker (\text{...} or \mathrm{...}).
-    // If so, we attempt to parse block0 normally (QueryLine handling in parse_line/build_intermediate)
-    // rather than rejecting early.
-    let has_query_marker = block0.contains("\\text{") || block0.contains("\\mathrm{");
+    // Triangular matrix early detection: single-block only
+    if blocks.len() == 1
+        && let Some(tri) = detect_triangular(block0, constraints)
+    {
+        // Build the size VarDecl from line[0] of block0
+        let size_math = block0
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("");
+        let all_math = vec![size_math.to_string()];
+        let size_name = normalize_name(size_math, &all_math);
+        let size_var = VarDecl {
+            name: size_name.clone(),
+            math: size_math.to_string(),
+            var_type: VarType::Int,
+            dim: 0,
+            size: vec![],
+            is_size: true,
+            is_jagged: false,
+        };
+        let size_op = InputOp {
+            tag: OpTag::ReadLine,
+            depth: 0,
+            vars: vec![VarRef {
+                name: size_name,
+                dim: 0,
+                size: None,
+                index: None,
+            }],
+            loop_var: None,
+            begin: None,
+            end: None,
+            scalars: vec![],
+            size_var: None,
+            elem_var: None,
+        };
+        return InputSpec {
+            raw: raw.to_string(),
+            ok: true,
+            vars: vec![size_var],
+            ops: vec![size_op],
+            query_types: vec![],
+            query_body: vec![],
+            testcase_body: vec![],
+            iteration_vars: vec![],
+            iteration_ops: vec![],
+            triangular: Some(tri),
+        };
+    }
+
+    // Whether block0 contains a query-placeholder marker.
+    // Evaluated only when blocks.len() > 1 (short-circuit &&) to avoid the tokenize +
+    // parse_line pass on single-block inputs where the value is unused.
+    // Detection reuses parse_line so the rule stays consistent with actual QueryLine parsing:
+    // \text{...}_Q, \mathrm{...}_Q, or query_Q (plain-text, subscript required).
+    // A standalone `query` without a subscript does NOT count as a marker.
+    let has_query_marker = blocks.len() > 1
+        && block0.lines().any(|line| {
+            let tokens = tokenize_line(line);
+            matches!(parse_line(&tokens), Ok(RawLine::QueryLine { .. }))
+        });
+
+    // Whether the input uses the T-testcases format:
+    // block 0 = single scalar (e.g. T), block 1 = body of each test case.
+    // T-testcases: block 0 = single scalar, block 1 = test case body (not digit-start).
+    // Digit-start block 1 belongs to unsupported query sub-formats, not T-testcases.
+    let is_testcase_format = blocks.len() > 1
+        && !has_query_marker
+        && !blocks[1].trim().starts_with(|c: char| c.is_ascii_digit())
+        && {
+            let block0_tokens: Vec<Token> = block0
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .flat_map(tokenize_line)
+                .filter(|t| t != &Token::Space)
+                .collect();
+            block0_tokens.len() == 1 && matches!(block0_tokens[0], Token::Ident(_))
+        };
 
     // Check for multiple blocks (only reject non-query multi-block forms)
-    if blocks.len() > 1 && !has_query_marker {
+    if blocks.len() > 1 && !has_query_marker && !is_testcase_format {
         let block1 = blocks[1].trim();
         // blocks[1] starts with digit → query sub-format (unrecognized multi-block form)
         if block1.starts_with(|c: char| c.is_ascii_digit()) {
-            return not_ok(raw);
-        }
-        // blocks[0] is single token → T-testcases type
-        let block0_tokens: Vec<Token> = block0
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .flat_map(tokenize_line)
-            .filter(|t| t != &Token::Space)
-            .collect();
-        if block0_tokens.len() == 1
-            && let Token::Ident(_) = &block0_tokens[0]
-        {
             return not_ok(raw);
         }
     }
@@ -1111,11 +2030,14 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                     loop_var: None,
                     begin: None,
                     end: None,
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
                 });
             }
             IntermOp::ReadArray1D { name, size } => {
                 let var_name = normalize_name(name, &all_math_names);
-                let size_name = normalize_name(size, &all_math_names);
+                let size_name = normalize_expr(size, &all_math_names);
                 ensure_var_decl(&mut var_decls, &var_name, name, 1, vec![size_name.clone()]);
                 ops.push(InputOp {
                     tag: OpTag::ReadLine,
@@ -1129,6 +2051,36 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                     loop_var: None,
                     begin: None,
                     end: None,
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
+                });
+            }
+            IntermOp::ReadGrid { name, rows, cols } => {
+                let var_name = normalize_name(name, &all_math_names);
+                // size: [cols, rows] — both literal strings
+                ensure_var_decl(
+                    &mut var_decls,
+                    &var_name,
+                    name,
+                    2,
+                    vec![cols.to_string(), rows.to_string()],
+                );
+                ops.push(InputOp {
+                    tag: OpTag::ReadLine,
+                    depth,
+                    vars: vec![VarRef {
+                        name: var_name,
+                        dim: 2,
+                        size: None,
+                        index: None,
+                    }],
+                    loop_var: None,
+                    begin: None,
+                    end: None,
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
                 });
             }
             IntermOp::LoopBegin {
@@ -1136,7 +2088,7 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                 begin,
                 end,
             } => {
-                let end_name = normalize_name(end, &all_math_names);
+                let end_name = normalize_expr(end, &all_math_names);
                 current_loop_end = Some(end_name.clone());
                 ops.push(InputOp {
                     tag: OpTag::LoopBegin,
@@ -1145,6 +2097,9 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                     loop_var: Some(loop_var.clone()),
                     begin: Some(begin.clone()),
                     end: Some(end_name),
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
                 });
                 depth += 1;
             }
@@ -1175,6 +2130,9 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                     loop_var: None,
                     begin: None,
                     end: None,
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
                 });
             }
             IntermOp::ReadGridRow(math) => {
@@ -1202,6 +2160,9 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                     loop_var: None,
                     begin: None,
                     end: None,
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
                 });
             }
             IntermOp::ReadSubscriptedScalars(infos) => {
@@ -1229,6 +2190,9 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                     loop_var: None,
                     begin: None,
                     end: None,
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
                 });
             }
             IntermOp::LoopEnd => {
@@ -1241,6 +2205,76 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
                     loop_var: None,
                     begin: None,
                     end: None,
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
+                });
+            }
+            IntermOp::LoopJagged {
+                end,
+                scalars_math,
+                size_var_math,
+                elem_var_math,
+            } => {
+                let end_name = normalize_name(end, &all_math_names);
+
+                // Declare scalar array vars (dim=1, size=[end_name])
+                let scalar_var_refs: Vec<VarRef> = scalars_math
+                    .iter()
+                    .map(|math| {
+                        let name = normalize_name(math, &all_math_names);
+                        ensure_var_decl(&mut var_decls, &name, math, 1, vec![end_name.clone()]);
+                        VarRef {
+                            name,
+                            dim: 1,
+                            size: None,
+                            index: None,
+                        }
+                    })
+                    .collect();
+
+                // Declare size_var (dim=1, size=[end_name])
+                let size_name = normalize_name(size_var_math, &all_math_names);
+                ensure_var_decl(
+                    &mut var_decls,
+                    &size_name,
+                    size_var_math,
+                    1,
+                    vec![end_name.clone()],
+                );
+                let size_var_ref = VarRef {
+                    name: size_name,
+                    dim: 1,
+                    size: None,
+                    index: None,
+                };
+
+                // Declare elem_var (dim=1, size=[end_name], is_jagged=true — set in post-pass)
+                let elem_name = normalize_name(elem_var_math, &all_math_names);
+                ensure_var_decl(
+                    &mut var_decls,
+                    &elem_name,
+                    elem_var_math,
+                    1,
+                    vec![end_name.clone()],
+                );
+                let elem_var_ref = VarRef {
+                    name: elem_name,
+                    dim: 1,
+                    size: None,
+                    index: None,
+                };
+
+                ops.push(InputOp {
+                    tag: OpTag::LoopJagged,
+                    depth,
+                    vars: vec![],
+                    loop_var: None,
+                    begin: None,
+                    end: Some(end_name),
+                    scalars: scalar_var_refs,
+                    size_var: Some(size_var_ref),
+                    elem_var: Some(elem_var_ref),
                 });
             }
         }
@@ -1249,19 +2283,66 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     // Type inference
     infer_types(&mut var_decls, constraints);
 
-    // Compute is_size: a var is a size var if its name appears in any other VarDecl's size,
-    // or if it is the `end` of any LoopBegin op.
+    // Compute is_size: a var is a size var if its name (or an identifier extracted from an
+    // arithmetic expression) appears in any other VarDecl's size or in a LoopBegin end.
+    // For plain names like "n" this is a direct match; for expressions like "2*n" or "n-1"
+    // we extract the alphabetic identifiers so that "n" is still marked as is_size.
+    // Also: LoopJagged's `end` (the loop bound) and `size_var` name are marked as is_size.
     let size_names: std::collections::HashSet<String> = var_decls
         .iter()
-        .flat_map(|v| v.size.iter().cloned())
+        .flat_map(|v| v.size.iter())
+        .flat_map(|s| {
+            expr_idents(s)
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        })
         .chain(
             ops.iter()
                 .filter(|o| o.tag == OpTag::LoopBegin)
-                .filter_map(|o| o.end.clone()),
+                .filter_map(|o| o.end.as_deref())
+                .flat_map(|s| {
+                    expr_idents(s)
+                        .into_iter()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                }),
+        )
+        .chain(
+            // LoopJagged: mark the loop bound as is_size
+            ops.iter()
+                .filter(|o| o.tag == OpTag::LoopJagged)
+                .filter_map(|o| o.end.as_deref())
+                .flat_map(|s| {
+                    expr_idents(s)
+                        .into_iter()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                }),
+        )
+        .chain(
+            // LoopJagged: mark the size_var as is_size
+            ops.iter()
+                .filter(|o| o.tag == OpTag::LoopJagged)
+                .filter_map(|o| o.size_var.as_ref())
+                .map(|v| v.name.clone()),
         )
         .collect();
     for v in &mut var_decls {
         v.is_size = size_names.contains(&v.name);
+    }
+
+    // Compute is_jagged: a var is jagged if it appears as elem_var in any LoopJagged op.
+    let jagged_names: std::collections::HashSet<String> = ops
+        .iter()
+        .filter(|o| o.tag == OpTag::LoopJagged)
+        .filter_map(|o| o.elem_var.as_ref())
+        .map(|v| v.name.clone())
+        .collect();
+    for v in &mut var_decls {
+        if jagged_names.contains(&v.name) {
+            v.is_jagged = true;
+        }
     }
 
     // Empty result (no vars and no ops) means the raw text produced nothing
@@ -1274,18 +2355,51 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
     // Multi-var loops (or loops that can't be flattened) are kept in ops; the template handles them.
     ops = flatten_single_var_loops(ops, &mut var_decls);
 
-    // Any remaining LoopBegin ops will be emitted directly by the template, so validate
-    // their bounds before reporting ok=true.
-    let valid_loop_bounds = ops.iter().filter(|o| o.tag == OpTag::LoopBegin).all(|o| {
-        let end = match o.end.as_deref().map(str::trim) {
-            Some(end) if !end.is_empty() => end,
-            _ => return false,
-        };
+    // Any remaining LoopBegin or LoopJagged ops will be emitted directly by the template,
+    // so validate their bounds before reporting ok=true.
+    // Accepts: literal digit strings, declared scalar var names, or arithmetic expressions
+    // (e.g. "n-1", "2*n", "n+1") where all identifiers are declared scalars.
+    let is_valid_bound = |end: &str| -> bool {
         end.chars().all(|c| c.is_ascii_digit())
             || var_decls.iter().any(|v| v.name == end && v.dim == 0)
-    });
+            || expr_idents(end)
+                .iter()
+                .all(|id| var_decls.iter().any(|v| v.name == *id && v.dim == 0))
+    };
+    let valid_loop_bounds = ops
+        .iter()
+        .filter(|o| o.tag == OpTag::LoopBegin || o.tag == OpTag::LoopJagged)
+        .all(|o| {
+            let end = match o.end.as_deref().map(str::trim) {
+                Some(end) if !end.is_empty() => end,
+                _ => return false,
+            };
+            is_valid_bound(end)
+        });
     if !valid_loop_bounds {
         return not_ok(raw);
+    }
+
+    // Parse query sub-blocks (blocks[1..]) when a query marker was present in block0.
+    // Numbered sub-blocks → query_types; non-numeric sub-block → query_body (scalar)
+    // or iteration_vars/ops (complex body with loops/arrays).
+    let (query_types, query_body, iteration_vars, iteration_ops) = if has_query_marker {
+        parse_query_subblocks(&blocks[1..], constraints)
+    } else {
+        (vec![], vec![], vec![], vec![])
+    };
+
+    // Parse T-testcases block 1 as scalar vars for testcase_body.
+    // On success, mark the single block-0 var (the loop count, e.g. T) as is_size.
+    let testcase_body = if is_testcase_format {
+        parse_scalar_block(blocks[1], constraints)
+    } else {
+        vec![]
+    };
+    // Always mark the block-0 loop-count var as is_size when the format is T-testcases,
+    // even when testcase_body is empty (non-scalar block 1 falls back to todo!() stub).
+    if is_testcase_format && let Some(v) = var_decls.first_mut() {
+        v.is_size = true;
     }
 
     InputSpec {
@@ -1293,13 +2407,362 @@ pub fn parse(raw: &str, constraints: &str) -> InputSpec {
         ok: true,
         vars: var_decls,
         ops,
+        query_types,
+        query_body,
+        testcase_body,
+        iteration_vars,
+        iteration_ops,
+        triangular: None,
     }
 }
 
+/// Detect an upper-triangular matrix input pattern and return a `TriangularSpec` if matched.
+///
+/// The pattern is:
+/// ```text
+/// N
+/// A_{1, 2} A_{1, 3} \ldots A_{1, bound}
+/// A_{2, 3} \ldots A_{2, bound}
+/// \vdots
+/// A_{bound-1, bound}
+/// ```
+/// where `bound` is an expression like "N" or "2N".
+///
+/// Returns `Some(TriangularSpec)` when all structural checks pass, `None` otherwise.
+fn detect_triangular(block0: &str, constraints: &str) -> Option<TriangularSpec> {
+    // Collect non-empty lines
+    let lines: Vec<&str> = block0
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    // Need at least 4 lines: size, first data row, line2 (vdots or another row), last element
+    if lines.len() < 4 {
+        return None;
+    }
+
+    // Line 0: single Ident token (size variable, e.g. "N")
+    let size_tokens = strip_spaces(&tokenize_line(lines[0]));
+    let size_math = match size_tokens.as_slice() {
+        [Token::Ident(s)] => s.clone(),
+        _ => return None,
+    };
+
+    // Line 1: a triangular row — check it has the right structure
+    // and extract: var_name (math), bound expression (string from last element's second subscript)
+    let (var_math, bound_raw) = detect_triangular_row(lines[1])?;
+
+    // Verify all idents in bound_raw refer to the size variable only.
+    // An unknown ident would generate an undefined variable reference in the template.
+    if !expr_idents(&bound_raw)
+        .iter()
+        .all(|id| id.eq_ignore_ascii_case(&size_math))
+    {
+        return None;
+    }
+
+    // Line 2: either another triangular row OR a vdots-like line
+    // Check that line 2 is either vdots-like or a triangular row with the same var name
+    let line2_ok = {
+        let toks = strip_spaces(&tokenize_line(lines[2]));
+        // Is it a vdots-like line?
+        let is_vdots = toks.len() == 1 && matches!(toks[0], Token::Vdots | Token::Cdots);
+        if is_vdots {
+            true
+        } else {
+            // Try as another triangular row with same var name and consistent bound
+            matches!(detect_triangular_row(lines[2]), Some((n, b)) if n == var_math && b == bound_raw)
+        }
+    };
+    if !line2_ok {
+        return None;
+    }
+
+    // Last non-empty line: single element "VAR_{first_idx, bound}" (no Cdots)
+    // Fix 2: parse with read_comma_brace_parts to verify:
+    //   (a) second subscript matches bound_raw (same canonical form)
+    //   (b) no extra tokens remain after RBrace
+    let last_line = lines[lines.len() - 1];
+    {
+        let toks = strip_spaces(&tokenize_line(last_line));
+        // Must not contain cdots
+        if toks.contains(&Token::Cdots) {
+            return None;
+        }
+        // Must start with same var name
+        match toks.first() {
+            Some(Token::Ident(n)) if n == &var_math => {}
+            _ => return None,
+        }
+        // Must have a subscript followed by LBrace
+        if toks.get(1) != Some(&Token::Subscript) || toks.get(2) != Some(&Token::LBrace) {
+            return None;
+        }
+        // Parse the brace subscript: expect exactly (part1, part2) with no trailing tokens
+        let (_, last_second, advance) = read_comma_brace_parts(&toks[3..])?;
+        // advance includes RBrace; no tokens should remain
+        if 3 + advance != toks.len() {
+            return None;
+        }
+        // Second subscript of last element must match bound_raw (same canonical string)
+        if last_second != bound_raw {
+            return None;
+        }
+    }
+
+    // All intermediate lines (between line 1 and last) must be vdots-like or triangular rows
+    for &line in &lines[2..lines.len() - 1] {
+        let toks = strip_spaces(&tokenize_line(line));
+        let is_vdots = toks.len() == 1 && matches!(toks[0], Token::Vdots | Token::Cdots);
+        if !is_vdots {
+            match detect_triangular_row(line) {
+                Some((n, b)) if n == var_math && b == bound_raw => {}
+                _ => return None,
+            }
+        }
+    }
+
+    // All checks passed — build the TriangularSpec
+    // Normalize names: size variable and bound expression
+    // For simplicity, all math names here are just size_math and the bound idents
+    let all_math = vec![size_math.clone()];
+
+    // Normalize the bound: parse bound_raw as an expression
+    // bound_raw is already in arithmetic form (e.g. "N", "2*N")
+    // We need to lowercase the ident part(s) using normalize_name
+    let bound = normalize_expr(&bound_raw, &all_math);
+
+    let var_name = normalize_name(&var_math, &all_math);
+
+    // Infer var_type from constraints
+    let var_type = {
+        let mut decls = vec![VarDecl {
+            name: var_name.clone(),
+            math: var_math.clone(),
+            var_type: VarType::Unknown,
+            dim: 2,
+            size: vec![],
+            is_size: false,
+            is_jagged: false,
+        }];
+        infer_types(&mut decls, constraints);
+        // Fall back to Int when constraints give no type information (Unknown).
+        // The spec says triangular.var_type defaults to "int".
+        if decls[0].var_type == VarType::Unknown {
+            VarType::Int
+        } else {
+            decls[0].var_type.clone()
+        }
+    };
+
+    Some(TriangularSpec {
+        name: var_name,
+        math: var_math,
+        var_type,
+        bound,
+    })
+}
+
+/// Detect a single triangular row line.
+/// A triangular row looks like: `A_{1, 2} A_{1, 3} \ldots A_{1, N}`
+/// Returns `Some((var_math, bound_raw))` where `bound_raw` is the arithmetic
+/// expression for the second subscript of the last element (e.g. "N", "2*N").
+fn detect_triangular_row(line: &str) -> Option<(String, String)> {
+    let tokens = strip_spaces(&tokenize_line(line));
+
+    // Must contain exactly one Cdots
+    let cdots_count = tokens.iter().filter(|t| **t == Token::Cdots).count();
+    if cdots_count != 1 {
+        return None;
+    }
+
+    // Scan tokens sequentially, skipping Space tokens.
+    // Each non-Space, non-Cdots token sequence is expected to form one element:
+    //   Ident Subscript LBrace <part1> Comma <part2> RBrace
+    // A single Cdots in the stream is allowed; elements may appear before and after it.
+    let mut var_math: Option<String> = None;
+    let mut first_idx: Option<String> = None; // first subscript (row index, must be ASCII digits)
+    let mut last_second_sub: Option<String> = None; // second subscript of last element (the bound)
+    let mut found_cdots = false;
+    let mut found_element_after_cdots = false;
+
+    let mut i = 0;
+    while i < tokens.len() {
+        // Skip spaces
+        while i < tokens.len() && tokens[i] == Token::Space {
+            i += 1;
+        }
+        if i >= tokens.len() {
+            break;
+        }
+
+        // Cdots
+        if tokens[i] == Token::Cdots {
+            found_cdots = true;
+            i += 1;
+            continue;
+        }
+
+        // Element: Ident Subscript { first_part , second_part }
+        let name = match &tokens[i] {
+            Token::Ident(n) => n.clone(),
+            _ => return None,
+        };
+        i += 1;
+
+        if i >= tokens.len() || tokens[i] != Token::Subscript {
+            return None;
+        }
+        i += 1;
+
+        // Read the subscript: must be brace form with comma
+        if i >= tokens.len() || tokens[i] != Token::LBrace {
+            return None;
+        }
+        i += 1; // skip LBrace
+
+        // Read until matching RBrace, collecting tokens for the two parts
+        let (part1_raw, part2_raw, advance) = read_comma_brace_parts(&tokens[i..])?;
+        i += advance;
+
+        // Fix 3: first subscript (row index) must be purely numeric (e.g. "1", "2", not "i" or "2N")
+        if !part1_raw.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+
+        // Validate var name consistency
+        match &var_math {
+            None => var_math = Some(name.clone()),
+            Some(n) if n != &name => return None,
+            _ => {}
+        }
+
+        // Validate first index (row) consistency: all elements on this row must have same first subscript
+        match &first_idx {
+            None => first_idx = Some(part1_raw.clone()),
+            Some(f) if f != &part1_raw => return None,
+            _ => {}
+        }
+
+        // Track last second subscript (the bound)
+        last_second_sub = Some(part2_raw);
+
+        // Fix 1: track whether at least one element appears after cdots
+        if found_cdots {
+            found_element_after_cdots = true;
+        }
+    }
+
+    // Fix 1: must have found cdots AND at least one element after it
+    if !found_cdots || !found_element_after_cdots {
+        return None;
+    }
+
+    let _var = var_math?;
+    let bound_expr = last_second_sub?;
+
+    // Convert the bound_expr tokens string to arithmetic form
+    // bound_expr is already a string like "N" or "2*N" from read_comma_brace_parts
+    Some((_var, bound_expr))
+}
+
+/// Read the two parts of a comma-separated brace subscript `{part1, part2}`.
+/// Assumes the opening `{` has already been consumed.
+/// Returns `(part1_str, part2_str, tokens_consumed_including_RBrace)`.
+/// `part1_str` / `part2_str` are arithmetic expressions (e.g. "N", "2*N", "N-1").
+fn read_comma_brace_parts(tokens: &[Token]) -> Option<(String, String, usize)> {
+    let mut i = 0;
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut last_kind: u8 = 0; // 0=start/op, 1=num, 2=ident
+
+    while i < tokens.len() {
+        match &tokens[i] {
+            Token::RBrace => {
+                i += 1;
+                if !current.is_empty() {
+                    parts.push(current.clone());
+                }
+                break;
+            }
+            Token::Comma => {
+                if current.is_empty() {
+                    return None; // leading comma
+                }
+                parts.push(current.clone());
+                current = String::new();
+                last_kind = 0;
+                i += 1;
+            }
+            Token::Space => {
+                // ignore spaces inside braces
+                i += 1;
+            }
+            Token::Num(n) => {
+                if last_kind == 2 {
+                    current.push('*');
+                }
+                current.push_str(n);
+                last_kind = 1;
+                i += 1;
+            }
+            Token::Ident(s) => {
+                if last_kind == 1 {
+                    current.push('*');
+                }
+                current.push_str(s);
+                last_kind = 2;
+                i += 1;
+            }
+            Token::Plus => {
+                if last_kind == 0 {
+                    return None;
+                }
+                current.push('+');
+                last_kind = 0;
+                i += 1;
+            }
+            Token::Minus => {
+                if last_kind == 0 {
+                    return None;
+                }
+                current.push('-');
+                last_kind = 0;
+                i += 1;
+            }
+            Token::Star => {
+                if last_kind == 0 {
+                    return None;
+                }
+                current.push('*');
+                last_kind = 0;
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    if parts.len() != 2 {
+        return None;
+    }
+    Some((parts[0].clone(), parts[1].clone(), i))
+}
+
+/// Normalize raw input-format text before tokenization.
+///
+/// Transformations applied:
+/// - Replaces Unicode horizontal ellipsis (U+2026) with `\ldots`
+/// - Replaces `\hspace{...}\vdots` sequences with `\vdots`
 fn preprocess(raw: &str) -> String {
+    // Replace Unicode horizontal ellipsis (U+2026) with \ldots
+    let raw = &raw.replace('\u{2026}', "\\ldots");
+
     // Replace \hspace{...}\vdots with \vdots
     let mut result = String::new();
-    let mut rest = raw;
+    let mut rest = raw.as_str();
 
     while let Some(pos) = rest.find("\\hspace{") {
         result.push_str(&rest[..pos]);
@@ -1381,6 +2844,9 @@ fn flatten_single_var_loops(ops: Vec<InputOp>, var_decls: &mut [VarDecl]) -> Vec
                     loop_var: None,
                     begin: None,
                     end: None,
+                    scalars: vec![],
+                    size_var: None,
+                    elem_var: None,
                 });
                 i += 3;
                 continue;
@@ -1394,13 +2860,293 @@ fn flatten_single_var_loops(ops: Vec<InputOp>, var_decls: &mut [VarDecl]) -> Vec
     result
 }
 
+/// Parse a single block as a flat list of scalar variables.
+/// Returns the VarDecl list on success, or an empty vec if parsing fails or produces
+/// non-scalar results (e.g. arrays, loops).
+fn parse_scalar_block(block: &str, constraints: &str) -> Vec<VarDecl> {
+    let lines: Vec<&str> = block
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return vec![];
+    }
+
+    // Each line must parse as plain scalars (Scalars or LoopRow — subscripted vars
+    // like A_x A_y treated as dim=0 scalars). Any other pattern (Array1d with Cdots,
+    // GridRow, Vdots, QueryLine, …) means this is not a simple scalar block.
+    let mut all_raw_vars: Vec<RawVar> = vec![];
+    for line in &lines {
+        let toks = tokenize_line(line);
+        match parse_line(&toks) {
+            Ok(RawLine::Scalars(v)) | Ok(RawLine::LoopRow(v)) => all_raw_vars.extend(v),
+            _ => return vec![],
+        }
+    }
+    let raw_vars = all_raw_vars;
+    if raw_vars.is_empty() {
+        return vec![];
+    }
+
+    let seeds: Vec<String> = raw_vars
+        .iter()
+        .map(|rv| match &rv.subscript {
+            Some(s) => format!("{}{}", rv.math, s),
+            None => rv.math.clone(),
+        })
+        .collect();
+    let mut var_decls: Vec<VarDecl> = raw_vars
+        .iter()
+        .zip(seeds.iter())
+        .map(|(rv, seed)| {
+            let name = normalize_name(seed, &seeds);
+            VarDecl {
+                name,
+                math: rv.math.clone(),
+                var_type: VarType::Unknown,
+                dim: 0,
+                size: vec![],
+                is_size: false,
+                is_jagged: false,
+            }
+        })
+        .collect();
+    infer_types(&mut var_decls, constraints);
+    var_decls
+}
+
+/// Parse `blocks[1..]` from a query-type input.
+///
+/// Returns `(query_types, query_body, iteration_vars, iteration_ops)`:
+/// - `query_types`: numbered sub-blocks (first token = Num).
+/// - `query_body`: scalar vars from the first non-numeric sub-block (scalars only).
+/// - `iteration_vars` / `iteration_ops`: from a full re-parse of the first non-numeric
+///   sub-block when scalar parse fails (complex body with loops/arrays).
+///
+/// Priority: `query_types` non-empty → `query_body`/`iteration_*` empty.
+///           `iteration_ops` non-empty → `query_body` empty.
+fn parse_query_subblocks(
+    subblocks: &[&str],
+    constraints: &str,
+) -> (Vec<QueryTypeDecl>, Vec<VarDecl>, Vec<VarDecl>, Vec<InputOp>) {
+    let mut result = Vec::new();
+    let mut query_body: Vec<VarDecl> = vec![];
+    let mut iteration_vars: Vec<VarDecl> = vec![];
+    let mut iteration_ops: Vec<InputOp> = vec![];
+
+    for block in subblocks {
+        let block = block.trim();
+        if block.is_empty() {
+            continue;
+        }
+
+        // Collect all non-empty lines across the sub-block.
+        let lines: Vec<&str> = block
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        if lines.is_empty() {
+            continue;
+        }
+
+        // Tokenize the first line to extract type_id and first-line vars.
+        let first_tokens = tokenize_line(lines[0]);
+        let first_stripped = strip_spaces(&first_tokens);
+
+        // First token must be Num → type_id; otherwise → candidate for query_body
+        // (step 1: scalar) or iteration_vars/ops (step 2: full re-parse).
+        let type_id = match first_stripped.first() {
+            Some(Token::Num(n)) => n.clone(),
+            _ => {
+                // Non-numeric sub-block: try scalar parse first, then full re-parse.
+                if iteration_vars.is_empty() && query_body.is_empty() && result.is_empty() {
+                    // Step 1: attempt flat scalar var list parse.
+                    let mut all_var_tokens: Vec<Token> = first_stripped.to_vec();
+                    for line in &lines[1..] {
+                        let toks = tokenize_line(line);
+                        let stripped = strip_spaces(&toks);
+                        all_var_tokens.push(Token::Space);
+                        all_var_tokens.extend(stripped);
+                    }
+                    // Only accept plain scalars (no subscripts) for query_body.
+                    // Subscripted vars (LoopRow) indicate array/loop structure → step 2.
+                    let raw_vars_opt = match parse_var_list(&all_var_tokens) {
+                        Ok(RawLine::Scalars(v)) if !v.is_empty() => Some(v),
+                        _ => None,
+                    };
+                    if let Some(raw_vars) = raw_vars_opt {
+                        // Use math+subscript as name seed so that subscripted vars
+                        // like x_1 / x_2 yield distinct identifiers (x1, x2).
+                        let seeds: Vec<String> = raw_vars
+                            .iter()
+                            .map(|rv| match &rv.subscript {
+                                Some(s) => format!("{}{}", rv.math, s),
+                                None => rv.math.clone(),
+                            })
+                            .collect();
+                        let mut var_decls: Vec<VarDecl> = raw_vars
+                            .iter()
+                            .zip(seeds.iter())
+                            .map(|(rv, seed)| {
+                                let name = normalize_name(seed, &seeds);
+                                VarDecl {
+                                    name,
+                                    math: rv.math.clone(),
+                                    var_type: VarType::Unknown,
+                                    dim: 0,
+                                    size: vec![],
+                                    is_size: false,
+                                    is_jagged: false,
+                                }
+                            })
+                            .collect();
+                        infer_types(&mut var_decls, constraints);
+                        query_body = var_decls;
+                    } else {
+                        // Step 2: full re-parse of this sub-block as a standalone input spec.
+                        // Reconstruct the raw text of the sub-block (all lines joined).
+                        let mini_raw = block.trim();
+                        let mini = parse(mini_raw, constraints);
+                        if mini.ok {
+                            iteration_vars = mini.vars;
+                            iteration_ops = mini.ops;
+                        }
+                        // (ok=false → iteration_vars/ops stay empty; template generates TODO stub)
+                    }
+                }
+                continue;
+            }
+        };
+
+        // Collect all var-name tokens from first-line remainder + subsequent lines.
+        // We only support plain scalars (Ident, possibly with subscript).
+        let remainder = &first_stripped[1..]; // skip the Num token
+        let mut all_var_tokens: Vec<Token> = remainder.to_vec();
+        for line in &lines[1..] {
+            let toks = tokenize_line(line);
+            let stripped = strip_spaces(&toks);
+            all_var_tokens.push(Token::Space);
+            all_var_tokens.extend(stripped);
+        }
+
+        // Parse the collected tokens as a var list.
+        let var_list_result = parse_var_list(&all_var_tokens);
+        let (ok, raw_vars) = match var_list_result {
+            Ok(RawLine::Scalars(vars)) => (true, vars),
+            Ok(RawLine::LoopRow(vars)) => {
+                // Subscripted vars (e.g. "x_1") — treat each as a plain scalar using
+                // the concatenated math+subscript as the name seed.
+                (true, vars)
+            }
+            _ => (false, vec![]),
+        };
+
+        if !ok {
+            result.push(QueryTypeDecl {
+                type_id,
+                ok: false,
+                vars: vec![],
+            });
+            continue;
+        }
+
+        // Build local VarDecl list (independent scope from main vars).
+        // Use math+subscript as name seed so that subscripted vars like x_1 / x_2
+        // yield distinct identifiers (x1, x2) rather than colliding as x.
+        let seeds: Vec<String> = raw_vars
+            .iter()
+            .map(|rv| match &rv.subscript {
+                Some(s) => format!("{}{}", rv.math, s),
+                None => rv.math.clone(),
+            })
+            .collect();
+        let mut var_decls: Vec<VarDecl> = raw_vars
+            .iter()
+            .zip(seeds.iter())
+            .map(|(rv, seed)| {
+                let name = normalize_name(seed, &seeds);
+                VarDecl {
+                    name,
+                    math: rv.math.clone(),
+                    var_type: VarType::Unknown,
+                    dim: 0,
+                    size: vec![],
+                    is_size: false,
+                    is_jagged: false,
+                }
+            })
+            .collect();
+
+        // Apply same type inference as main vars.
+        infer_types(&mut var_decls, constraints);
+
+        result.push(QueryTypeDecl {
+            type_id,
+            ok: true,
+            vars: var_decls,
+        });
+    }
+
+    // Priority: query_types non-empty → discard query_body and iteration_vars/ops.
+    if !result.is_empty() {
+        query_body = vec![];
+        iteration_vars = vec![];
+        iteration_ops = vec![];
+    }
+
+    // iteration_ops non-empty → discard query_body (complex body takes priority over scalar body).
+    if !iteration_ops.is_empty() {
+        query_body = vec![];
+    }
+
+    (result, query_body, iteration_vars, iteration_ops)
+}
+
 fn not_ok(raw: &str) -> InputSpec {
     InputSpec {
         raw: raw.to_string(),
         ok: false,
         vars: vec![],
         ops: vec![],
+        query_types: vec![],
+        query_body: vec![],
+        testcase_body: vec![],
+        iteration_vars: vec![],
+        iteration_ops: vec![],
+        triangular: None,
     }
+}
+
+/// Extract all alphabetic identifiers from an arithmetic expression string.
+/// For a plain name like "n" returns ["n"]; for "2*n" returns ["n"]; for "n-1" returns ["n"].
+/// Used for is_size computation and valid_loop_bounds validation.
+fn expr_idents(expr: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, c) in expr.char_indices() {
+        // An identifier starts with an ASCII letter and continues with alphanumerics,
+        // matching the lexer's Ident token definition (which also consumes trailing digits).
+        // This ensures "n2" is extracted as ["n2"] rather than ["n"], preventing false
+        // positives in valid_loop_bounds and is_size when expressions like "n2" appear.
+        let in_ident = if start.is_some() {
+            c.is_ascii_alphanumeric()
+        } else {
+            c.is_ascii_alphabetic()
+        };
+        if in_ident {
+            if start.is_none() {
+                start = Some(i);
+            }
+        } else if let Some(s) = start.take() {
+            result.push(&expr[s..i]);
+        }
+    }
+    if let Some(s) = start {
+        result.push(&expr[s..]);
+    }
+    result
 }
 
 fn collect_math_names(ops: &[IntermOp]) -> Vec<String> {
@@ -1420,6 +3166,18 @@ fn collect_math_names(ops: &[IntermOp]) -> Vec<String> {
             }
             IntermOp::LoopBegin { end, .. } => names.push(end.clone()),
             IntermOp::LoopEnd => {}
+            IntermOp::ReadGrid { name, .. } => names.push(name.clone()),
+            IntermOp::LoopJagged {
+                end,
+                scalars_math,
+                size_var_math,
+                elem_var_math,
+            } => {
+                names.push(end.clone());
+                names.extend(scalars_math.iter().cloned());
+                names.push(size_var_math.clone());
+                names.push(elem_var_math.clone());
+            }
         }
     }
     names
@@ -1434,6 +3192,7 @@ fn ensure_var_decl(decls: &mut Vec<VarDecl>, name: &str, math: &str, dim: u8, si
             dim,
             size,
             is_size: false,
+            is_jagged: false,
         });
     }
 }
@@ -1441,7 +3200,7 @@ fn ensure_var_decl(decls: &mut Vec<VarDecl>, name: &str, math: &str, dim: u8, si
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::entity::{OpTag, VarType};
+    use domain::entity::{InputFormatKind, OpTag, VarType};
 
     // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -1623,21 +3382,28 @@ mod tests {
     // ── Phase 2: multiple blocks (non-query digit sub-format) → still ok=false
 
     /// Two \\n\\n-separated blocks where block[1] starts with a digit and no query marker
+    /// Uses q_i (short ident, not "query") → no marker detected → ok=false
     #[test]
     fn multi_block_digit_no_query_marker_not_ok() {
-        let spec = scalar_ok("Q\nquery_1\n\\vdots\nquery_Q\n\n1 x\n\n2 x k");
+        let spec = scalar_ok("Q\nq_1\n\\vdots\nq_Q\n\n1 x\n\n2 x k");
         assert!(
             !spec.ok,
-            "expected ok=false for multi-block query sub-format without \\text{{}} marker"
+            "expected ok=false for multi-block with short q_i marker (not 'query')"
         );
     }
 
     // ── Phase 2: T-testcases ──────────────────────────────────────────────────
 
+    // T-testcases is now supported: ok=true with testcase_body populated.
+    // The detailed assertions live in the testcase_body_* tests below.
     #[test]
-    fn phase2_t_testcases() {
+    fn phase2_t_testcases_now_supported() {
         let spec = scalar_ok("T\n\na s");
-        assert!(!spec.ok, "expected ok=false for T-testcases pattern");
+        assert!(spec.ok, "T-testcases should now parse as ok=true");
+        assert!(
+            !spec.testcase_body.is_empty(),
+            "testcase_body should be populated"
+        );
     }
 
     // ── Phase 1: subscripted scalars (A_x A_y) — now supported ──────────────
@@ -2072,6 +3838,70 @@ mod tests {
         );
     }
 
+    /// abc453-D style: each row has two leading elements before cdots.
+    /// "H W\nS_{1,1} S_{1,2} \\ldots S_{1,W}\nS_{2,1} S_{2,2} \\ldots S_{2,W}\n\\vdots\nS_{H,1} S_{H,2} \\ldots S_{H,W}\n"
+    /// → ok=true, s: dim=1, VarType::Str, flattened with size="h" (no LoopBegin)
+    #[test]
+    fn abc453d_grid_row_multi_prefix() {
+        let raw = "H W\nS_{1,1} S_{1,2} \\ldots S_{1,W}\nS_{2,1} S_{2,2} \\ldots S_{2,W}\n\\vdots\nS_{H,1} S_{H,2} \\ldots S_{H,W}\n";
+        let spec = parse(raw, "");
+        assert!(
+            spec.ok,
+            "expected ok=true for abc453-D style multi-prefix grid row"
+        );
+        let s_var = spec.vars.iter().find(|v| v.name == "s").expect("var s");
+        assert_eq!(s_var.dim, 1, "s should be Vec (dim=1)");
+        assert_eq!(s_var.var_type, VarType::Str, "s should be Str");
+        assert!(
+            !spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin),
+            "ops should be flattened (no LoopBegin)"
+        );
+        let s_op = spec
+            .ops
+            .iter()
+            .find(|o| o.vars.iter().any(|v| v.name == "s"))
+            .expect("ReadLine op for s");
+        assert_eq!(
+            s_op.vars[0].size.as_deref(),
+            Some("h"),
+            "flattened op should have size=h"
+        );
+    }
+
+    /// abc450-C style: no-space adjacent prefix elements before cdots should be a GridRow.
+    /// "H W\nS_{1,1}S_{1,2}\dots S_{1,W}\n\vdots\nS_{H,1}S_{H,2}\dots S_{H,W}\n"
+    /// → ok=true, s: dim=1, VarType::Str, flattened with size="h" (no LoopBegin)
+    #[test]
+    fn abc450c_grid_row_no_space() {
+        let raw = "H W\nS_{1,1}S_{1,2}\\dots S_{1,W}\n\\vdots\nS_{H,1}S_{H,2}\\dots S_{H,W}\n";
+        let spec = parse(raw, "");
+        assert!(
+            spec.ok,
+            "expected ok=true for abc450-C style no-space multi-prefix grid row"
+        );
+        let h_var = spec.vars.iter().find(|v| v.name == "h").expect("var h");
+        let w_var = spec.vars.iter().find(|v| v.name == "w").expect("var w");
+        assert_eq!(h_var.dim, 0, "h should be scalar (dim=0)");
+        assert_eq!(w_var.dim, 0, "w should be scalar (dim=0)");
+        let s_var = spec.vars.iter().find(|v| v.name == "s").expect("var s");
+        assert_eq!(s_var.dim, 1, "s should be Vec (dim=1)");
+        assert_eq!(s_var.var_type, VarType::Str, "s should be Str");
+        assert!(
+            !spec.ops.iter().any(|o| o.tag == OpTag::LoopBegin),
+            "ops should be flattened (no LoopBegin)"
+        );
+        let s_op = spec
+            .ops
+            .iter()
+            .find(|o| o.vars.iter().any(|v| v.name == "s"))
+            .expect("ReadLine op for s");
+        assert_eq!(
+            s_op.vars[0].size.as_deref(),
+            Some("h"),
+            "flattened op should have size=h"
+        );
+    }
+
     // ── TASK-016: 非数値添字スカラー ───────────────────────────────────────────────
 
     /// Single line with alphabetic subscripts: "A_x A_y" → scalars ax, ay
@@ -2141,5 +3971,973 @@ mod tests {
         let s = spec.vars.iter().find(|v| v.name == "s").expect("var s");
         assert_eq!(s.dim, 1, "s should be Vec<String> (dim=1)");
         assert_eq!(s.var_type, VarType::Str, "s should be Str");
+    }
+
+    // ── TASK-019: query sub-block parsing ─────────────────────────────────────
+
+    /// abc241-D style: numbered sub-blocks → query_types populated
+    #[test]
+    fn text_query_multi_block_numbered() {
+        let spec = with_constraints(
+            "N Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\n1 x\n\n2 x k\n\n3 l r\n",
+            "1 \\leq N, Q \\leq 2 \\times 10^5\n1 \\leq x \\leq 10^9\n1 \\leq k \\leq 10^9\n1 \\leq l \\leq r \\leq 10^9",
+        );
+        assert!(spec.ok, "expected ok=true");
+        assert_eq!(spec.query_types.len(), 3, "expected 3 query types");
+
+        let qt1 = &spec.query_types[0];
+        assert_eq!(qt1.type_id, "1");
+        assert!(qt1.ok);
+        assert_eq!(qt1.vars.len(), 1);
+        assert_eq!(qt1.vars[0].name, "x");
+
+        let qt2 = &spec.query_types[1];
+        assert_eq!(qt2.type_id, "2");
+        assert!(qt2.ok);
+        assert_eq!(qt2.vars.len(), 2);
+        assert_eq!(qt2.vars[0].name, "x");
+        assert_eq!(qt2.vars[1].name, "k");
+
+        let qt3 = &spec.query_types[2];
+        assert_eq!(qt3.type_id, "3");
+        assert!(qt3.ok);
+        assert_eq!(qt3.vars.len(), 2);
+        assert_eq!(qt3.vars[0].name, "l");
+        assert_eq!(qt3.vars[1].name, "r");
+    }
+
+    /// abc334-D style: sub-block starts with ident (not digit) → query_body populated
+    #[test]
+    fn query_body_single_var() {
+        let spec =
+            scalar_ok("N Q\nR_1 \\ldots R_N\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\nX\n");
+        assert!(spec.ok, "expected ok=true");
+        assert_eq!(
+            spec.query_types.len(),
+            0,
+            "non-numeric sub-block should not create query_types"
+        );
+        assert_eq!(
+            spec.query_body.len(),
+            1,
+            "non-numeric sub-block should populate query_body"
+        );
+        assert_eq!(spec.query_body[0].name, "x");
+        assert_eq!(spec.query_body[0].dim, 0);
+    }
+
+    /// No sub-blocks → query_types and query_body both empty
+    #[test]
+    fn query_no_subblocks_empty_query_types() {
+        let spec = scalar_ok("Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n");
+        assert!(spec.ok, "expected ok=true");
+        assert_eq!(
+            spec.query_types.len(),
+            0,
+            "no sub-blocks means query_types is empty"
+        );
+        assert_eq!(
+            spec.query_body.len(),
+            0,
+            "no sub-blocks means query_body is empty"
+        );
+    }
+
+    /// Type inference applies to query sub-block vars
+    #[test]
+    fn query_subblock_type_inference() {
+        let spec = with_constraints(
+            "N Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\n1 x\n",
+            "1 \\leq x \\leq 10^9",
+        );
+        assert!(spec.ok);
+        assert_eq!(spec.query_types.len(), 1);
+        let qt = &spec.query_types[0];
+        assert!(qt.ok);
+        assert_eq!(qt.vars[0].name, "x");
+        assert_eq!(qt.vars[0].var_type, VarType::Int);
+    }
+
+    /// Multi-var non-numeric sub-block → query_body has all vars
+    #[test]
+    fn query_body_multi_var() {
+        let spec = scalar_ok("Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\nL R\n");
+        assert!(spec.ok);
+        assert_eq!(spec.query_types.len(), 0);
+        assert_eq!(spec.query_body.len(), 2);
+        assert_eq!(spec.query_body[0].name, "l");
+        assert_eq!(spec.query_body[1].name, "r");
+    }
+
+    /// When query_types is non-empty, query_body is always empty
+    #[test]
+    fn query_body_ignored_when_query_types_present() {
+        let spec = scalar_ok("Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\n1 x\n\nX\n");
+        assert!(spec.ok);
+        assert_eq!(spec.query_types.len(), 1);
+        assert_eq!(
+            spec.query_body.len(),
+            0,
+            "query_body must be empty when query_types is non-empty"
+        );
+    }
+
+    // ── plain-text query marker (query_i pattern) ────────────────────────────
+
+    /// abc212-D style: plain-text "query_i" with ":" vdots separator
+    #[test]
+    fn plain_query_marker_abc212d() {
+        // Q\nquery_1\nquery_2\n:\nquery_Q\n\n1 X\n\n2 X\n\n3\n
+        let spec = scalar_ok("Q\nquery_1\nquery_2\n:\nquery_Q\n\n1 X\n\n2 X\n\n3\n");
+        assert!(spec.ok, "expected ok=true for plain query_i marker");
+        assert_eq!(spec.query_types.len(), 3, "expected 3 query types");
+        assert_eq!(spec.query_types[0].type_id, "1");
+        assert!(spec.query_types[0].ok);
+        assert_eq!(spec.query_types[0].vars.len(), 1);
+        assert_eq!(spec.query_types[0].vars[0].name, "x");
+        assert_eq!(spec.query_types[1].type_id, "2");
+        assert!(spec.query_types[1].ok);
+        assert_eq!(spec.query_types[1].vars.len(), 1);
+        assert_eq!(spec.query_types[2].type_id, "3");
+        assert!(spec.query_types[2].ok);
+        assert_eq!(spec.query_types[2].vars.len(), 0);
+    }
+
+    /// Short ident q_i (not "query") must NOT trigger query marker detection
+    #[test]
+    fn plain_query_marker_not_triggered_for_short_ident() {
+        let spec = scalar_ok("Q\nq_1\n:\nq_Q\n\n1 x\n");
+        assert!(
+            !spec.ok,
+            "expected ok=false: q_i is too short to be a query marker"
+        );
+    }
+
+    // A variable literally named `query` (no subscript) must not be misidentified as a
+    // query loop marker — it should parse as a normal scalar variable.
+    #[test]
+    fn standalone_query_variable_parses_as_scalar() {
+        // Input format: single line with one variable named "query"
+        let spec = parse("query", "1 \u{2264} query \u{2264} 10^9");
+        assert!(
+            spec.ok,
+            "expected ok=true: 'query' without subscript is a scalar var"
+        );
+        assert_eq!(spec.vars.len(), 1);
+        assert_eq!(spec.vars[0].name, "query");
+        assert!(spec.query_types.is_empty());
+        assert!(spec.query_body.is_empty());
+    }
+
+    // ── T-testcases ────────────────────────────────────────────────────────────────
+
+    /// abc238-D style: block 0 = single scalar T, block 1 = `a s`
+    /// Expected: ok=true, vars=[t(is_size:true)], testcase_body=[a, s]
+    #[test]
+    fn testcase_body_abc238d() {
+        let spec = parse("T\n\na s", "1 ≤ T ≤ 100\n1 ≤ a ≤ 10^9\ns is a string");
+        assert!(spec.ok, "expected ok=true for T-testcases format");
+        assert_eq!(spec.vars.len(), 1);
+        assert_eq!(spec.vars[0].name, "t");
+        assert!(spec.vars[0].is_size, "T var must be is_size:true");
+        assert_eq!(spec.testcase_body.len(), 2);
+        assert_eq!(spec.testcase_body[0].name, "a");
+        assert_eq!(spec.testcase_body[1].name, "s");
+        assert_eq!(
+            spec.testcase_body[1].var_type,
+            VarType::Str,
+            "s should be inferred as VarType::Str"
+        );
+        assert!(spec.query_types.is_empty());
+        assert!(spec.query_body.is_empty());
+    }
+
+    /// Single-block input: testcase_body must remain empty
+    #[test]
+    fn testcase_body_empty_for_single_block() {
+        let spec = scalar_ok("N\nA_1 \\ldots A_N");
+        assert!(spec.ok);
+        assert!(spec.testcase_body.is_empty());
+    }
+
+    /// T-testcases with a 1D array in block 1: ok=true but testcase_body is empty
+    /// (falls back to a TODO-only stub in the template).
+    #[test]
+    fn testcase_body_empty_when_block1_not_scalar() {
+        // Block 1 has a 1D array pattern (not plain scalars)
+        let spec = parse("T\n\nA_1 \\ldots A_N", "");
+        // ok=true: block 0 is a single ident and block 1 is not digit-start
+        assert!(
+            spec.ok,
+            "T-testcases with non-scalar block1 should still be ok=true"
+        );
+        // testcase_body empty: 1D cdots array is not a flat scalar list
+        assert!(spec.testcase_body.is_empty());
+        // block-0 var is still is_size=true even when testcase_body is empty
+        assert!(spec.vars[0].is_size, "loop-count var must be is_size:true");
+    }
+
+    // ── Fixed-size 1D (cdots) ──────────────────────────────────────────────────
+
+    /// A_1 \ldots A_3 — cdots with numeric end subscript → Array1D(size="3")
+    #[test]
+    fn array1d_fixed_cdots() {
+        let spec = scalar_ok("A_1 \\ldots A_3");
+        assert_eq!(spec.vars.len(), 1);
+        assert_eq!(spec.vars[0].name, "a");
+        assert_eq!(spec.vars[0].dim, 1);
+        assert_eq!(spec.vars[0].size, vec!["3"]);
+        assert!(!spec.vars[0].is_size, "literal size has no is_size var");
+        // ops: single ReadLine with dim=1, size="3"
+        assert_eq!(spec.ops.len(), 1);
+        assert_eq!(spec.ops[0].vars[0].name, "a");
+        assert_eq!(spec.ops[0].vars[0].dim, 1);
+        assert_eq!(spec.ops[0].vars[0].size.as_deref(), Some("3"));
+    }
+
+    // ── Fixed-size 1D (no cdots) ───────────────────────────────────────────────
+
+    /// A_1 A_2 A_3 — same name, sequential numeric subscripts, no cdots → Array1D(size="3")
+    #[test]
+    fn array1d_fixed_no_cdots() {
+        let spec = scalar_ok("A_1 A_2 A_3");
+        assert!(spec.ok, "expected ok=true");
+        assert_eq!(spec.vars.len(), 1);
+        assert_eq!(spec.vars[0].name, "a");
+        assert_eq!(spec.vars[0].dim, 1);
+        assert_eq!(spec.vars[0].size, vec!["3"]);
+        assert_eq!(spec.ops[0].vars[0].size.as_deref(), Some("3"));
+    }
+
+    /// A_1 A_2 — 2 elements is the minimum
+    #[test]
+    fn array1d_fixed_no_cdots_two_elements() {
+        let spec = scalar_ok("A_1 A_2");
+        assert!(spec.ok);
+        assert_eq!(spec.vars[0].dim, 1);
+        assert_eq!(spec.vars[0].size, vec!["2"]);
+    }
+
+    /// A_1 alone — not enough for an array; treated as scalar
+    #[test]
+    fn array1d_fixed_no_cdots_single_element_is_scalar() {
+        let spec = scalar_ok("A_1");
+        assert_eq!(spec.vars[0].dim, 0, "single element should be scalar");
+    }
+
+    /// A_1 B_1 — different base names → separate scalars, not array
+    #[test]
+    fn array1d_fixed_no_cdots_different_names_are_scalars() {
+        let spec = scalar_ok("A_1 B_1");
+        // Two distinct scalars
+        assert_eq!(spec.vars.len(), 2);
+        assert!(spec.vars.iter().all(|v| v.dim == 0));
+    }
+
+    /// A_1 A_3 — non-sequential subscripts → not an array
+    #[test]
+    fn array1d_fixed_no_cdots_nonsequential_are_scalars() {
+        let spec = scalar_ok("A_1 A_3");
+        // Falls through to scalars (non-sequential). Seeds are "A1" and "A3" →
+        // distinct normalized names "a1" and "a3".
+        assert!(spec.vars.iter().all(|v| v.dim == 0));
+    }
+
+    // ── Fixed 2D grid (comma subscripts) ──────────────────────────────────────
+
+    /// A_{1,1} ... A_{1,6} × 3 rows → dim=2, size=["6","3"]
+    #[test]
+    fn array2d_fixed_grid_abc456b() {
+        let input = "A_{1,1} A_{1,2} A_{1,3} A_{1,4} A_{1,5} A_{1,6}\nA_{2,1} A_{2,2} A_{2,3} A_{2,4} A_{2,5} A_{2,6}\nA_{3,1} A_{3,2} A_{3,3} A_{3,4} A_{3,5} A_{3,6}";
+        let spec = scalar_ok(input);
+        assert!(spec.ok, "expected ok=true for 2D fixed grid");
+        assert_eq!(spec.vars.len(), 1);
+        assert_eq!(spec.vars[0].name, "a");
+        assert_eq!(spec.vars[0].dim, 2);
+        assert_eq!(spec.vars[0].size, vec!["6", "3"]);
+        assert_eq!(spec.ops.len(), 1);
+        assert_eq!(spec.ops[0].vars[0].dim, 2);
+    }
+
+    /// 2×2 minimal grid
+    #[test]
+    fn array2d_fixed_grid_minimal_2x2() {
+        let input = "A_{1,1} A_{1,2}\nA_{2,1} A_{2,2}";
+        let spec = scalar_ok(input);
+        assert!(spec.ok);
+        assert_eq!(spec.vars[0].dim, 2);
+        assert_eq!(spec.vars[0].size, vec!["2", "2"]);
+    }
+
+    /// Single Array2DRow (1 row) — not enough rows to form a 2D grid
+    #[test]
+    fn array2d_single_row_not_grouped() {
+        // One row of comma-subscript elements cannot form a 2D grid (rows < 2 → Err → ok=false)
+        let spec = parse("A_{1,1} A_{1,2} A_{1,3}", "");
+        assert!(!spec.ok);
+    }
+
+    /// Row subscripts not starting from 1 → no 2D grid grouping → ok=false
+    #[test]
+    fn array2d_row_not_starting_from_1() {
+        let input = "A_{2,1} A_{2,2}\nA_{3,1} A_{3,2}";
+        let spec = parse(input, "");
+        assert!(!spec.ok);
+    }
+
+    /// Mismatched col counts → ok=false
+    #[test]
+    fn array2d_mismatched_col_counts() {
+        let input = "A_{1,1} A_{1,2} A_{1,3}\nA_{2,1} A_{2,2}";
+        let spec = parse(input, "");
+        assert!(!spec.ok);
+    }
+
+    /// Adjacent array1d_no_cdots elements (no Space) → ok=false
+    #[test]
+    fn array1d_no_cdots_adjacent_no_space() {
+        // A_1A_2 has no Space token between them — must be ok=false
+        let spec = parse("A_1A_2", "");
+        assert!(!spec.ok);
+    }
+
+    /// Unclosed brace subscript → ok=false
+    #[test]
+    fn subscript_unclosed_brace() {
+        // {1,2 without closing } must not produce a valid parse
+        let spec = parse("A_{1,2", "");
+        assert!(!spec.ok);
+    }
+
+    /// Trailing comma in brace subscript → ok=false
+    #[test]
+    fn subscript_trailing_comma() {
+        let spec = parse("A_{1,}", "");
+        assert!(!spec.ok);
+    }
+
+    /// Leading comma in brace subscript → ok=false
+    #[test]
+    fn subscript_leading_comma() {
+        let spec = parse("A_{,1}", "");
+        assert!(!spec.ok);
+    }
+
+    // ── iteration_vars / iteration_ops ────────────────────────────────────────
+
+    /// abc456_f style: query-marker block[0] + complex block[1] (1D array) →
+    /// iteration_vars non-empty, query_body empty.
+    #[test]
+    fn iteration_vars_simple_array_body() {
+        // block[0]: T + case loop marker
+        // block[1]: N K \n A_1 A_2 \ldots A_N
+        let raw = "T\n\\mathrm{case}_1\n\\vdots\n\\mathrm{case}_T\n\nN K\nA_1 A_2 \\ldots A_N";
+        let spec = parse(raw, "");
+        assert!(spec.ok, "expected ok=true for abc456_f style");
+        assert!(
+            spec.query_body.is_empty(),
+            "query_body must be empty when iteration_ops is populated"
+        );
+        assert!(
+            !spec.iteration_vars.is_empty(),
+            "iteration_vars should be non-empty for complex body"
+        );
+        assert!(
+            !spec.iteration_ops.is_empty(),
+            "iteration_ops should be non-empty for complex body"
+        );
+        // iteration_vars: n (is_size), k, a (dim=1, size=["n"])
+        let n = spec.iteration_vars.iter().find(|v| v.name == "n");
+        let k = spec.iteration_vars.iter().find(|v| v.name == "k");
+        let a = spec.iteration_vars.iter().find(|v| v.name == "a");
+        assert!(n.is_some(), "expected var n in iteration_vars");
+        assert!(n.unwrap().is_size, "n should be is_size=true");
+        assert!(k.is_some(), "expected var k in iteration_vars");
+        assert!(a.is_some(), "expected var a in iteration_vars");
+        let a = a.unwrap();
+        assert_eq!(a.dim, 1, "a should be dim=1");
+        assert_eq!(a.size, vec!["n"], "a should have size=[\"n\"]");
+
+        // iteration_ops: ReadLine([n, k]) then ReadLine([a, size=Some("n")])
+        assert_eq!(
+            spec.iteration_ops.len(),
+            2,
+            "expected exactly 2 iteration_ops"
+        );
+        assert_eq!(spec.iteration_ops[0].tag, OpTag::ReadLine);
+        assert_eq!(spec.iteration_ops[0].depth, 0);
+        let op0_names: Vec<&str> = spec.iteration_ops[0]
+            .vars
+            .iter()
+            .map(|v| v.name.as_str())
+            .collect();
+        assert_eq!(op0_names, vec!["n", "k"], "first op should read n and k");
+
+        assert_eq!(spec.iteration_ops[1].tag, OpTag::ReadLine);
+        assert_eq!(spec.iteration_ops[1].vars.len(), 1);
+        assert_eq!(spec.iteration_ops[1].vars[0].name, "a");
+        assert_eq!(spec.iteration_ops[1].vars[0].dim, 1);
+        assert_eq!(
+            spec.iteration_ops[1].vars[0].size.as_deref(),
+            Some("n"),
+            "a's op should have size=n"
+        );
+    }
+
+    /// abc456_e style: complex body with multiple loops and arrays →
+    /// iteration_vars non-empty, query_body empty.
+    #[test]
+    fn iteration_vars_complex_multi_loop_body() {
+        let raw = concat!(
+            "T\n\\mathrm{case}_1\n\\mathrm{case}_2\n\\vdots\n\\mathrm{case}_T\n\n",
+            "N M\nU_1 V_1\nU_2 V_2\n\\vdots\nU_M V_M\nW\nS_1\nS_2\n\\vdots\nS_N"
+        );
+        let spec = parse(raw, "");
+        assert!(spec.ok, "expected ok=true for abc456_e style");
+        assert!(
+            spec.query_body.is_empty(),
+            "query_body must be empty when iteration_ops is populated"
+        );
+        assert!(
+            !spec.iteration_vars.is_empty(),
+            "iteration_vars should be non-empty"
+        );
+        assert!(
+            !spec.iteration_ops.is_empty(),
+            "iteration_ops should be non-empty"
+        );
+    }
+
+    /// abc334_d style: scalar sub-block → query_body populated, iteration_vars empty (regression).
+    #[test]
+    fn iteration_vars_empty_for_scalar_body() {
+        let raw = "N Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\nX";
+        let spec = parse(raw, "");
+        assert!(spec.ok);
+        assert!(
+            !spec.query_body.is_empty(),
+            "scalar sub-block should populate query_body"
+        );
+        assert!(
+            spec.iteration_vars.is_empty(),
+            "iteration_vars must be empty for scalar body"
+        );
+        assert!(
+            spec.iteration_ops.is_empty(),
+            "iteration_ops must be empty for scalar body"
+        );
+    }
+
+    /// abc453_g (Copy Query): {\rm Query}_Q + 3 numbered sub-blocks → query_types(3)
+    #[test]
+    fn abc453g_rm_query_numbered_subtypes() {
+        let raw = "N M Q\r\n{\\rm Query}_1\r\n{\\rm Query}_2\r\n\\vdots\r\n{\\rm Query}_Q\r\n\n1 X_i Y_i\r\n\n2 X_i Y_i Z_i\r\n\n3 X_i L_i R_i\r\n";
+        let spec = parse(raw, "");
+        assert!(
+            spec.ok,
+            "expected ok=true, got ok=false. vars={:?} ops={:?}",
+            spec.vars, spec.ops
+        );
+        assert_eq!(spec.vars.len(), 3); // n, m, q
+        assert_eq!(spec.query_types.len(), 3);
+        // type 1: 1 X_i Y_i → 2 vars
+        assert_eq!(spec.query_types[0].type_id, "1");
+        assert!(spec.query_types[0].ok);
+        assert_eq!(spec.query_types[0].vars.len(), 2);
+        // type 2: 2 X_i Y_i Z_i → 3 vars
+        assert_eq!(spec.query_types[1].type_id, "2");
+        assert!(spec.query_types[1].ok);
+        assert_eq!(spec.query_types[1].vars.len(), 3);
+        // type 3: 3 X_i L_i R_i → 3 vars
+        assert_eq!(spec.query_types[2].type_id, "3");
+        assert!(spec.query_types[2].ok);
+        assert_eq!(spec.query_types[2].vars.len(), 3);
+    }
+
+    // ── arithmetic expression subscripts ─────────────────────────────────────
+
+    /// abc448_d: `N / A_1 \dots A_N / U_1 V_1 / \vdots / U_{N-1} V_{N-1}`
+    /// {N-1} subscript → loop end = "n-1", ok=true
+    #[test]
+    fn arithmetic_subscript_n_minus_1_loop() {
+        let raw = "N\nA_1 A_2 \\dots A_N\nU_1 V_1\nU_2 V_2\n\\vdots\nU_{N-1} V_{N-1}\n";
+        let spec = scalar_ok(raw);
+        assert!(spec.ok, "expected ok=true for {{N-1}} loop bound");
+        // n should be is_size (used as array size for A, and in expression for U/V)
+        let n = spec.vars.iter().find(|v| v.name == "n").expect("n var");
+        assert!(n.is_size, "n should be is_size");
+        // u and v should be dim=1
+        let u = spec.vars.iter().find(|v| v.name == "u").expect("u var");
+        let v = spec.vars.iter().find(|v| v.name == "v").expect("v var");
+        assert_eq!(u.dim, 1);
+        assert_eq!(v.dim, 1);
+        // loop_begin end should be "n-1"
+        let lb = spec
+            .ops
+            .iter()
+            .find(|o| o.tag == OpTag::LoopBegin)
+            .expect("LoopBegin");
+        assert_eq!(lb.end.as_deref(), Some("n-1"), "loop end should be n-1");
+    }
+
+    /// tupc2024_k: `N / A_1 A_2 \ldots A_{2N}`
+    /// {2N} subscript → array size = "2*n", ok=true, n.is_size=true
+    #[test]
+    fn arithmetic_subscript_2n_array_size() {
+        let raw = "N\nA_1 A_2 \\ldots A_{2N}\n";
+        let spec = scalar_ok(raw);
+        assert!(spec.ok, "expected ok=true for {{2N}} array size");
+        let a = spec.vars.iter().find(|v| v.name == "a").expect("a var");
+        assert_eq!(a.dim, 1);
+        assert_eq!(a.size, vec!["2*n".to_string()], "array size should be 2*n");
+        // n should be is_size (referenced in expression "2*n")
+        let n = spec.vars.iter().find(|v| v.name == "n").expect("n var");
+        assert!(
+            n.is_size,
+            "n should be is_size when referenced in 2*n expression"
+        );
+        // ReadLine for a: size = "2*n"
+        let rl = spec
+            .ops
+            .iter()
+            .find(|o| o.vars.iter().any(|v| v.name == "a"))
+            .expect("ReadLine for a");
+        assert_eq!(rl.vars[0].size.as_deref(), Some("2*n"));
+    }
+
+    /// {N+1} subscript → loop end = "n+1", ok=true
+    #[test]
+    fn arithmetic_subscript_n_plus_1() {
+        let raw = "N\nA_1 A_2 \\dots A_N\nX_1\nX_2\n\\vdots\nX_{N+1}\n";
+        let spec = scalar_ok(raw);
+        assert!(spec.ok, "expected ok=true for {{N+1}} loop bound");
+        let lb = spec
+            .ops
+            .iter()
+            .find(|o| o.tag == OpTag::LoopBegin)
+            .expect("LoopBegin");
+        assert_eq!(lb.end.as_deref(), Some("n+1"), "loop end should be n+1");
+    }
+
+    /// {2N-1} complex: Num * Ident - Num
+    #[test]
+    fn arithmetic_subscript_2n_minus_1() {
+        let raw = "N\nA_1 A_2 \\ldots A_{2N-1}\n";
+        let spec = scalar_ok(raw);
+        assert!(spec.ok, "expected ok=true for {{2N-1}} array size");
+        let a = spec.vars.iter().find(|v| v.name == "a").expect("a var");
+        assert_eq!(
+            a.size,
+            vec!["2*n-1".to_string()],
+            "array size should be 2*n-1"
+        );
+    }
+
+    /// {N-} trailing operator → ok: false (invalid arithmetic expression)
+    #[test]
+    fn arithmetic_subscript_trailing_operator_is_not_ok() {
+        let raw = "N\nA_1 A_2 \\ldots A_{N-}\n";
+        let spec = scalar_ok(raw);
+        assert!(
+            !spec.ok,
+            "trailing operator in subscript should give ok=false"
+        );
+    }
+
+    /// {2**N} consecutive operators → ok: false
+    #[test]
+    fn arithmetic_subscript_consecutive_operators_is_not_ok() {
+        let raw = "N\nA_1 A_2 \\ldots A_{2**N}\n";
+        let spec = scalar_ok(raw);
+        assert!(
+            !spec.ok,
+            "consecutive operators in subscript should give ok=false"
+        );
+    }
+
+    /// {1-1,2} comma + operator mix → treated as None subscript, not a valid 2D subscript
+    #[test]
+    fn arithmetic_subscript_comma_operator_mix_is_not_ok() {
+        // {1-1,2} must not silently corrupt to {11,2} and produce a spurious Array2DRow.
+        // The whole line should fail to parse as Array2DRow and fall through to ok:false.
+        let raw = "A_{1-1,2} A_{1-1,3}\n";
+        let spec = scalar_ok(raw);
+        assert!(
+            !spec.ok,
+            "comma+operator subscript mix should give ok=false"
+        );
+    }
+
+    /// When both `N` and `n` coexist (case collision), arithmetic subscripts like `{N-1}`
+    /// must produce the uppercase-preserved ident `"N"` in the expression (e.g. `"N-1"`),
+    /// so `valid_loop_bounds` and `is_size` still work correctly.
+    #[test]
+    fn arithmetic_subscript_collision_uppercase_preserved() {
+        // "N n\nA_1 A_2 \ldots A_N\nU_1 V_1\nU_2 V_2\n\\vdots\nU_{N-1} V_{N-1}\n"
+        // N and n both appear → collision → normalize_name("N") = "N" (uppercase preserved)
+        // The {N-1} subscript must produce loop end "N-1" (not "n-1") so valid_loop_bounds passes.
+        let raw = "N n\nA_1 A_2 \\ldots A_N\nU_1 V_1\nU_2 V_2\n\\vdots\nU_{N-1} V_{N-1}\n";
+        let spec = scalar_ok(raw);
+        assert!(
+            spec.ok,
+            "expected ok=true when N/n collision and {{N-1}} loop bound; vars={:?} ops={:?}",
+            spec.vars, spec.ops
+        );
+        // N is uppercase-preserved due to collision
+        let n_upper = spec.vars.iter().find(|v| v.math == "N").expect("N var");
+        assert_eq!(n_upper.name, "N");
+        assert!(
+            n_upper.is_size,
+            "N should be is_size=true (loop bound and array size)"
+        );
+        // loop end should be "N-1" (uppercase preserved)
+        let lb = spec
+            .ops
+            .iter()
+            .find(|o| o.tag == OpTag::LoopBegin)
+            .expect("LoopBegin");
+        assert_eq!(lb.end.as_deref(), Some("N-1"), "loop end should be N-1");
+    }
+
+    /// Numbered query_types → iteration_vars/ops always empty.
+    #[test]
+    fn iteration_vars_empty_when_query_types_present() {
+        let raw = "N Q\n\\text{query}_1\n\\vdots\n\\text{query}_Q\n\n1 x\n2 x k";
+        let spec = parse(raw, "");
+        assert!(spec.ok);
+        assert!(
+            !spec.query_types.is_empty(),
+            "expected query_types non-empty"
+        );
+        assert!(
+            spec.iteration_vars.is_empty(),
+            "iteration_vars must be empty when query_types present"
+        );
+        assert!(
+            spec.iteration_ops.is_empty(),
+            "iteration_ops must be empty when query_types present"
+        );
+    }
+
+    // ── triangular matrix ──────────────────────────────────────────────────────
+
+    /// ABC451-E style: N rows, upper-triangular, bound = N → bound = "n"
+    #[test]
+    fn triangular_abc451e_bound_n() {
+        let raw =
+            "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N}";
+        let constraints = "All input values are integers";
+        let spec = with_constraints(raw, constraints);
+        assert!(spec.ok, "expected ok=true; spec={spec:?}");
+        assert!(spec.triangular.is_some(), "expected triangular to be Some");
+        let tri = spec.triangular.as_ref().unwrap();
+        assert_eq!(tri.name, "a", "triangular name should be 'a'");
+        assert_eq!(tri.bound, "n", "triangular bound should be 'n'");
+        assert_eq!(
+            tri.var_type,
+            VarType::Int,
+            "triangular var_type should be Int"
+        );
+        assert_eq!(spec.vars.len(), 1, "expected exactly 1 var (size)");
+        assert_eq!(spec.vars[0].name, "n", "size var name should be 'n'");
+        assert!(spec.vars[0].is_size, "size var should have is_size=true");
+        assert_eq!(spec.ops.len(), 1, "expected exactly 1 op (ReadLine for n)");
+        assert_eq!(
+            spec.kind(),
+            InputFormatKind::Triangle,
+            "expected kind Triangle"
+        );
+    }
+
+    /// ABC236-D style: 2N-1 rows, upper-triangular with bound = 2N → bound = "2*n"
+    #[test]
+    fn triangular_abc236d_bound_2n() {
+        let raw = "N\nA_{1, 2} A_{1, 3} A_{1, 4} \\cdots A_{1, 2N}\nA_{2, 3} A_{2, 4} \\cdots A_{2, 2N}\nA_{3, 4} \\cdots A_{3, 2N}\n\\vdots\nA_{2N-1, 2N}";
+        let constraints = "All input values are integers";
+        let spec = with_constraints(raw, constraints);
+        assert!(spec.ok, "expected ok=true; spec={spec:?}");
+        assert!(spec.triangular.is_some(), "expected triangular to be Some");
+        let tri = spec.triangular.as_ref().unwrap();
+        assert_eq!(tri.bound, "2*n", "triangular bound should be '2*n'");
+        assert_eq!(tri.name, "a", "triangular name should be 'a'");
+    }
+
+    /// A line consisting only of \ldots (cdots tokens) should be treated as Vdots
+    /// and accepted as the vertical separator in a triangular matrix pattern.
+    #[test]
+    fn triangular_cdots_only_line_as_vdots() {
+        let raw = "N\nA_{1, 2} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\n\\ldots\nA_{N-1,N}";
+        let spec = scalar_ok(raw);
+        assert!(spec.ok, "expected ok=true; spec={spec:?}");
+        assert!(
+            spec.triangular.is_some(),
+            "expected triangular to be Some when \\ldots used as vertical separator"
+        );
+    }
+
+    /// Trailing cdots with no element after — must NOT be detected as triangular.
+    #[test]
+    fn triangular_trailing_cdots_no_element_after_is_not_ok() {
+        // "A_{1,2} \ldots" — cdots at end, no bound element following
+        let raw = "N\nA_{1, 2} \\ldots\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when cdots has no element after it, got: {spec:?}"
+        );
+    }
+
+    /// First subscript that is an ident (not a number) — must NOT be detected as triangular.
+    #[test]
+    fn triangular_ident_first_subscript_is_not_triangular() {
+        // "A_{i, j}" style — first subscript is a variable, not a literal number
+        let raw =
+            "N\nA_{i, 2} A_{i, 3} \\ldots A_{i, N}\nA_{j, 3} \\ldots A_{j, N}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when first subscript is ident, got: {spec:?}"
+        );
+    }
+
+    /// Last line with extra tokens after the subscript — must NOT be detected as triangular.
+    #[test]
+    fn triangular_last_line_extra_tokens_is_not_triangular() {
+        // "A_{N-1,N} extra" — trailing token after the subscript
+        let raw = "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N} X";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when last line has extra tokens, got: {spec:?}"
+        );
+    }
+
+    /// Line 2 has a different bound than line 1 — must NOT be detected as triangular.
+    #[test]
+    fn triangular_inconsistent_bound_line2_is_not_triangular() {
+        // Line 1 bound = N, line 2 bound = M — different
+        let raw =
+            "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, M}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when line 2 has a different bound, got: {spec:?}"
+        );
+    }
+
+    /// An intermediate row has a different bound than line 1 — must NOT be detected as triangular.
+    #[test]
+    fn triangular_inconsistent_bound_intermediate_is_not_triangular() {
+        // Lines: size, row1 (bound N), row2 (bound M), vdots, last
+        let raw = "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\nA_{3, 4} \\ldots A_{3, M}\n\\vdots\nA_{N-1,N}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when an intermediate row has a different bound, got: {spec:?}"
+        );
+    }
+
+    /// bound_raw references a variable that is not the size variable — must NOT be detected.
+    #[test]
+    fn triangular_bound_unknown_ident_is_not_triangular() {
+        // bound is "M" but size variable is "N" — M is undefined in the template context
+        let raw = "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, M}\n\\vdots\nA_{N-1,M}";
+        let spec = with_constraints(raw, "All input values are integers");
+        assert!(
+            spec.triangular.is_none(),
+            "expected triangular=None when bound references an unknown ident, got: {spec:?}"
+        );
+    }
+
+    /// When constraints are empty, var_type should default to Int (not Unknown).
+    #[test]
+    fn triangular_unknown_var_type_falls_back_to_int() {
+        let raw =
+            "N\nA_{1, 2} A_{1, 3} \\ldots A_{1, N}\nA_{2, 3} \\ldots A_{2, N}\n\\vdots\nA_{N-1,N}";
+        // Pass empty constraints so infer_types produces Unknown
+        let spec = with_constraints(raw, "");
+        assert!(
+            spec.triangular.is_some(),
+            "expected triangular to be detected; spec={spec:?}"
+        );
+        let tri = spec.triangular.unwrap();
+        assert_eq!(
+            tri.var_type,
+            VarType::Int,
+            "expected var_type=Int when constraints are empty, got: {:?}",
+            tri.var_type
+        );
+    }
+
+    /// Unicode horizontal ellipsis (U+2026) should be substituted for \ldots before tokenization.
+    #[test]
+    fn triangular_unicode_ellipsis() {
+        // Replace \ldots with the actual Unicode … character (U+2026)
+        let raw = "N\nA_{1, 2} A_{1, 3} \u{2026} A_{1, N}\nA_{2, 3} \u{2026} A_{2, N}\n\\vdots\nA_{N-1,N}";
+        let constraints = "All input values are integers";
+        let spec = with_constraints(raw, constraints);
+        assert!(
+            spec.ok,
+            "expected ok=true with Unicode ellipsis; spec={spec:?}"
+        );
+        assert!(
+            spec.triangular.is_some(),
+            "expected triangular to be Some when Unicode … used instead of \\ldots"
+        );
+    }
+
+    // ── TASK-032: jagged array input detection ────────────────────────────────
+
+    /// abc457_b: single scalar (L_N) is the size_var, followed by a jagged array A
+    /// "N\nL_1 A_{1,1} \ldots A_{1,L_1}\n\vdots\nL_N A_{N,1} \ldots A_{N,L_N}\n"
+    #[test]
+    fn jagged_abc457b_single_scalar_size_var() {
+        let raw = "N\nL_1 A_{1,1} \\ldots A_{1,L_1}\n\\vdots\nL_N A_{N,1} \\ldots A_{N,L_N}\n";
+        let constraints = "1 \\leq N \\leq 10^5";
+        let spec = with_constraints(raw, constraints);
+        assert!(
+            spec.ok,
+            "expected ok=true for abc457_b jagged pattern; spec={spec:?}"
+        );
+        assert_eq!(
+            spec.ops.len(),
+            2,
+            "expected exactly 2 ops (read_line for N + loop_jagged); ops={:?}",
+            spec.ops
+        );
+        assert_eq!(
+            spec.ops[1].tag,
+            OpTag::LoopJagged,
+            "expected ops[1].tag == LoopJagged; got {:?}",
+            spec.ops[1].tag
+        );
+        assert_eq!(
+            spec.ops[1].end.as_deref(),
+            Some("n"),
+            "expected loop end == 'n'; got {:?}",
+            spec.ops[1].end
+        );
+        assert!(
+            spec.ops[1].scalars.is_empty(),
+            "expected scalars to be empty for abc457_b (L is the size_var itself); scalars={:?}",
+            spec.ops[1].scalars
+        );
+        assert_eq!(
+            spec.ops[1].size_var.as_ref().map(|v| v.name.as_str()),
+            Some("l"),
+            "expected size_var.name == 'l'; got {:?}",
+            spec.ops[1].size_var
+        );
+        assert_eq!(
+            spec.ops[1].elem_var.as_ref().map(|v| v.name.as_str()),
+            Some("a"),
+            "expected elem_var.name == 'a'; got {:?}",
+            spec.ops[1].elem_var
+        );
+        assert_eq!(
+            spec.kind(),
+            InputFormatKind::Jagged,
+            "expected kind == Jagged; got {:?}",
+            spec.kind()
+        );
+    }
+
+    /// abc446_b: size_var L is on its own line before the jagged array X, multi-row body
+    /// "N M\nL_1\nX_{1,1} \cdots X_{1,L_1}\n\vdots\nL_N\nX_{N,1} \cdots X_{N,L_N}\n"
+    #[test]
+    fn jagged_abc446b_two_body_rows() {
+        let raw = "N M\nL_1\nX_{1,1} \\cdots X_{1,L_1}\n\\vdots\nL_N\nX_{N,1} \\cdots X_{N,L_N}\n";
+        let spec = with_constraints(raw, "");
+        assert!(
+            spec.ok,
+            "expected ok=true for abc446_b jagged pattern; spec={spec:?}"
+        );
+        assert!(
+            spec.ops.iter().any(|o| o.tag == OpTag::LoopJagged),
+            "expected at least one LoopJagged op; ops={:?}",
+            spec.ops
+        );
+        assert_eq!(
+            spec.ops[1].tag,
+            OpTag::LoopJagged,
+            "expected ops[1].tag == LoopJagged; got {:?}",
+            spec.ops[1].tag
+        );
+        assert_eq!(
+            spec.ops[1].end.as_deref(),
+            Some("n"),
+            "expected loop end == 'n'; got {:?}",
+            spec.ops[1].end
+        );
+        assert!(
+            spec.ops[1].scalars.is_empty(),
+            "expected scalars to be empty for abc446_b; scalars={:?}",
+            spec.ops[1].scalars
+        );
+        assert_eq!(
+            spec.ops[1].size_var.as_ref().map(|v| v.name.as_str()),
+            Some("l"),
+            "expected size_var.name == 'l'; got {:?}",
+            spec.ops[1].size_var
+        );
+        assert_eq!(
+            spec.ops[1].elem_var.as_ref().map(|v| v.name.as_str()),
+            Some("x"),
+            "expected elem_var.name == 'x'; got {:?}",
+            spec.ops[1].elem_var
+        );
+    }
+
+    /// abc226_c: two scalars T_N K_N before jagged array A_{N,1}...A_{N,K_N}
+    /// "N\nT_1 K_1 A_{1,1} \ldots A_{1,K_1}\n\vdots\nT_N K_N A_{N,1} \ldots A_{N,K_N}\n"
+    #[test]
+    fn jagged_abc226c_two_scalars() {
+        let raw =
+            "N\nT_1 K_1 A_{1,1} \\ldots A_{1,K_1}\n\\vdots\nT_N K_N A_{N,1} \\ldots A_{N,K_N}\n";
+        let spec = with_constraints(raw, "");
+        assert!(
+            spec.ok,
+            "expected ok=true for abc226_c jagged pattern; spec={spec:?}"
+        );
+        assert!(
+            spec.ops.iter().any(|o| o.tag == OpTag::LoopJagged),
+            "expected at least one LoopJagged op; ops={:?}",
+            spec.ops
+        );
+        assert_eq!(
+            spec.ops[1].tag,
+            OpTag::LoopJagged,
+            "expected ops[1].tag == LoopJagged; got {:?}",
+            spec.ops[1].tag
+        );
+        assert_eq!(
+            spec.ops[1].end.as_deref(),
+            Some("n"),
+            "expected loop end == 'n'; got {:?}",
+            spec.ops[1].end
+        );
+        assert_eq!(
+            spec.ops[1].scalars.len(),
+            1,
+            "expected 1 scalar (T) in scalars; scalars={:?}",
+            spec.ops[1].scalars
+        );
+        assert_eq!(
+            spec.ops[1].scalars[0].name, "t",
+            "expected scalars[0].name == 't'; got {:?}",
+            spec.ops[1].scalars[0].name
+        );
+        assert_eq!(
+            spec.ops[1].size_var.as_ref().map(|v| v.name.as_str()),
+            Some("k"),
+            "expected size_var.name == 'k'; got {:?}",
+            spec.ops[1].size_var
+        );
+        assert_eq!(
+            spec.ops[1].elem_var.as_ref().map(|v| v.name.as_str()),
+            Some("a"),
+            "expected elem_var.name == 'a'; got {:?}",
+            spec.ops[1].elem_var
+        );
     }
 }

@@ -154,18 +154,140 @@ macro_rules! out {
 {% if input_format.ok -%}
 use proconio::input;
 
+{% set_global query_loop_end = "" -%}
+{% for i in range(end=input_format.ops | length) -%}
+{% set op = input_format.ops[i] -%}
+{% if op.tag == "loop_begin" -%}
+{% set next_i = i + 1 -%}
+{% if input_format.ops[next_i] is defined and input_format.ops[next_i].tag == "loop_end" -%}
+{% set_global query_loop_end = op.end -%}
+{% endif -%}
+{% endif -%}
+{% endfor -%}
 fn solve(
     {%- for vd in input_format.vars %}
     {% if vd.dim == 0 -%}
     {{ vd.name }}: {% if vd.is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
     {%- elif vd.dim == 1 -%}
-    {{ vd.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}>,
+    {{ vd.name }}: {% if vd.is_jagged %}Vec<Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}>>{% elif vd.is_size %}Vec<usize>{% else %}Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}>{% endif %},
+    {%- elif vd.dim == 2 -%}
+    {{ vd.name }}: Vec<Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}>>,
     {%- endif %}
     {%- endfor %}
+    {%- if input_format.triangular %}
+    {{ input_format.triangular.name }}: Vec<Vec<{% if input_format.triangular.var_type == "str" %}String{% else %}i64{% endif %}>>,
+    {%- endif %}
 ) -> String {
     with_output(|| {
+        {% if query_loop_end != "" -%}
+        {% if input_format.query_types | length > 0 -%}
+        for _ in 0..{{ query_loop_end }} {
+            input! { query_type: usize, }
+            match query_type {
+                {% for qt in input_format.query_types -%}
+                {{ qt.type_id }} => {
+                    {% if qt.ok -%}
+                    input! {
+                        {% for v in qt.vars -%}
+                        {{ v.name }}: {% if v.var_type == "str" %}String{% else %}i64{% endif %},
+                        {% endfor -%}
+                    }
+                    {% endif -%}
+                    // TODO: handle query type {{ qt.type_id }}
+                    todo!()
+                }
+                {% endfor -%}
+                _ => unreachable!(),
+            }
+        }
+        {% elif input_format.query_body | length > 0 -%}
+        for _ in 0..{{ query_loop_end }} {
+            input! {
+                {% for v in input_format.query_body -%}
+                {{ v.name }}: {% if v.var_type == "str" %}String{% else %}i64{% endif %},
+                {% endfor -%}
+            }
+            // TODO: handle query
+            todo!()
+        }
+        {% elif input_format.iteration_ops | length > 0 -%}
+        {# Complex iteration body (loops/arrays): render iteration_ops inside the loop #}
+        for _ in 0..{{ query_loop_end }} {
+            {% for op in input_format.iteration_ops -%}
+            {% if op.tag == "read_line" and op.depth == 0 -%}
+            input! {
+                {% for v in op.vars -%}
+                {% if v.dim == 0 -%}
+                {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                {{ v.name }}: {% if vd.is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
+                {% elif v.dim == 1 -%}
+                {% if v.size -%}
+                {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                {{ v.name }}: [{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ v.size }}],
+                {% endif -%}
+                {% elif v.dim == 2 -%}
+                {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                {{ v.name }}: [[{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ vd.size[0] }}]; {{ vd.size[1] }}],
+                {% endif -%}
+                {% endfor -%}
+            }
+            {% elif op.tag == "loop_begin" -%}
+            {% set next_index = loop.index0 + 1 -%}
+            {% if input_format.iteration_ops[next_index] is defined and input_format.iteration_ops[next_index].tag != "loop_end" -%}
+            {% set body_op = input_format.iteration_ops[next_index] -%}
+            {% for v in body_op.vars -%}
+            {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+            let mut {{ v.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}> = Vec::new();
+            {% endfor -%}
+            for _ in 0..{{ op.end }} {
+                input! {
+            {% else -%}
+            for _ in 0..{{ op.end }} {
+                // TODO: read loop body
+            }
+            {% endif -%}
+            {% elif op.tag == "read_line" and op.depth > 0 -%}
+                    {% for v in op.vars -%}
+                    {% if v.index -%}
+                    {% set vd = input_format.iteration_vars | filter(attribute="name", value=v.name) | first -%}
+                    __tmp_{{ v.name }}: {% if vd.var_type == "str" %}String{% else %}i64{% endif %},
+                    {% endif -%}
+                    {% endfor -%}
+            {% elif op.tag == "loop_end" -%}
+            {% set prev_index = loop.index0 - 1 -%}
+            {% set body_op = input_format.iteration_ops[prev_index] -%}
+            {% if body_op.tag != "loop_begin" -%}
+                }
+                {% for v in body_op.vars -%}
+                {{ v.name }}.push(__tmp_{{ v.name }});
+                {% endfor -%}
+            }
+            {% endif -%}
+            {% endif -%}
+            {% endfor -%}
+            // TODO: solve each iteration
+            todo!()
+        }
+        {% else -%}
+        for _ in 0..{{ query_loop_end }} {
+            // TODO: read and handle query
+            todo!()
+        }
+        {% endif -%}
+        {% elif input_format.testcase_body | length > 0 -%}
+        for _ in 0..{{ input_format.vars[0].name }} {
+            input! {
+                {% for v in input_format.testcase_body -%}
+                {{ v.name }}: {% if v.var_type == "str" %}String{% else %}i64{% endif %},
+                {% endfor -%}
+            }
+            // TODO: handle test case
+            todo!()
+        }
+        {% else -%}
         // TODO: write solution and call out!(answer)
         todo!()
+        {% endif -%}
     })
 }
 
@@ -186,6 +308,9 @@ fn main() {
         {% else -%}
         // TODO: unsupported 1-D read for {{ v.name }}
         {% endif -%}
+        {% elif v.dim == 2 -%}
+        {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
+        {{ v.name }}: [[{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ vd.size[0] }}]; {{ vd.size[1] }}],
         {% endif -%}
         {% endfor -%}
     }
@@ -193,11 +318,7 @@ fn main() {
     {% set next_index = loop.index0 + 1 -%}
     {% set body_op = input_format.ops[next_index] -%}
     {% if body_op.tag == "loop_end" -%}
-    // TODO: read {{ op.end }} queries in a loop — write manually
-    for _ in 0..{{ op.end }} {
-        // input! { t: usize, ... }
-        todo!()
-    }
+    {# empty-body loop (QueryLine origin) — handled in solve, skip in main #}
     {% else -%}
     {% for v in body_op.vars -%}
     {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
@@ -223,9 +344,57 @@ fn main() {
         {% endfor -%}
     }
     {% endif -%}
+    {% elif op.tag == "loop_jagged" -%}
+    {% for sv in op.scalars -%}
+    {% set vd = input_format.vars | filter(attribute="name", value=sv.name) | first -%}
+    let mut {{ sv.name }}: Vec<{% if vd.var_type == "str" %}String{% else %}i64{% endif %}> = Vec::new();
+    {% endfor -%}
+    {% if op.size_var -%}
+    let mut {{ op.size_var.name }}: Vec<usize> = Vec::new();
+    {% endif -%}
+    {% if op.elem_var -%}
+    {% set evd = input_format.vars | filter(attribute="name", value=op.elem_var.name) | first -%}
+    let mut {{ op.elem_var.name }}: Vec<Vec<{% if evd.var_type == "str" %}String{% else %}i64{% endif %}>> = Vec::new();
+    {% endif -%}
+    for _ in 0..{{ op.end }} {
+        {% if op.scalars | length > 0 or op.size_var -%}
+        input! {
+            {% for sv in op.scalars -%}
+            {% set vd = input_format.vars | filter(attribute="name", value=sv.name) | first -%}
+            __tmp_{{ sv.name }}: {% if vd.var_type == "str" %}String{% else %}i64{% endif %},
+            {% endfor -%}
+            {% if op.size_var -%}
+            __tmp_{{ op.size_var.name }}: usize,
+            {% endif -%}
+        }
+        {% endif -%}
+        {% if op.elem_var -%}
+        {% set evd = input_format.vars | filter(attribute="name", value=op.elem_var.name) | first -%}
+        input! { __tmp_{{ op.elem_var.name }}: [{% if evd.var_type == "str" %}String{% else %}i64{% endif %}; __tmp_{{ op.size_var.name }}], }
+        {% endif -%}
+        {% for sv in op.scalars -%}
+        {{ sv.name }}.push(__tmp_{{ sv.name }});
+        {% endfor -%}
+        {% if op.size_var -%}
+        {{ op.size_var.name }}.push(__tmp_{{ op.size_var.name }});
+        {% endif -%}
+        {% if op.elem_var -%}
+        {{ op.elem_var.name }}.push(__tmp_{{ op.elem_var.name }});
+        {% endif -%}
+    }
     {% endif -%}
     {% endfor -%}
+    {% if input_format.triangular -%}
+    {% set tri = input_format.triangular -%}
+    let mut {{ tri.name }}: Vec<Vec<{% if tri.var_type == "str" %}String{% else %}i64{% endif %}>> = Vec::new();
+    for _i in 0..{{ tri.bound }}-1 {
+        input! { _row: [{% if tri.var_type == "str" %}String{% else %}i64{% endif %}; {{ tri.bound }}-1-_i], }
+        {{ tri.name }}.push(_row);
+    }
+    print!("{}", solve({% if input_format.vars %}{{ input_format.vars | map(attribute="name") | join(sep=", ") }}, {% endif %}{{ tri.name }}));
+    {% else -%}
     print!("{}", solve({{ input_format.vars | map(attribute="name") | join(sep=", ") }}));
+    {% endif -%}
 }
 {% else -%}
 fn solve<R: std::io::BufRead>(src: &mut impl proconio::source::Source<R>) -> String {
@@ -261,7 +430,30 @@ mod tests {
         for (i, &(input, expected)) in CASES.iter().enumerate() {
             {% if input_format.ok -%}
             let result = {
-                {% if input_format.ops | filter(attribute="tag", value="loop_begin") | length > 0 -%}
+                {% if input_format.triangular -%}
+                {% set tri = input_format.triangular -%}
+                use proconio::input;
+                use proconio::source::line::LineSource;
+                use std::io::BufReader;
+                let mut _src = LineSource::new(BufReader::new(input.as_bytes()));
+                {% for op in input_format.ops -%}
+                {% if op.tag == "read_line" -%}
+                input! {
+                    from &mut _src,
+                    {% for v in op.vars -%}
+                    {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
+                    {{ v.name }}: {% if vd.is_size %}usize{% elif vd.var_type == "str" %}String{% else %}i64{% endif %},
+                    {% endfor -%}
+                }
+                {% endif -%}
+                {% endfor -%}
+                let mut {{ tri.name }}: Vec<Vec<{% if tri.var_type == "str" %}String{% else %}i64{% endif %}>> = Vec::new();
+                for _i in 0..{{ tri.bound }}-1 {
+                    input! { from &mut _src, _row: [{% if tri.var_type == "str" %}String{% else %}i64{% endif %}; {{ tri.bound }}-1-_i], }
+                    {{ tri.name }}.push(_row);
+                }
+                solve({% if input_format.vars %}{{ input_format.vars | map(attribute="name") | join(sep=", ") }}, {% endif %}{{ tri.name }})
+                {% elif input_format.ops | filter(attribute="tag", value="loop_begin") | length > 0 or input_format.ops | filter(attribute="tag", value="loop_jagged") | length > 0 -%}
                 // TODO: loop input — test harness with loops is not auto-generated; write manually
                 panic!("TODO: loop input sample test harness is not implemented")
                 {% else -%}
@@ -283,6 +475,9 @@ mod tests {
                     {% else -%}
                     // TODO: unsupported 1-D read for {{ v.name }}
                     {% endif -%}
+                    {% elif v.dim == 2 -%}
+                    {% set vd = input_format.vars | filter(attribute="name", value=v.name) | first -%}
+                    {{ v.name }}: [[{% if vd.var_type == "str" %}String{% else %}i64{% endif %}; {{ vd.size[0] }}]; {{ vd.size[1] }}],
                     {% endif -%}
                     {% endfor -%}
                     {% endif -%}
