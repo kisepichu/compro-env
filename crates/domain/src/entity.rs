@@ -8,6 +8,25 @@ pub enum OJKind {
     AtCoder,
 }
 
+/// Static descriptor used to detect an `OJKind` from a contest input string.
+struct OjDescriptor {
+    kind: OJKind,
+    /// URL host, e.g. "atcoder.jp".
+    url_host: &'static str,
+    /// Path segment that precedes the contest id, e.g. "/contests/".
+    url_path_prefix: &'static str,
+    /// contest_id prefixes (lowercase), e.g. ["abc", "arc", "agc", "ahc"].
+    id_prefixes: &'static [&'static str],
+}
+
+/// Descriptor table for all supported online judges.
+const OJ_DESCRIPTORS: &[OjDescriptor] = &[OjDescriptor {
+    kind: OJKind::AtCoder,
+    url_host: "atcoder.jp",
+    url_path_prefix: "/contests/",
+    id_prefixes: &["abc", "arc", "agc", "ahc"],
+}];
+
 impl OJKind {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -15,18 +34,33 @@ impl OJKind {
         }
     }
 
-    /// Infer OJ kind from contest ID prefix.
-    pub fn from_contest_id_prefix(id: &str) -> Option<Self> {
-        let lower = id.to_lowercase();
-        if lower.starts_with("abc")
-            || lower.starts_with("arc")
-            || lower.starts_with("ahc")
-            || lower.starts_with("agc")
-        {
-            Some(OJKind::AtCoder)
-        } else {
-            None
+    /// Detects the OJ kind and contest id from a contest input string (URL or id).
+    ///
+    /// Pure: no filesystem, no network, no path-safety validation.
+    /// - URL match: `https://{url_host}{url_path_prefix}{id}...` → takes only the
+    ///   first path segment after the prefix, lowercased. Returns `None` if empty.
+    /// - Prefix match: lowercased input starting with any `id_prefix` → the lowercased input.
+    /// - Otherwise `None`.
+    pub fn detect(input: &str) -> Option<(OJKind, String)> {
+        // First, try URL matches.
+        for d in OJ_DESCRIPTORS {
+            let url_prefix = format!("https://{}{}", d.url_host, d.url_path_prefix);
+            if let Some(rest) = input.strip_prefix(&url_prefix) {
+                let id = rest.trim_end_matches('/').split('/').next()?;
+                if id.is_empty() {
+                    return None;
+                }
+                return Some((d.kind.clone(), id.to_lowercase()));
+            }
         }
+        // Then, try contest-id prefix matches.
+        let lower = input.to_lowercase();
+        for d in OJ_DESCRIPTORS {
+            if d.id_prefixes.iter().any(|p| lower.starts_with(p)) {
+                return Some((d.kind.clone(), lower));
+            }
+        }
+        None
     }
 }
 
@@ -782,5 +816,81 @@ mod language_tests {
         let serialized = serde_json::to_string(&original).unwrap();
         let deserialized: Language = serde_json::from_str(&serialized).unwrap();
         assert_eq!(original, deserialized);
+    }
+}
+
+#[cfg(test)]
+mod detect_tests {
+    use super::*;
+
+    #[test]
+    fn detects_atcoder_from_contest_url() {
+        assert_eq!(
+            OJKind::detect("https://atcoder.jp/contests/abc334"),
+            Some((OJKind::AtCoder, "abc334".to_string()))
+        );
+    }
+
+    #[test]
+    fn atcoder_url_with_trailing_slash_keeps_first_segment() {
+        assert_eq!(
+            OJKind::detect("https://atcoder.jp/contests/abc334/"),
+            Some((OJKind::AtCoder, "abc334".to_string()))
+        );
+    }
+
+    #[test]
+    fn atcoder_url_with_extra_path_segments_keeps_first_segment() {
+        assert_eq!(
+            OJKind::detect("https://atcoder.jp/contests/abc334/tasks/abc334_a"),
+            Some((OJKind::AtCoder, "abc334".to_string()))
+        );
+    }
+
+    #[test]
+    fn atcoder_url_with_uppercase_id_is_lowercased() {
+        assert_eq!(
+            OJKind::detect("https://atcoder.jp/contests/ABC334"),
+            Some((OJKind::AtCoder, "abc334".to_string()))
+        );
+    }
+
+    #[test]
+    fn detects_atcoder_from_abc_prefix_id() {
+        assert_eq!(
+            OJKind::detect("abc334"),
+            Some((OJKind::AtCoder, "abc334".to_string()))
+        );
+    }
+
+    #[test]
+    fn detects_atcoder_from_agc_prefix_id() {
+        assert_eq!(
+            OJKind::detect("agc001"),
+            Some((OJKind::AtCoder, "agc001".to_string()))
+        );
+    }
+
+    #[test]
+    fn uppercase_prefix_id_is_lowercased() {
+        assert_eq!(
+            OJKind::detect("ARC100"),
+            Some((OJKind::AtCoder, "arc100".to_string()))
+        );
+    }
+
+    #[test]
+    fn unknown_contest_id_returns_none() {
+        assert_eq!(OJKind::detect("xyz123"), None);
+    }
+
+    #[test]
+    fn unknown_url_host_returns_none() {
+        assert_eq!(OJKind::detect("https://example.com/contests/abc334"), None);
+    }
+
+    #[test]
+    fn atcoder_url_with_empty_id_returns_none() {
+        assert_eq!(OJKind::detect("https://atcoder.jp/contests/"), None);
     }
 }

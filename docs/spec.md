@@ -151,8 +151,15 @@ OJ ごとにセクションを分ける (セクション名 = OJKind::as_str)。
 
 ## OJ 判定ロジック
 
-各 OJ が判定材料 (URL パターン / contest_id プレフィックス) を申告し、判定器が走査する
-(一般化は TASK-034。詳細は `docs/online_judges/README.md`)。
+各 OJ が判定材料 (URL ホスト/パターン / contest_id プレフィックス) を **descriptor** として申告し、
+domain の純粋関数 `OJKind::detect(input) -> Option<(OJKind, String)>` が descriptor を走査して
+`(OJKind, contest_id)` を返す。判定は I/O を行わない純粋ロジックなので domain 層に置く
+(詳細は `docs/online_judges/README.md`)。
+
+- 各 OJ は descriptor で「URL ホスト + パスパターン」「contest_id プレフィックス」を申告する。
+- infrastructure の `parse_contest_input` は `OJKind::detect` に委譲するだけにする
+  (パス安全性検証 `is_safe_path_component` の置き場は実装時に決定)。
+- OJ を増やす際は descriptor を 1 件追加するだけで判定器に組み込まれる (match の散在を避ける)。
 
 ```
 "abc334"     → "abc"/"arc"/"agc"/"ahc" プレフィックス → AtCoder
@@ -164,6 +171,11 @@ OJ ごとにセクションを分ける (セクション名 = OJKind::as_str)。
 
 LibraryChecker は contest_id のプレフィックス命名規則を持たないため、URL かプロンプトで判定する。
 `ce init` 後は `.ce.toml` に保存するため、以降の判定は不要。
+
+**実装フェーズ**: 判定機構の拡張点化 (descriptor + `OJKind::detect`) は TASK-034 (Phase B)。
+ただし B では既存 AtCoder の判定をこの機構へ書き換えるリファクタに留め、挙動は不変とする
+(`--oj` 明示フラグは追加しない。stdin プロンプトを維持)。LibraryChecker の URL 判定 descriptor は
+`OJKind::LibraryChecker` variant が入る Phase C (TASK-035) で追加する。
 
 ---
 
