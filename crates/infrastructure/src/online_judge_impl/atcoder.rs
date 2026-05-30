@@ -119,20 +119,6 @@ impl OnlineJudge for AtCoder {
         // AtCoder cannot accept direct HTTP submissions (Cloudflare Turnstile), so the
         // solution is carried in a URL fragment and submitted via the browser userscript.
 
-        // Guard against source files too large for a browser URL.
-        // Upper bound on the base64 fragment length:
-        //   JSON payload = overhead (~30 + lang_id.len()) + source (×2 worst-case JSON escaping)
-        //   base64 expansion = ceil(json_bytes / 3) × 4
-        let json_upper = source.len() * 2 + lang_id.len() + 30;
-        let fragment_upper = json_upper.div_ceil(3) * 4;
-        const MAX_FRAGMENT_BYTES: usize = 32 * 1024;
-        if fragment_upper > MAX_FRAGMENT_BYTES {
-            anyhow::bail!(
-                "source file is too large to submit via URL fragment \
-                 (estimated fragment {fragment_upper} bytes, max {MAX_FRAGMENT_BYTES})"
-            );
-        }
-
         // Encode {lang_id, source} as URL-safe base64 JSON and embed in the fragment.
         // The Tampermonkey userscript reads this fragment and auto-fills the submit form.
         // See docs/userscript.md for the full protocol.
@@ -142,6 +128,18 @@ impl OnlineJudge for AtCoder {
         })
         .to_string();
         let fragment = format!("ce={}", URL_SAFE.encode(payload.as_bytes()));
+
+        // Guard against source files too large for a browser URL. Measure the actual
+        // encoded fragment rather than estimating: JSON escaping of control characters
+        // (`\u00XX`) can expand a byte up to 6×, so a source-length estimate is unsafe.
+        const MAX_FRAGMENT_BYTES: usize = 32 * 1024;
+        if fragment.len() > MAX_FRAGMENT_BYTES {
+            anyhow::bail!(
+                "source file is too large to submit via URL fragment \
+                 (fragment {} bytes, max {MAX_FRAGMENT_BYTES})",
+                fragment.len()
+            );
+        }
 
         // Build the URL via reqwest::Url so that contest_id and problem_id are
         // percent-encoded, producing a well-formed URL even if they contain
