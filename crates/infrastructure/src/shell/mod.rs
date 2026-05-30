@@ -18,6 +18,7 @@ use crate::{
 };
 use interfaces::controller::Controller;
 use usecases::config::Config as _;
+use usecases::online_judge::{CredentialKind, Credentials, OnlineJudgeRegistry as _};
 use usecases::service::Service;
 
 pub fn run() -> Result<()> {
@@ -33,22 +34,46 @@ pub fn run() -> Result<()> {
                 None => ConfigImpl.default_online_judge(),
             };
 
-            let cookie = match cookie {
-                Some(c) => c.trim().to_string(),
-                None => {
-                    println!("1. Open https://atcoder.jp in your browser and log in.");
-                    println!("2. Open DevTools -> Application -> Cookies -> https://atcoder.jp");
-                    println!("3. Copy the value of REVEL_SESSION.");
-                    print!("REVEL_SESSION: ");
-                    use std::io::Write as _;
-                    std::io::stdout().flush()?;
+            // Prompt according to the OJ's credential kind.
+            let credentials = match credential_kind_for(&oj_kind)? {
+                CredentialKind::Cookie => {
+                    let cookie = match cookie {
+                        Some(c) => c.trim().to_string(),
+                        None => {
+                            println!("1. Open https://atcoder.jp in your browser and log in.");
+                            println!(
+                                "2. Open DevTools -> Application -> Cookies -> https://atcoder.jp"
+                            );
+                            println!("3. Copy the value of REVEL_SESSION.");
+                            print!("REVEL_SESSION: ");
+                            use std::io::Write as _;
+                            std::io::stdout().flush()?;
 
-                    let mut line = String::new();
-                    std::io::stdin().read_line(&mut line)?;
-                    line.trim().to_string()
+                            let mut line = String::new();
+                            std::io::stdin().read_line(&mut line)?;
+                            line.trim().to_string()
+                        }
+                    };
+                    Credentials::Cookie(cookie)
+                }
+                CredentialKind::EmailPassword => {
+                    use std::io::Write as _;
+                    print!("Email: ");
+                    std::io::stdout().flush()?;
+                    let mut email = String::new();
+                    std::io::stdin().read_line(&mut email)?;
+                    // Note: the password is read in plain text (no terminal masking yet).
+                    print!("Password: ");
+                    std::io::stdout().flush()?;
+                    let mut password = String::new();
+                    std::io::stdin().read_line(&mut password)?;
+                    Credentials::Password {
+                        identifier: email.trim().to_string(),
+                        password: password.trim().to_string(),
+                    }
                 }
             };
-            match login_with_io(oj_kind, &cookie) {
+            match login_with_io(oj_kind, credentials) {
                 Ok(()) => println!("Saved. Run `ce whoami` to verify."),
                 Err(e) => {
                     eprintln!("{e}");
@@ -212,17 +237,16 @@ fn build_controller_no_root() -> Result<Controller> {
     Ok(Controller::new(service))
 }
 
-/// This is the testable core of the Login command. Returns an error if `cookie`
-/// is empty or whitespace-only. The value is trimmed before being persisted.
-pub fn login_with_io(oj: domain::entity::OJKind, cookie: &str) -> Result<()> {
-    let cookie = cookie.trim();
-    if cookie.is_empty() {
-        anyhow::bail!("cookie must not be empty");
-    }
-    let input = LoginCommand {
-        oj,
-        cookie: cookie.to_string(),
-    };
+/// Returns the credential kind the given OJ expects for login.
+fn credential_kind_for(oj: &OJKind) -> Result<CredentialKind> {
+    let registry = OnlineJudgeRegistryImpl::new()?;
+    Ok(registry.get(oj)?.credential_kind())
+}
+
+/// This is the testable core of the Login command. Validation of the credentials
+/// (e.g. rejecting an empty cookie) is delegated to the OJ's `login` implementation.
+pub fn login_with_io(oj: OJKind, credentials: Credentials) -> Result<()> {
+    let input = LoginCommand { oj, credentials };
     build_controller_no_root()?.login(&input)
 }
 
@@ -643,7 +667,11 @@ mod tests {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
-        login_with_io(OJKind::AtCoder, "my_cookie").expect("login_with_io should succeed");
+        login_with_io(
+            OJKind::AtCoder,
+            Credentials::Cookie("my_cookie".to_string()),
+        )
+        .expect("login_with_io should succeed");
 
         let session_toml = tmp.path().join("session.toml");
         assert!(
@@ -669,7 +697,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
-        let result = login_with_io(OJKind::AtCoder, "");
+        let result = login_with_io(OJKind::AtCoder, Credentials::Cookie(String::new()));
         assert!(result.is_err(), "expected Err for empty cookie, got Ok");
     }
 

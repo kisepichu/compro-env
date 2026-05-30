@@ -3,6 +3,7 @@ use domain::entity::{Language, OJKind};
 use interfaces::controller::input::{
     InitInput, LoginInput, LogoutInput, NewInput, SubmitInput, TestInput, WhoamiInput,
 };
+use usecases::online_judge::Credentials;
 
 #[derive(Parser)]
 #[command(name = "ce", about = "Competitive programming environment")]
@@ -81,14 +82,14 @@ pub enum SolutionSubcommand {
 
 pub struct LoginCommand {
     pub oj: OJKind,
-    pub cookie: String,
+    pub credentials: Credentials,
 }
 impl LoginInput for LoginCommand {
     fn oj(&self) -> OJKind {
         self.oj.clone()
     }
-    fn cookie(&self) -> String {
-        self.cookie.clone()
+    fn credentials(&self) -> Credentials {
+        self.credentials.clone()
     }
 }
 

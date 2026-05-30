@@ -38,13 +38,14 @@ trait を「OJ ごとに異なるログイン方式」「直接提出して提�
 - [x] infrastructure に registry 実装 `OnlineJudgeRegistryImpl` (AtCoder を登録)、`shell/mod.rs` の `build_controller*` を registry 経由へ
 - [x] AtCoder 挙動不変・既存テスト緑を確認 (test 115 / clippy 警告なし / fmt クリーン)
 
-### A2: login 一般化
+### A2: login 一般化 ✅
 
-- [ ] usecases に `CredentialKind` / `Credentials` 追加、`OnlineJudge` に `credential_kind()` + `login(&Credentials) -> Result<Session>`
-- [ ] `service/login.rs`: cookie 直保存をやめ `oj.login(creds)` → 保存
-- [ ] interfaces `LoginInput`: cookie 単体から `Credentials` 供給へ一般化
-- [ ] infrastructure: AtCoder `credential_kind=Cookie` / `login` は Session を包むだけ (ネットワーク不要)
-- [ ] `shell/mod.rs` login: `credential_kind` に応じて入力を出し分け (現状 cookie プロンプトは維持)
+- [x] usecases に `CredentialKind` / `Credentials` 追加、`OnlineJudge` に `credential_kind()` + `login(&Credentials) -> Result<Session>`
+- [x] `service/login.rs`: cookie 直保存をやめ `oj.login(creds)` → 保存
+- [x] interfaces `LoginInput`: `cookie()` を `credentials()` へ一般化、Controller.login も追従
+- [x] infrastructure: AtCoder `credential_kind=Cookie` / `login` は cookie を trim+空チェックして Session を包むだけ。Password 変種はエラー
+- [x] `shell/mod.rs` login: `credential_kind_for(oj)` で判定し Cookie/EmailPassword で入力を出し分け (cookie プロンプト維持、email+password プロンプト追加)。login_with_io は Credentials を受け取る形へ
+- [x] 全スタブ (Mock/Stub OJ ×5) に新メソッド追加。test 115 / clippy / fmt 緑
 
 ### A3: submit 一般化
 

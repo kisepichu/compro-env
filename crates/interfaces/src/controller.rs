@@ -14,7 +14,7 @@ impl Controller {
     }
 
     pub fn login(&self, args: &dyn LoginInput) -> Result<()> {
-        self.service.login(args.oj(), args.cookie())
+        self.service.login(args.oj(), args.credentials())
     }
 
     pub fn whoami(&self, args: &dyn WhoamiInput) -> Result<String> {

@@ -61,7 +61,7 @@ impl Service {
 mod tests {
     use crate::{
         config::Config,
-        online_judge::{ContestMeta, OnlineJudge, SingleOnlineJudge},
+        online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge},
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
@@ -78,6 +78,12 @@ mod tests {
     impl OnlineJudge for StubOJ {
         fn name(&self) -> &str {
             "stub"
+        }
+        fn credential_kind(&self) -> CredentialKind {
+            CredentialKind::Cookie
+        }
+        fn login(&self, _: &Credentials) -> Result<Session> {
+            todo!()
         }
         fn whoami(&self, _: &Session) -> Result<String> {
             Ok(String::new())

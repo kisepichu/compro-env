@@ -217,7 +217,7 @@ mod tests {
 
     use crate::{
         config::Config,
-        online_judge::{ContestMeta, OnlineJudge, SingleOnlineJudge},
+        online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge},
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
@@ -251,6 +251,14 @@ mod tests {
     impl OnlineJudge for StubOJ {
         fn name(&self) -> &str {
             "stub"
+        }
+
+        fn credential_kind(&self) -> CredentialKind {
+            CredentialKind::Cookie
+        }
+
+        fn login(&self, _credentials: &Credentials) -> Result<Session> {
+            todo!()
         }
 
         fn whoami(&self, _session: &Session) -> Result<String> {

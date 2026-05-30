@@ -1,8 +1,8 @@
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use chrono::{DateTime, Utc};
-use domain::entity::{Problem, Session};
-use usecases::online_judge::{ContestMeta, OnlineJudge};
+use domain::entity::{OJKind, Problem, Session};
+use usecases::online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge};
 
 pub struct AtCoder {
     client: reqwest::blocking::Client,
@@ -19,6 +19,30 @@ impl AtCoder {
 impl OnlineJudge for AtCoder {
     fn name(&self) -> &str {
         "atcoder"
+    }
+
+    fn credential_kind(&self) -> CredentialKind {
+        CredentialKind::Cookie
+    }
+
+    fn login(&self, credentials: &Credentials) -> Result<Session> {
+        // AtCoder uses a manually copied REVEL_SESSION cookie (no programmatic login
+        // due to Cloudflare Turnstile). Wrap the trimmed cookie into a Session.
+        match credentials {
+            Credentials::Cookie(cookie) => {
+                let cookie = cookie.trim();
+                if cookie.is_empty() {
+                    anyhow::bail!("cookie must not be empty");
+                }
+                Ok(Session {
+                    online_judge: OJKind::AtCoder,
+                    cookie: cookie.to_string(),
+                })
+            }
+            Credentials::Password { .. } => {
+                anyhow::bail!("AtCoder login expects a REVEL_SESSION cookie, not a password")
+            }
+        }
     }
 
     fn whoami(&self, session: &Session) -> Result<String> {

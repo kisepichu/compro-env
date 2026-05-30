@@ -7,8 +7,37 @@ pub struct ContestMeta {
     pub problem_id_hints: Vec<(String, String)>, // (problem_code, problem_id)
 }
 
+/// The kind of credential an OJ requires for login. The shell uses this to decide
+/// what to prompt the user for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialKind {
+    /// A manually copied session cookie (e.g. AtCoder's REVEL_SESSION).
+    Cookie,
+    /// An email address and password (e.g. LibraryChecker via Firebase).
+    EmailPassword,
+}
+
+/// Credentials supplied to `OnlineJudge::login`.
+#[derive(Debug, Clone)]
+pub enum Credentials {
+    Cookie(String),
+    Password {
+        identifier: String,
+        password: String,
+    },
+}
+
 pub trait OnlineJudge {
     fn name(&self) -> &str;
+
+    /// The credential kind this OJ expects for login.
+    fn credential_kind(&self) -> CredentialKind;
+
+    /// Authenticates with the OJ and returns a `Session`.
+    ///
+    /// AtCoder simply wraps the manually copied cookie. OJs with programmatic login
+    /// (e.g. LibraryChecker) perform a network request to obtain a token.
+    fn login(&self, credentials: &Credentials) -> Result<Session>;
 
     /// Returns the username of the currently logged-in user.
     fn whoami(&self, session: &Session) -> Result<String>;
