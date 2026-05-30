@@ -13,6 +13,9 @@
   `ce sub` 時に `ContestRepository::get_oj_kind` で復元する。
 - 現状は AtCoder のみ実装されている。LibraryChecker を追加するにあたり、AtCoder 前提が
   残る箇所 (OnlineJudge の固定注入・ブラウザ提出固定・手動 cookie ログイン固定) を一般化する。
+- **実装状況**: 下記「動的解決」「ログインの一般化」「提出の一般化」は TASK-033 (Phase A) で
+  実装済み。OJ 判定の拡張点化 (TASK-034)、`OJKind::LibraryChecker` 追加 (TASK-035)、
+  LC 実装 (TASK-036)、config/session (TASK-037) は未着手。
 
 ## 「コンテスト」の一般化
 

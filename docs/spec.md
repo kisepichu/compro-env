@@ -322,7 +322,7 @@ trait SessionRepository {
 OJ 抽象の責務・一般化方針・個別 OJ 仕様は `docs/online_judges/` に集約する
 (`README.md` = 共通設計、`librarychecker.md` 等 = 個別)。ここではポートの要点のみ示す。
 
-複数 OJ 対応のため次を満たす (一般化は TASK-033〜037 で実施):
+複数 OJ 対応のため次を満たす (動的解決・ログイン・提出の一般化は TASK-033 / Phase A で実装済み。`OJKind::LibraryChecker` 追加と LC 実装は TASK-034〜037):
 
 - **動的解決**: `Service` は単一 `OnlineJudge` を固定で持たず、`OJKind` から対象実装を解決する
   (usecases にレジストリ用ポートを定義し、infrastructure が各 OJ を登録)。`ce sub` / `ce test`
@@ -354,8 +354,23 @@ trait OnlineJudge {
         session: Option<&Session>,
         problem_id_hints: &[(String, String)],
     ) -> Result<Vec<Problem>>;
-    // ログイン・提出は一般化対象 (詳細は docs/online_judges/README.md)。
-    // 提出は SubmitOutcome 相当 (OpenBrowser{url} | Submitted{submission_url}) を返す形にする。
+    /// 資格情報の種別を申告し (Cookie | EmailPassword)、資格情報から Session を生成する。
+    fn credential_kind(&self) -> CredentialKind;
+    fn login(&self, credentials: &Credentials) -> Result<Session>;
+    /// 提出。OpenBrowser{url} (AtCoder) か Submitted{submission_url} (直接提出) を返す。
+    fn submit(
+        &self,
+        contest_id: &str,
+        problem_id: &str,
+        lang_id: &str,
+        source: &str,
+        session: Option<&Session>,
+    ) -> Result<SubmitOutcome>;
+}
+
+// OJ の動的解決ポート (実装は infrastructure)。
+trait OnlineJudgeRegistry {
+    fn get(&self, oj: &OJKind) -> Result<&dyn OnlineJudge>;
 }
 ```
 
@@ -363,8 +378,9 @@ trait OnlineJudge {
 コンテスト開始待機ロジック (ポーリング・カウントダウン表示) は `usecases/service/init.rs` に実装し、`get_contest_meta` で取得した時刻をもとに制御する。OJ 固有ロジックは含まない。  
 AtCoder の通常 `ce init` (開始後) は `get_contest_meta` + `get_problems_detail` の **2 リクエスト**のみ。LibraryChecker は問題情報 + サンプル取得のみ。
 
-> 注: 現行コードは提出を `build_submit_url(...) -> String` (ブラウザ URL) で実装しており、
-> 上記の提出一般化 (SubmitOutcome) は Phase A (TASK-033) での目標状態。
+> 実装状況: Phase A (TASK-033) 完了。`OnlineJudgeRegistry` による動的解決、`credential_kind`/
+> `login` によるログイン一般化、`submit -> SubmitOutcome` による提出一般化を実装済み。現状の
+> 登録 OJ は AtCoder のみ (`OnlineJudgeRegistryImpl`)。LibraryChecker は TASK-034〜037 で追加する。
 
 ---
 
