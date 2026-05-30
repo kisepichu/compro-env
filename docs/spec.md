@@ -330,8 +330,9 @@ OJ 抽象の責務・一般化方針・個別 OJ 仕様は `docs/online_judges/`
   は `.ce.toml` の `OJKind` (`ContestRepository::get_oj_kind`) に従って OJ を選ぶ。
 - **ログイン**: OJ ごとに資格情報の種別が異なる (AtCoder = 手動 cookie / LibraryChecker =
   email+password)。OJ は必要種別を申告し、資格情報から `Session` を生成できる。
-- **提出**: 「ブラウザで開く URL を返す」方式に固定しない。提出結果を表現する型を返し、
-  AtCoder は「開く URL」(userscript 前提)、LibraryChecker は「提出済み (提出 id/URL)」を返す。
+- **提出**: 「ブラウザで開く URL を返す」方式に固定しない。提出結果を表す `SubmitOutcome`
+  (usecases 層) を返し、AtCoder は `OpenBrowser{url}` (userscript 前提)、LibraryChecker は
+  `Submitted{submission_url}` (直接提出) を返す。旧 `domain::SubmitResult` は削除済み。
 
 ```rust
 /// コンテスト/問題取得 1 回のフェッチで取れるメタ情報。

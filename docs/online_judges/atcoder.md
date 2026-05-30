@@ -65,7 +65,7 @@
   - `#ce={payload}`: `{"lang_id","source"}` を URL-safe base64 (パディングあり) でエンコードした
     フラグメント。Tampermonkey userscript が読んで提出フォームへ自動入力する
     (詳細: `docs/userscript.md`)。
-- ソースが URL フラグメント上限 (32 KiB 見積り) を超える場合はエラー。
+- base64 エンコード後の実際のフラグメント長が上限 (32 KiB) を超える場合はエラー。
 - `ce sub` は Unix で提出前に `test_command` を実行し exit 0 のときのみ URL を生成する (OJ 非依存)。
 - 抽象の提出一般化では「ブラウザで開く URL を返す」結果に対応する。
 

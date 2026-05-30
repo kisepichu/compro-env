@@ -5,7 +5,7 @@ LibraryChecker 用の config (lang_id) と session (Firebase token) を扱える
 ## 参照仕様
 
 - docs/spec.md (コンフィグ設計 / セッション)
-- docs/online_judges/librarychecker.md ← spec-update で作成予定
+- docs/online_judges/librarychecker.md
 
 ## 実装チェックリスト
 

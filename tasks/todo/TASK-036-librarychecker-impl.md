@@ -5,7 +5,7 @@ LibraryChecker の `OnlineJudge` 実装を追加する。REST API (`https://v3.a
 
 ## 参照仕様
 
-- docs/online_judges/librarychecker.md ← spec-update で作成予定
+- docs/online_judges/librarychecker.md
 - docs/spec.md (OnlineJudge インターフェース)
 
 ## 実 API メモ (調査済み)

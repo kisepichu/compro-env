@@ -7,7 +7,7 @@ URL / 明示指定 / プロンプトで判定する。
 ## 参照仕様
 
 - docs/spec.md (OJ 判定ロジック) ← spec-update で更新予定
-- docs/online_judges/librarychecker.md ← spec-update で作成予定
+- docs/online_judges/librarychecker.md
 
 ## 背景 (現状の問題)
 
