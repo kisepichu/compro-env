@@ -362,7 +362,7 @@ mod tests {
 
     /// Happy path: submit returns the OpenBrowser outcome with the URL from StubOJ.
     #[test]
-    fn submit_happy_path_returns_submission_url() {
+    fn submit_happy_path_returns_open_browser_outcome() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ce.toml"),

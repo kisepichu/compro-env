@@ -64,7 +64,10 @@ pub fn run() -> Result<()> {
                     std::io::stdout().flush()?;
                     let mut email = String::new();
                     std::io::stdin().read_line(&mut email)?;
-                    // Note: the password is read in plain text (no terminal masking yet).
+                    // LIMITATION: the password is read with terminal echo (visible on screen).
+                    // No OJ uses this branch yet (only AtCoder = Cookie is registered); when
+                    // LibraryChecker login is wired (TASK-036), switch to no-echo input
+                    // (e.g. rpassword). Documented in docs/online_judges/librarychecker.md.
                     print!("Password: ");
                     std::io::stdout().flush()?;
                     let mut password = String::new();
@@ -212,12 +215,15 @@ pub fn run() -> Result<()> {
                 solution_name,
             }) {
                 Ok(SubmitOutcome::OpenBrowser { url }) => {
+                    // stdout carries the URL only, so it stays copy/paste- and pipe-friendly.
                     println!("{url}");
                     open_browser(&url);
                     Ok(())
                 }
                 Ok(SubmitOutcome::Submitted { submission_url }) => {
-                    println!("Submitted: {submission_url}");
+                    // Human-facing note on stderr; stdout stays the URL only (same as above).
+                    eprintln!("Submitted.");
+                    println!("{submission_url}");
                     open_browser(&submission_url);
                     Ok(())
                 }

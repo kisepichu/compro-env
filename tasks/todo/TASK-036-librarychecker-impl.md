@@ -32,6 +32,7 @@ LibraryChecker の `OnlineJudge` 実装を追加する。REST API (`https://v3.a
   - input_format_raw / constraints_raw は取得できれば設定 (LC 形式に注意、無理なら空)
 - [ ] サンプル取得: 問題ページの Sample セクションをスクレイプ (軽量・例のみ)
 - [ ] login: Firebase `signInWithPassword` に email+password → idToken/refreshToken を Session に保存
+  - [ ] shell の EmailPassword パスワード入力を no-echo (例: `rpassword`) に切り替える (現状エコーあり)
 - [ ] whoami: `GET /auth/current_user` (Bearer) → ユーザー名
 - [ ] submit: `POST /submit` (Bearer) → 提出 id、表示 URL を返す (直接提出。Phase A の提出抽象に従う)
 - [ ] registry に LibraryChecker を登録 (Phase A の仕組み)

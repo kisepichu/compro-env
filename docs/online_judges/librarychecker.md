@@ -41,6 +41,8 @@ REST API ベース URL: `https://v3.api.judge.yosupo.jp` (旧 gRPC から REST �
   - authDomain: `prod-library-checker-project.firebaseapp.com`
 - **注意**: Firebase は username ではなく **email** でログインする。`ce login librarychecker` は
   email + password を受け取る。
+- **既知の制約**: 現状の shell の EmailPassword 入力はパスワードを端末エコーありで読み取る
+  (画面に表示される)。LC ログイン実装時 (TASK-036) に no-echo 入力 (例: `rpassword`) へ切り替える。
 - idToken は短命。失効時は refreshToken で更新する (`securetoken.googleapis.com`)。更新タイミングは未決。
 
 ### 問題情報・サンプル
