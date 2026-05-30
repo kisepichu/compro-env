@@ -64,6 +64,9 @@ fn save_session_to_path(session: &Session, path: &Path) -> Result<()> {
 
     let section_key = match &session.online_judge {
         OJKind::AtCoder => "atcoder",
+        OJKind::LibraryChecker => {
+            anyhow::bail!("LibraryChecker session persistence is not yet implemented (TASK-037)")
+        }
     };
 
     let mut section = toml::Table::new();
@@ -98,6 +101,9 @@ fn delete_session_from_path(oj: &OJKind, path: &Path) -> Result<bool> {
 
     let section_key = match oj {
         OJKind::AtCoder => "atcoder",
+        OJKind::LibraryChecker => {
+            anyhow::bail!("LibraryChecker session persistence is not yet implemented (TASK-037)")
+        }
     };
 
     if table.remove(section_key).is_none() {
@@ -135,6 +141,9 @@ fn get_session_from_path(oj: &OJKind, path: &Path) -> Result<Option<Session>> {
             .and_then(|v| v.get("revel_session"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        OJKind::LibraryChecker => {
+            anyhow::bail!("LibraryChecker session persistence is not yet implemented (TASK-037)")
+        }
     };
 
     Ok(cookie.map(|c| Session {
