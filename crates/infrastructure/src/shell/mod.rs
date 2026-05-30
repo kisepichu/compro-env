@@ -18,9 +18,7 @@ use crate::{
 };
 use interfaces::controller::Controller;
 use usecases::config::Config as _;
-use usecases::online_judge::{
-    CredentialKind, Credentials, OnlineJudgeRegistry as _, SubmitOutcome,
-};
+use usecases::online_judge::{CredentialKind, Credentials, SubmitOutcome};
 use usecases::service::Service;
 
 pub fn run() -> Result<()> {
@@ -37,7 +35,7 @@ pub fn run() -> Result<()> {
             };
 
             // Prompt according to the OJ's credential kind.
-            let credentials = match credential_kind_for(&oj_kind)? {
+            let credentials = match credential_kind_for(&oj_kind) {
                 CredentialKind::Cookie => {
                     let cookie = match cookie {
                         Some(c) => c.trim().to_string(),
@@ -249,10 +247,15 @@ fn build_controller_no_root() -> Result<Controller> {
     Ok(Controller::new(service))
 }
 
-/// Returns the credential kind the given OJ expects for login.
-fn credential_kind_for(oj: &OJKind) -> Result<CredentialKind> {
-    let registry = OnlineJudgeRegistryImpl::new()?;
-    Ok(registry.get(oj)?.credential_kind())
+/// Returns the credential kind the given OJ expects for the login prompt.
+///
+/// A lightweight match mirroring each OJ's `OnlineJudge::credential_kind`, so the
+/// prompt can be chosen without constructing the OJ implementation (which builds an
+/// HTTP client). Exhaustiveness keeps this in sync as OJs are added.
+fn credential_kind_for(oj: &OJKind) -> CredentialKind {
+    match oj {
+        OJKind::AtCoder => CredentialKind::Cookie,
+    }
 }
 
 /// This is the testable core of the Login command. Validation of the credentials
