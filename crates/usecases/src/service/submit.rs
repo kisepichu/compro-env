@@ -93,10 +93,13 @@ impl Service {
             );
         }
 
-        // 6. Build the browser submit URL.
-        let url = self
-            .online_judge
-            .build_submit_url(contest_id, &problem.id, &lang_id, &source);
+        // 6. Build the browser submit URL using the OJ recorded in .ce.toml.
+        let url = self.online_judge(&oj_kind)?.build_submit_url(
+            contest_id,
+            &problem.id,
+            &lang_id,
+            &source,
+        );
 
         Ok(SubmitResult {
             submission_url: url,
@@ -108,7 +111,7 @@ impl Service {
 mod tests {
     use crate::{
         config::Config,
-        online_judge::{ContestMeta, OnlineJudge},
+        online_judge::{ContestMeta, OnlineJudge, OnlineJudgeRegistry, SingleOnlineJudge},
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
@@ -117,7 +120,9 @@ mod tests {
     };
     use anyhow::Result;
     use domain::entity::{Contest, Language, OJKind, Problem, Sample, Session, Solution};
+    use std::cell::RefCell;
     use std::path::PathBuf;
+    use std::rc::Rc;
 
     // ── Stub helpers ─────────────────────────────────────────────────────────
 
@@ -266,10 +271,10 @@ mod tests {
         panic_on_build_submit_url: bool,
     ) -> Service {
         Service::new(
-            Box::new(StubOJ {
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ {
                 submit_url,
                 panic_on_build_submit_url,
-            }),
+            }))),
             Box::new(StubContestRepo {
                 problem: default_problem(),
             }),
@@ -293,6 +298,61 @@ mod tests {
         } else {
             "language = \"rust\"\n"
         }
+    }
+
+    /// A registry that records which OJKind was requested, returning a fixed StubOJ.
+    /// `requested` is shared via Rc so the test can inspect it after the Service runs.
+    struct RecordingRegistry {
+        oj: StubOJ,
+        requested: Rc<RefCell<Vec<OJKind>>>,
+    }
+    impl OnlineJudgeRegistry for RecordingRegistry {
+        fn get(&self, oj: &OJKind) -> Result<&dyn OnlineJudge> {
+            self.requested.borrow_mut().push(oj.clone());
+            Ok(&self.oj)
+        }
+    }
+
+    /// submit resolves the OnlineJudge using the OJKind recorded in .ce.toml
+    /// (ContestRepository::get_oj_kind), not a fixed implementation.
+    #[test]
+    fn submit_resolves_online_judge_from_contest_oj_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            ce_toml_with_language_and_passing_test(),
+        )
+        .unwrap();
+        let requested = Rc::new(RefCell::new(vec![]));
+        let service = Service::new(
+            Box::new(RecordingRegistry {
+                oj: StubOJ {
+                    submit_url: "https://atcoder.jp/contests/abc001/submit#ce=XXX".to_string(),
+                    panic_on_build_submit_url: false,
+                },
+                requested: Rc::clone(&requested),
+            }),
+            // StubContestRepo::get_oj_kind returns OJKind::AtCoder.
+            Box::new(StubContestRepo {
+                problem: default_problem(),
+            }),
+            Box::new(StubSolutionRepo {
+                solution_dir: dir.path().to_path_buf(),
+                source: Some("fn main() {}".to_string()),
+            }),
+            Box::new(StubSession { session: None }),
+            Box::new(StubConfig {
+                lang_id: Some("6088".to_string()),
+                submit_file: "src/main.rs".to_string(),
+            }),
+        );
+        service.submit("abc001", "a", "main").unwrap();
+        // The OJ resolved for submission is the one stored in .ce.toml.
+        let requested = requested.borrow();
+        assert!(
+            requested.contains(&OJKind::AtCoder),
+            "expected submit to resolve the OJ from .ce.toml (AtCoder), got: {requested:?}"
+        );
     }
 
     /// Happy path: SubmitResult.submission_url is the URL returned by StubOJ.

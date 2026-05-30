@@ -60,7 +60,7 @@ impl Service {
 mod tests {
     use crate::{
         config::Config,
-        online_judge::{ContestMeta, OnlineJudge},
+        online_judge::{ContestMeta, OnlineJudge, SingleOnlineJudge},
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
@@ -185,7 +185,7 @@ mod tests {
 
     fn make_service(solution_dir: PathBuf, testcases_dir: PathBuf) -> Service {
         Service::new(
-            Box::new(StubOJ),
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ))),
             Box::new(StubContestRepo { testcases_dir }),
             Box::new(StubSolutionRepo { solution_dir }),
             Box::new(StubSession),

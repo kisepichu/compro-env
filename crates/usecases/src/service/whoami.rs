@@ -10,6 +10,6 @@ impl Service {
             .session_repo
             .get(oj)?
             .ok_or_else(|| CeError::SessionNotFound { oj: oj.to_string() })?;
-        self.online_judge.whoami(&session)
+        self.online_judge(oj)?.whoami(&session)
     }
 }

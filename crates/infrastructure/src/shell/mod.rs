@@ -9,7 +9,7 @@ use domain::entity::OJKind;
 
 use crate::{
     config_impl::ConfigImpl,
-    online_judge_impl::atcoder::AtCoder,
+    online_judge_impl::registry::OnlineJudgeRegistryImpl,
     repository_impl::{
         contest_repository_impl::ContestRepositoryImpl,
         session_repository_impl::SessionRepositoryImpl,
@@ -203,7 +203,7 @@ pub fn run() -> Result<()> {
 /// without requiring a project root (suitable for login/whoami/logout).
 fn build_controller_no_root() -> Result<Controller> {
     let service = Service::new(
-        Box::new(AtCoder::new()?),
+        Box::new(OnlineJudgeRegistryImpl::new()?),
         Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SessionRepositoryImpl),
@@ -580,7 +580,7 @@ fn build_controller() -> Result<Controller> {
     let root = find_project_root()?;
 
     let service = Service::new(
-        Box::new(AtCoder::new()?),
+        Box::new(OnlineJudgeRegistryImpl::new()?),
         Box::new(ContestRepositoryImpl::new(root.clone())),
         Box::new(SolutionRepositoryImpl::new(root.clone())),
         Box::new(SessionRepositoryImpl),

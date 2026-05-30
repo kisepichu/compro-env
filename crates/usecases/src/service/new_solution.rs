@@ -61,7 +61,7 @@ impl Service {
 mod tests {
     use crate::{
         config::Config,
-        online_judge::{ContestMeta, OnlineJudge},
+        online_judge::{ContestMeta, OnlineJudge, SingleOnlineJudge},
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
@@ -211,7 +211,7 @@ mod tests {
         solution_exists: bool,
     ) -> Service {
         Service::new(
-            Box::new(StubOJ),
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ))),
             Box::new(StubContestRepo {
                 contest_exists,
                 problem_codes: problem_codes.iter().map(|s| s.to_string()).collect(),
