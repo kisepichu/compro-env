@@ -268,6 +268,113 @@ mod tests {
         }
     }
 
+    /// OJ stub that exposes a configurable `default_lang_id` and records the `lang_id`
+    /// passed to `submit`, so tests can assert how submit resolves it.
+    struct LangCapturingOJ {
+        default_lang_id: Option<String>,
+        received_lang_id: Rc<RefCell<Option<String>>>,
+    }
+    impl OnlineJudge for LangCapturingOJ {
+        fn name(&self) -> &str {
+            "stub"
+        }
+        fn credential_kind(&self) -> CredentialKind {
+            CredentialKind::Cookie
+        }
+        fn default_lang_id(&self, _: &Language) -> Option<String> {
+            self.default_lang_id.clone()
+        }
+        fn login(&self, _: &Credentials) -> Result<Session> {
+            todo!()
+        }
+        fn whoami(&self, _: &Session) -> Result<String> {
+            Ok(String::new())
+        }
+        fn get_contest_meta(&self, _: &str) -> Result<ContestMeta> {
+            todo!()
+        }
+        fn get_problems_detail(
+            &self,
+            _: &str,
+            _: Option<&Session>,
+            _: &[(String, String)],
+        ) -> Result<Vec<Problem>> {
+            todo!()
+        }
+        fn submit(
+            &self,
+            _: &str,
+            _: &str,
+            lang_id: &str,
+            _: &str,
+            _: Option<&Session>,
+        ) -> Result<SubmitOutcome> {
+            *self.received_lang_id.borrow_mut() = Some(lang_id.to_string());
+            Ok(SubmitOutcome::Submitted {
+                submission_url: "https://example.test/submission/1".to_string(),
+            })
+        }
+    }
+
+    /// Builds a Service whose OJ is a `LangCapturingOJ`. Returns the service, the
+    /// captured-lang_id handle, and the TempDir (kept alive for the test).
+    fn make_capturing_service(
+        config_lang_id: Option<String>,
+        default_lang_id: Option<String>,
+    ) -> (Service, Rc<RefCell<Option<String>>>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            ce_toml_with_language_and_passing_test(),
+        )
+        .unwrap();
+        let received = Rc::new(RefCell::new(None));
+        let service = Service::new(
+            Box::new(SingleOnlineJudge::new(Box::new(LangCapturingOJ {
+                default_lang_id,
+                received_lang_id: Rc::clone(&received),
+            }))),
+            Box::new(StubContestRepo {
+                problem: default_problem(),
+            }),
+            Box::new(StubSolutionRepo {
+                solution_dir: dir.path().to_path_buf(),
+                source: Some("fn main() {}".to_string()),
+            }),
+            Box::new(StubSession { session: None }),
+            Box::new(StubConfig {
+                lang_id: config_lang_id,
+                submit_file: "src/main.rs".to_string(),
+            }),
+        );
+        (service, received, dir)
+    }
+
+    /// When config.toml has no lang_id, submit falls back to the OJ's default_lang_id.
+    #[test]
+    fn submit_falls_back_to_default_lang_id_when_config_missing() {
+        let (service, received, _dir) = make_capturing_service(None, Some("rust".to_string()));
+        service.submit("abc001", "a", "main").unwrap();
+        assert_eq!(
+            received.borrow().as_deref(),
+            Some("rust"),
+            "expected submit to use the OJ default_lang_id when config has none"
+        );
+    }
+
+    /// A configured lang_id takes priority over the OJ's default_lang_id.
+    #[test]
+    fn submit_prefers_config_lang_id_over_default() {
+        let (service, received, _dir) =
+            make_capturing_service(Some("9999".to_string()), Some("rust".to_string()));
+        service.submit("abc001", "a", "main").unwrap();
+        assert_eq!(
+            received.borrow().as_deref(),
+            Some("9999"),
+            "expected configured lang_id to take priority over the default"
+        );
+    }
+
     fn make_service(
         solution_dir: PathBuf,
         source: Option<String>,

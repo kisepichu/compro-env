@@ -15,8 +15,10 @@ LibraryChecker の `OnlineJudge` 実装を追加する。REST API (`https://v3.a
 - `Session` は **enum** で OJ 別 auth を型区別する:
   - `Session::Cookie { online_judge, cookie }` — AtCoder (既存挙動維持)
   - `Session::Firebase { online_judge, id_token, refresh_token }` — LibraryChecker
-- idToken のリフレッシュは **オンデマンド**: Bearer 呼び出しが 401/期限切れ → refreshToken で更新し
-  1 度だけ再試行 → 更新後 Session を保存。refreshToken も失効なら clean エラーで再ログイン誘導。
+- idToken のリフレッシュは **オンデマンド**: Bearer 呼び出しが 401/403 → refreshToken で更新し
+  1 度だけ再試行。refreshToken も失効なら clean エラーで再ログイン誘導。
+  - **永続化しない**: `OnlineJudge` は `SessionRepository` に触れないため、リフレッシュで得た新 idToken は
+    プロセス内のみで使う。durable な資格情報は refreshToken (詳細は librarychecker.md)。
 - ログインは email + password 前提 (GitHub OAuth ユーザーは対象外)。
 - サンプルは問題ページの例セクションのみスクレイプ (GCS 公式テストは使わない)。
 

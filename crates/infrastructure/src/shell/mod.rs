@@ -63,10 +63,13 @@ pub fn run() -> Result<()> {
                     let mut email = String::new();
                     std::io::stdin().read_line(&mut email)?;
                     // Read the password without echoing it to the terminal.
+                    // `prompt_password` returns the input without the trailing newline, so
+                    // pass it through verbatim — trimming would corrupt passwords that
+                    // legitimately contain leading/trailing whitespace.
                     let password = rpassword::prompt_password("Password: ")?;
                     Credentials::Password {
                         identifier: email.trim().to_string(),
-                        password: password.trim().to_string(),
+                        password,
                     }
                 }
             };

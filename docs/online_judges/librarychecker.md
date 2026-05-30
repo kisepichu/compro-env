@@ -147,11 +147,14 @@ REST API ベース URL: `https://v3.api.judge.yosupo.jp` (旧 gRPC から REST �
 
 ## 未決事項
 
-- 問題ページのサンプル HTML 構造 (実装時に実ページで確認)。
-- `input_format_raw` を LibraryChecker で意味ある形で取得できるか (取れなければ空フォールバック)。
+- (なし)
 
 ## 確定済み (旧未決)
 
+- 問題ページのサンプル/statement 取得: 問題ページは SPA でスクレイプ不可。サンプルは公開バケットの
+  例ファイル、input_format/constraints は statement ソース `task.md` から取得 (上記「問題情報・サンプル」)。
+- `input_format_raw` / `constraints_raw`: task.md から抽出し `$` 除去・`@{param}` 解決で取得 (取れなければ
+  `None`)。入力コード自動生成が機能する (実測 `aplusb`:plain / `static_range_sum`:loop)。
 - `Session` の表現: enum で OJ 別 auth を型区別 (`Session::Firebase { id_token, refresh_token }`)。Phase D。
-- idToken のリフレッシュ契機: オンデマンド更新 (Bearer 呼び出しが 401 → refreshToken で更新し 1 度再試行)。
+- idToken のリフレッシュ契機: オンデマンド更新 (Bearer 呼び出しが 401/403 → refreshToken で更新し 1 度再試行)。
 - GitHub OAuth ログインのユーザーは email/password ログイン不可の場合がある → 今回は **email/password 前提**で確定。
