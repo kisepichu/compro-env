@@ -4,7 +4,9 @@ mod tests {
     use chrono::{DateTime, TimeZone, Utc};
     use domain::entity::{Problem, Session};
 
-    use crate::online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge};
+    use crate::online_judge::{
+        ContestMeta, CredentialKind, Credentials, OnlineJudge, SubmitOutcome,
+    };
 
     /// Stub implementation of OnlineJudge used only in these tests.
     struct MockOJ {
@@ -44,7 +46,14 @@ mod tests {
             Ok(vec![])
         }
 
-        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
+        fn submit(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&Session>,
+        ) -> Result<SubmitOutcome> {
             todo!()
         }
     }

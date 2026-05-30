@@ -47,21 +47,24 @@ trait を「OJ ごとに異なるログイン方式」「直接提出して提�
 - [x] `shell/mod.rs` login: `credential_kind_for(oj)` で判定し Cookie/EmailPassword で入力を出し分け (cookie プロンプト維持、email+password プロンプト追加)。login_with_io は Credentials を受け取る形へ
 - [x] 全スタブ (Mock/Stub OJ ×5) に新メソッド追加。test 115 / clippy / fmt 緑
 
-### A3: submit 一般化
+### A3: submit 一般化 ✅
 
-- [ ] usecases に `SubmitOutcome` 追加、`OnlineJudge::submit(...) -> SubmitOutcome` で `build_submit_url` 置換
-- [ ] `service/submit.rs`: `oj.submit()` を呼び `SubmitOutcome` を返す。URL フラグメント長ガードは AtCoder 実装へ移動
-- [ ] interfaces/Controller: `SubmitResult` を `SubmitOutcome` に合わせて調整
-- [ ] infrastructure: AtCoder `submit` は `OpenBrowser{url}` を返す (URL 構築 + サイズガードを内包)
-- [ ] `shell/mod.rs` submit: `SubmitOutcome` で「開く/提出URL表示」を出し分け (AtCoder は従来通り URL 表示 + ブラウザ起動)
+- [x] usecases に `SubmitOutcome { OpenBrowser{url}, Submitted{submission_url} }` 追加、`OnlineJudge::submit(..., session: Option<&Session>) -> SubmitOutcome` で `build_submit_url` 置換
+- [x] `service/submit.rs`: session を取得し `oj.submit()` を呼び `SubmitOutcome` を返す。URL フラグメント長ガードは AtCoder 実装へ移動
+- [x] interfaces/Controller: 返り値を `SubmitOutcome` へ。domain の `SubmitResult` は不要になり削除
+- [x] infrastructure: AtCoder `submit` は `OpenBrowser{url}` を返す (URL 構築 + サイズガード内包)。テストも submit ベースに更新
+- [x] `shell/mod.rs` submit: `SubmitOutcome` で OpenBrowser→URL表示+ブラウザ起動 / Submitted→提出URL表示+起動 を出し分け
+- [x] 全スタブ (×5) を submit シグネチャへ更新。test 115 / clippy / fmt 緑
 
 ## 完了条件
 
-- [ ] `.ce.toml` の OJ に応じて提出先 OJ が切り替わる (AtCoder コンテストは従来通り動作)
-- [ ] 既存コマンド (login/whoami/logout/init/test/submit on AtCoder) の挙動が回帰しない
-- [ ] `cargo test --all && cargo clippy --all --all-features -- -D warnings && cargo fmt --all --check` 通過
+- [x] `.ce.toml` の OJ に応じて提出先 OJ が切り替わる (AtCoder コンテストは従来通り動作)
+- [x] 既存コマンド (login/whoami/logout/init/test/submit on AtCoder) の挙動が回帰しない
+- [x] `cargo test --all && cargo clippy --all --all-features -- -D warnings && cargo fmt --all --check` 通過
 
 ## 作業ログ
 
 - 2026-05-30: 作業開始。設計を A1/A2/A3 増分に整理。
 - 2026-05-30: A1 完了 (registry 導入)。OnlineJudgeRegistry/SingleOnlineJudge 追加、Service が OJKind で解決、submit が .ce.toml の OJ を使用。test 115 / clippy / fmt 緑。
+- 2026-05-30: A2 完了 (login 一般化)。CredentialKind/Credentials + credential_kind()/login() 追加。AtCoder は cookie 包むだけ。shell が方式で入力出し分け。
+- 2026-05-30: A3 完了 (submit 一般化)。SubmitOutcome 導入、build_submit_url を submit() に置換、サイズガードを AtCoder へ移動、SubmitResult 削除。Phase A 完了。

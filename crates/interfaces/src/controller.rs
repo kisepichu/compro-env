@@ -58,7 +58,7 @@ impl Controller {
         )
     }
 
-    pub fn submit(&self, args: &dyn SubmitInput) -> Result<domain::entity::SubmitResult> {
+    pub fn submit(&self, args: &dyn SubmitInput) -> Result<usecases::online_judge::SubmitOutcome> {
         self.service.submit(
             &args.contest_id(),
             &args.problem_code(),

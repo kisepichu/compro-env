@@ -61,7 +61,9 @@ impl Service {
 mod tests {
     use crate::{
         config::Config,
-        online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge},
+        online_judge::{
+            ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge, SubmitOutcome,
+        },
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
@@ -99,7 +101,14 @@ mod tests {
         ) -> Result<Vec<Problem>> {
             todo!()
         }
-        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
+        fn submit(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&Session>,
+        ) -> Result<SubmitOutcome> {
             todo!()
         }
     }

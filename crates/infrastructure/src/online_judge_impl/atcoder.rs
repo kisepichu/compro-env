@@ -2,7 +2,9 @@ use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use chrono::{DateTime, Utc};
 use domain::entity::{OJKind, Problem, Session};
-use usecases::online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge};
+use usecases::online_judge::{
+    ContestMeta, CredentialKind, Credentials, OnlineJudge, SubmitOutcome,
+};
 
 pub struct AtCoder {
     client: reqwest::blocking::Client,
@@ -106,13 +108,31 @@ impl OnlineJudge for AtCoder {
         Ok(problems)
     }
 
-    fn build_submit_url(
+    fn submit(
         &self,
         contest_id: &str,
         problem_id: &str,
         lang_id: &str,
         source: &str,
-    ) -> String {
+        _session: Option<&Session>,
+    ) -> Result<SubmitOutcome> {
+        // AtCoder cannot accept direct HTTP submissions (Cloudflare Turnstile), so the
+        // solution is carried in a URL fragment and submitted via the browser userscript.
+
+        // Guard against source files too large for a browser URL.
+        // Upper bound on the base64 fragment length:
+        //   JSON payload = overhead (~30 + lang_id.len()) + source (×2 worst-case JSON escaping)
+        //   base64 expansion = ceil(json_bytes / 3) × 4
+        let json_upper = source.len() * 2 + lang_id.len() + 30;
+        let fragment_upper = json_upper.div_ceil(3) * 4;
+        const MAX_FRAGMENT_BYTES: usize = 32 * 1024;
+        if fragment_upper > MAX_FRAGMENT_BYTES {
+            anyhow::bail!(
+                "source file is too large to submit via URL fragment \
+                 (estimated fragment {fragment_upper} bytes, max {MAX_FRAGMENT_BYTES})"
+            );
+        }
+
         // Encode {lang_id, source} as URL-safe base64 JSON and embed in the fragment.
         // The Tampermonkey userscript reads this fragment and auto-fills the submit form.
         // See docs/userscript.md for the full protocol.
@@ -135,7 +155,9 @@ impl OnlineJudge for AtCoder {
         url.query_pairs_mut()
             .append_pair("taskScreenName", problem_id);
         url.set_fragment(Some(&fragment));
-        url.to_string()
+        Ok(SubmitOutcome::OpenBrowser {
+            url: url.to_string(),
+        })
     }
 }
 
@@ -631,10 +653,16 @@ var userScreenName = "";
     }
 
     #[test]
-    fn build_submit_url_encodes_payload_in_fragment() {
-        use usecases::online_judge::OnlineJudge as _;
+    fn submit_returns_open_browser_url_encoding_payload_in_fragment() {
+        use usecases::online_judge::{OnlineJudge as _, SubmitOutcome};
         let oj = AtCoder::new().expect("AtCoder::new");
-        let url = oj.build_submit_url("abc001", "abc001_a", "4026", "fn main() {}");
+        let outcome = oj
+            .submit("abc001", "abc001_a", "4026", "fn main() {}", None)
+            .expect("submit should build a browser URL");
+        let url = match outcome {
+            SubmitOutcome::OpenBrowser { url } => url,
+            other => panic!("expected OpenBrowser, got {other:?}"),
+        };
         // URL structure: https://atcoder.jp/contests/abc001/submit?taskScreenName=abc001_a#ce=<base64>
         assert!(url.starts_with("https://atcoder.jp/contests/abc001/submit?"));
         assert!(url.contains("taskScreenName=abc001_a"));

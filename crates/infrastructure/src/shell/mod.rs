@@ -18,7 +18,9 @@ use crate::{
 };
 use interfaces::controller::Controller;
 use usecases::config::Config as _;
-use usecases::online_judge::{CredentialKind, Credentials, OnlineJudgeRegistry as _};
+use usecases::online_judge::{
+    CredentialKind, Credentials, OnlineJudgeRegistry as _, SubmitOutcome,
+};
 use usecases::service::Service;
 
 pub fn run() -> Result<()> {
@@ -209,10 +211,14 @@ pub fn run() -> Result<()> {
                 problem_code: problem,
                 solution_name,
             }) {
-                Ok(result) => {
-                    let url = &result.submission_url;
+                Ok(SubmitOutcome::OpenBrowser { url }) => {
                     println!("{url}");
-                    open_browser(url);
+                    open_browser(&url);
+                    Ok(())
+                }
+                Ok(SubmitOutcome::Submitted { submission_url }) => {
+                    println!("Submitted: {submission_url}");
+                    open_browser(&submission_url);
                     Ok(())
                 }
                 Err(e) => {
