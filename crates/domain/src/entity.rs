@@ -313,12 +313,6 @@ pub struct Session {
     pub cookie: String,
 }
 
-/// Result of a submission
-#[derive(Debug, Clone)]
-pub struct SubmitResult {
-    pub submission_url: String,
-}
-
 #[cfg(test)]
 mod input_spec_tests {
     use super::*;

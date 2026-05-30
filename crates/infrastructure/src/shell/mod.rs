@@ -9,7 +9,7 @@ use domain::entity::OJKind;
 
 use crate::{
     config_impl::ConfigImpl,
-    online_judge_impl::atcoder::AtCoder,
+    online_judge_impl::registry::OnlineJudgeRegistryImpl,
     repository_impl::{
         contest_repository_impl::ContestRepositoryImpl,
         session_repository_impl::SessionRepositoryImpl,
@@ -18,6 +18,7 @@ use crate::{
 };
 use interfaces::controller::Controller;
 use usecases::config::Config as _;
+use usecases::online_judge::{CredentialKind, Credentials, SubmitOutcome};
 use usecases::service::Service;
 
 pub fn run() -> Result<()> {
@@ -33,22 +34,49 @@ pub fn run() -> Result<()> {
                 None => ConfigImpl.default_online_judge(),
             };
 
-            let cookie = match cookie {
-                Some(c) => c.trim().to_string(),
-                None => {
-                    println!("1. Open https://atcoder.jp in your browser and log in.");
-                    println!("2. Open DevTools -> Application -> Cookies -> https://atcoder.jp");
-                    println!("3. Copy the value of REVEL_SESSION.");
-                    print!("REVEL_SESSION: ");
-                    use std::io::Write as _;
-                    std::io::stdout().flush()?;
+            // Prompt according to the OJ's credential kind.
+            let credentials = match credential_kind_for(&oj_kind) {
+                CredentialKind::Cookie => {
+                    let cookie = match cookie {
+                        Some(c) => c.trim().to_string(),
+                        None => {
+                            println!("1. Open https://atcoder.jp in your browser and log in.");
+                            println!(
+                                "2. Open DevTools -> Application -> Cookies -> https://atcoder.jp"
+                            );
+                            println!("3. Copy the value of REVEL_SESSION.");
+                            print!("REVEL_SESSION: ");
+                            use std::io::Write as _;
+                            std::io::stdout().flush()?;
 
-                    let mut line = String::new();
-                    std::io::stdin().read_line(&mut line)?;
-                    line.trim().to_string()
+                            let mut line = String::new();
+                            std::io::stdin().read_line(&mut line)?;
+                            line.trim().to_string()
+                        }
+                    };
+                    Credentials::Cookie(cookie)
+                }
+                CredentialKind::EmailPassword => {
+                    use std::io::Write as _;
+                    print!("Email: ");
+                    std::io::stdout().flush()?;
+                    let mut email = String::new();
+                    std::io::stdin().read_line(&mut email)?;
+                    // LIMITATION: the password is read with terminal echo (visible on screen).
+                    // No OJ uses this branch yet (only AtCoder = Cookie is registered); when
+                    // LibraryChecker login is wired (TASK-036), switch to no-echo input
+                    // (e.g. rpassword). Documented in docs/online_judges/librarychecker.md.
+                    print!("Password: ");
+                    std::io::stdout().flush()?;
+                    let mut password = String::new();
+                    std::io::stdin().read_line(&mut password)?;
+                    Credentials::Password {
+                        identifier: email.trim().to_string(),
+                        password: password.trim().to_string(),
+                    }
                 }
             };
-            match login_with_io(oj_kind, &cookie) {
+            match login_with_io(oj_kind, credentials) {
                 Ok(()) => println!("Saved. Run `ce whoami` to verify."),
                 Err(e) => {
                     eprintln!("{e}");
@@ -184,10 +212,17 @@ pub fn run() -> Result<()> {
                 problem_code: problem,
                 solution_name,
             }) {
-                Ok(result) => {
-                    let url = &result.submission_url;
+                Ok(SubmitOutcome::OpenBrowser { url }) => {
+                    // stdout carries the URL only, so it stays copy/paste- and pipe-friendly.
                     println!("{url}");
-                    open_browser(url);
+                    open_browser(&url);
+                    Ok(())
+                }
+                Ok(SubmitOutcome::Submitted { submission_url }) => {
+                    // Human-facing note on stderr; stdout stays the URL only (same as above).
+                    eprintln!("Submitted.");
+                    println!("{submission_url}");
+                    open_browser(&submission_url);
                     Ok(())
                 }
                 Err(e) => {
@@ -203,7 +238,7 @@ pub fn run() -> Result<()> {
 /// without requiring a project root (suitable for login/whoami/logout).
 fn build_controller_no_root() -> Result<Controller> {
     let service = Service::new(
-        Box::new(AtCoder::new()?),
+        Box::new(OnlineJudgeRegistryImpl::new()?),
         Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SessionRepositoryImpl),
@@ -212,17 +247,21 @@ fn build_controller_no_root() -> Result<Controller> {
     Ok(Controller::new(service))
 }
 
-/// This is the testable core of the Login command. Returns an error if `cookie`
-/// is empty or whitespace-only. The value is trimmed before being persisted.
-pub fn login_with_io(oj: domain::entity::OJKind, cookie: &str) -> Result<()> {
-    let cookie = cookie.trim();
-    if cookie.is_empty() {
-        anyhow::bail!("cookie must not be empty");
+/// Returns the credential kind the given OJ expects for the login prompt.
+///
+/// A lightweight match mirroring each OJ's `OnlineJudge::credential_kind`, so the
+/// prompt can be chosen without constructing the OJ implementation (which builds an
+/// HTTP client). Exhaustiveness keeps this in sync as OJs are added.
+fn credential_kind_for(oj: &OJKind) -> CredentialKind {
+    match oj {
+        OJKind::AtCoder => CredentialKind::Cookie,
     }
-    let input = LoginCommand {
-        oj,
-        cookie: cookie.to_string(),
-    };
+}
+
+/// This is the testable core of the Login command. Validation of the credentials
+/// (e.g. rejecting an empty cookie) is delegated to the OJ's `login` implementation.
+pub fn login_with_io(oj: OJKind, credentials: Credentials) -> Result<()> {
+    let input = LoginCommand { oj, credentials };
     build_controller_no_root()?.login(&input)
 }
 
@@ -580,7 +619,7 @@ fn build_controller() -> Result<Controller> {
     let root = find_project_root()?;
 
     let service = Service::new(
-        Box::new(AtCoder::new()?),
+        Box::new(OnlineJudgeRegistryImpl::new()?),
         Box::new(ContestRepositoryImpl::new(root.clone())),
         Box::new(SolutionRepositoryImpl::new(root.clone())),
         Box::new(SessionRepositoryImpl),
@@ -643,7 +682,11 @@ mod tests {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
-        login_with_io(OJKind::AtCoder, "my_cookie").expect("login_with_io should succeed");
+        login_with_io(
+            OJKind::AtCoder,
+            Credentials::Cookie("my_cookie".to_string()),
+        )
+        .expect("login_with_io should succeed");
 
         let session_toml = tmp.path().join("session.toml");
         assert!(
@@ -669,7 +712,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("failed to create temp dir");
         let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
-        let result = login_with_io(OJKind::AtCoder, "");
+        let result = login_with_io(OJKind::AtCoder, Credentials::Cookie(String::new()));
         assert!(result.is_err(), "expected Err for empty cookie, got Ok");
     }
 

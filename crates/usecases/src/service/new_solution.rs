@@ -61,7 +61,9 @@ impl Service {
 mod tests {
     use crate::{
         config::Config,
-        online_judge::{ContestMeta, OnlineJudge},
+        online_judge::{
+            ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge, SubmitOutcome,
+        },
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
@@ -79,6 +81,12 @@ mod tests {
         fn name(&self) -> &str {
             "stub"
         }
+        fn credential_kind(&self) -> CredentialKind {
+            CredentialKind::Cookie
+        }
+        fn login(&self, _: &Credentials) -> Result<Session> {
+            todo!()
+        }
         fn whoami(&self, _: &Session) -> Result<String> {
             Ok(String::new())
         }
@@ -93,7 +101,14 @@ mod tests {
         ) -> Result<Vec<Problem>> {
             todo!()
         }
-        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
+        fn submit(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&Session>,
+        ) -> Result<SubmitOutcome> {
             todo!()
         }
     }
@@ -211,7 +226,7 @@ mod tests {
         solution_exists: bool,
     ) -> Service {
         Service::new(
-            Box::new(StubOJ),
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ))),
             Box::new(StubContestRepo {
                 contest_exists,
                 problem_codes: problem_codes.iter().map(|s| s.to_string()).collect(),

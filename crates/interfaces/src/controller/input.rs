@@ -1,8 +1,9 @@
 use domain::entity::{Language, OJKind};
+use usecases::online_judge::Credentials;
 
 pub trait LoginInput {
     fn oj(&self) -> OJKind;
-    fn cookie(&self) -> String;
+    fn credentials(&self) -> Credentials;
 }
 
 pub trait WhoamiInput {

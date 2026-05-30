@@ -1,17 +1,20 @@
 use anyhow::{Context, Result};
-use domain::entity::{Language, Solution, SubmitResult};
+use domain::entity::{Language, Solution};
 
 use super::Service;
+use crate::online_judge::SubmitOutcome;
 
 impl Service {
-    /// Builds the browser submit URL and returns it.
-    /// The caller (shell layer) opens the URL in the default browser.
+    /// Submits a solution via the OJ recorded in `.ce.toml`.
+    ///
+    /// Returns a `SubmitOutcome`: a browser URL to open (AtCoder) or a completed
+    /// submission's URL (OJs with direct submission). The shell layer acts on it.
     pub fn submit(
         &self,
         contest_id: &str,
         problem_code: &str,
         solution_name: &str,
-    ) -> Result<SubmitResult> {
+    ) -> Result<SubmitOutcome> {
         // 0. Run the solution's test command before preparing submission.
         //
         // `Service::test` currently executes `test_command` via `sh -c`, so
@@ -77,30 +80,17 @@ impl Service {
             )
         })?;
 
-        // 5. Guard against source files too large for a browser URL.
-        // Compute an upper bound on the base64 fragment length:
-        //   JSON payload = overhead (~30 + lang_id.len()) + source (×2 worst-case JSON escaping)
-        //   base64 expansion = ceil(json_bytes / 3) × 4
-        let json_upper = source.len() * 2 + lang_id.len() + 30;
-        let fragment_upper = json_upper.div_ceil(3) * 4;
-        const MAX_FRAGMENT_BYTES: usize = 32 * 1024;
-        if fragment_upper > MAX_FRAGMENT_BYTES {
-            anyhow::bail!(
-                "source file is too large to submit via URL fragment \
-                 (estimated fragment {} bytes, max {})",
-                fragment_upper,
-                MAX_FRAGMENT_BYTES,
-            );
-        }
-
-        // 6. Build the browser submit URL.
-        let url = self
-            .online_judge
-            .build_submit_url(contest_id, &problem.id, &lang_id, &source);
-
-        Ok(SubmitResult {
-            submission_url: url,
-        })
+        // 5. Submit via the OJ recorded in .ce.toml. The OJ decides whether this is a
+        // direct submission or a browser URL, and enforces any OJ-specific size limits.
+        // Some OJs (e.g. LibraryChecker) require a session; pass it when available.
+        let session = self.session_repo.get(&oj_kind)?;
+        self.online_judge(&oj_kind)?.submit(
+            contest_id,
+            &problem.id,
+            &lang_id,
+            &source,
+            session.as_ref(),
+        )
     }
 }
 
@@ -108,7 +98,10 @@ impl Service {
 mod tests {
     use crate::{
         config::Config,
-        online_judge::{ContestMeta, OnlineJudge},
+        online_judge::{
+            ContestMeta, CredentialKind, Credentials, OnlineJudge, OnlineJudgeRegistry,
+            SingleOnlineJudge, SubmitOutcome,
+        },
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
@@ -117,17 +110,25 @@ mod tests {
     };
     use anyhow::Result;
     use domain::entity::{Contest, Language, OJKind, Problem, Sample, Session, Solution};
+    use std::cell::RefCell;
     use std::path::PathBuf;
+    use std::rc::Rc;
 
     // ── Stub helpers ─────────────────────────────────────────────────────────
 
     struct StubOJ {
         submit_url: String,
-        panic_on_build_submit_url: bool,
+        panic_on_submit: bool,
     }
     impl OnlineJudge for StubOJ {
         fn name(&self) -> &str {
             "stub"
+        }
+        fn credential_kind(&self) -> CredentialKind {
+            CredentialKind::Cookie
+        }
+        fn login(&self, _: &Credentials) -> Result<Session> {
+            todo!()
         }
         fn whoami(&self, _: &Session) -> Result<String> {
             Ok(String::new())
@@ -143,11 +144,20 @@ mod tests {
         ) -> Result<Vec<Problem>> {
             todo!()
         }
-        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
-            if self.panic_on_build_submit_url {
-                panic!("build_submit_url must not be called");
+        fn submit(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&Session>,
+        ) -> Result<SubmitOutcome> {
+            if self.panic_on_submit {
+                panic!("submit must not be called");
             }
-            self.submit_url.clone()
+            Ok(SubmitOutcome::OpenBrowser {
+                url: self.submit_url.clone(),
+            })
         }
     }
 
@@ -263,13 +273,13 @@ mod tests {
         source: Option<String>,
         lang_id: Option<String>,
         submit_url: String,
-        panic_on_build_submit_url: bool,
+        panic_on_submit: bool,
     ) -> Service {
         Service::new(
-            Box::new(StubOJ {
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ {
                 submit_url,
-                panic_on_build_submit_url,
-            }),
+                panic_on_submit,
+            }))),
             Box::new(StubContestRepo {
                 problem: default_problem(),
             }),
@@ -295,9 +305,64 @@ mod tests {
         }
     }
 
-    /// Happy path: SubmitResult.submission_url is the URL returned by StubOJ.
+    /// A registry that records which OJKind was requested, returning a fixed StubOJ.
+    /// `requested` is shared via Rc so the test can inspect it after the Service runs.
+    struct RecordingRegistry {
+        oj: StubOJ,
+        requested: Rc<RefCell<Vec<OJKind>>>,
+    }
+    impl OnlineJudgeRegistry for RecordingRegistry {
+        fn get(&self, oj: &OJKind) -> Result<&dyn OnlineJudge> {
+            self.requested.borrow_mut().push(oj.clone());
+            Ok(&self.oj)
+        }
+    }
+
+    /// submit resolves the OnlineJudge using the OJKind recorded in .ce.toml
+    /// (ContestRepository::get_oj_kind), not a fixed implementation.
     #[test]
-    fn submit_happy_path_returns_submission_url() {
+    fn submit_resolves_online_judge_from_contest_oj_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            ce_toml_with_language_and_passing_test(),
+        )
+        .unwrap();
+        let requested = Rc::new(RefCell::new(vec![]));
+        let service = Service::new(
+            Box::new(RecordingRegistry {
+                oj: StubOJ {
+                    submit_url: "https://atcoder.jp/contests/abc001/submit#ce=XXX".to_string(),
+                    panic_on_submit: false,
+                },
+                requested: Rc::clone(&requested),
+            }),
+            // StubContestRepo::get_oj_kind returns OJKind::AtCoder.
+            Box::new(StubContestRepo {
+                problem: default_problem(),
+            }),
+            Box::new(StubSolutionRepo {
+                solution_dir: dir.path().to_path_buf(),
+                source: Some("fn main() {}".to_string()),
+            }),
+            Box::new(StubSession { session: None }),
+            Box::new(StubConfig {
+                lang_id: Some("6088".to_string()),
+                submit_file: "src/main.rs".to_string(),
+            }),
+        );
+        service.submit("abc001", "a", "main").unwrap();
+        // The OJ resolved for submission is the one stored in .ce.toml.
+        let requested = requested.borrow();
+        assert!(
+            requested.contains(&OJKind::AtCoder),
+            "expected submit to resolve the OJ from .ce.toml (AtCoder), got: {requested:?}"
+        );
+    }
+
+    /// Happy path: submit returns the OpenBrowser outcome with the URL from StubOJ.
+    #[test]
+    fn submit_happy_path_returns_open_browser_outcome() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ce.toml"),
@@ -314,7 +379,7 @@ mod tests {
             false,
         );
         let result = service.submit("abc001", "a", "main").unwrap();
-        assert_eq!(result.submission_url, expected_url);
+        assert_eq!(result, SubmitOutcome::OpenBrowser { url: expected_url });
     }
 
     /// A non-zero pre-submit test exits before source reading or URL generation.
