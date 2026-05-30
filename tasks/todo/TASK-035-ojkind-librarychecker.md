@@ -14,7 +14,9 @@
 - [ ] `OJKind` に `LibraryChecker` variant 追加
 - [ ] `OJKind::as_str` に対応文字列追加 (案: `"librarychecker"`、config/session キーに使用)
 - [ ] `OJKind::FromStr` に対応追加 (受理する別名があれば検討: `lc` / `yosupo` 等)
-- [ ] `from_contest_id_prefix` の扱い (LC はプレフィックスなし → None のまま。Phase B の判定器側で扱う)
+- [ ] LC の判定 descriptor を追加 (`judge.yosupo.jp/problem/{name}` URL → `(LibraryChecker, name)`)
+  - Phase B で入れた descriptor 機構に 1 件足すだけ。プレフィックスは持たない (URL のみ)
+- [ ] `OJKind::detect` の単体テスト追加: LC 問題 URL → `(LibraryChecker, "aplusb")`
 
 ### infrastructure/
 

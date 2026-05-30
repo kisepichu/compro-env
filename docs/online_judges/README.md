@@ -38,12 +38,20 @@
 
 ## OJ 判定 (init 時)
 
-`ce init <contest_id_or_url>` の入力から OJ と取得単位 ID を判定する。各 OJ が判定材料を申告し、
-判定器が走査する形にする。
+`ce init <contest_id_or_url>` の入力から OJ と取得単位 ID を判定する。各 OJ が判定材料 (descriptor)
+を申告し、domain の純粋関数 `OJKind::detect` が走査して `(OJKind, contest_id)` を返す。判定は
+I/O を伴わないため domain 層に置き、infrastructure の `parse_contest_input` は委譲のみとする。
 
+- descriptor が申告する材料: 「URL ホスト + パスパターン」と「contest_id プレフィックス」。
 - AtCoder: `atcoder.jp/contests/{id}` URL、または `abc/arc/agc/ahc` プレフィックス。
 - LibraryChecker: `judge.yosupo.jp/problem/{name}` URL。命名規則 (プレフィックス) は持たない。
-- いずれにも該当しない場合: stdin で OJ 名を尋ねる (既存挙動)。`--oj` 明示指定の要否は未決。
+- いずれにも該当しない場合: stdin で OJ 名を尋ねる (既存挙動)。`--oj` 明示フラグは追加しない。
+- **判断基準**: OJ を追加する変更が descriptor 1 件の追加に閉じ、判定ロジック本体や match の
+  散在を増やさない。
+
+**実装フェーズ**: 判定機構の拡張点化は TASK-034 (Phase B) で行うが、B は既存 AtCoder 判定を
+この機構へ移すリファクタに留め挙動を変えない。LibraryChecker の URL descriptor は variant を
+追加する TASK-035 (Phase C) で足す。
 
 ## ログインの一般化
 
@@ -80,4 +88,4 @@ shell 層は返り値の種別に応じて、URL を開く / 提出 URL を表�
 
 - `Session` を cookie 単一文字列のまま OJ 固有トークンも表現するか、enum 等へ拡張するか。
 - LibraryChecker の idToken 失効時のリフレッシュをどのコマンドで行うか。
-- `ce init` に `--oj` 明示フラグを追加するか。
+- `ce init` の `--oj` 明示フラグ: **追加しない**で確定 (判定不能時は stdin プロンプト)。

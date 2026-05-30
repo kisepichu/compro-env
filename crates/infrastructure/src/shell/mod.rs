@@ -314,32 +314,15 @@ fn is_safe_path_component(s: &str) -> bool {
 
 /// Parses a contest input string (contest ID or URL) into an (OJKind, contest_id) pair.
 ///
-/// Handles:
-/// - AtCoder URL: "https://atcoder.jp/contests/{id}" → (AtCoder, id)
-/// - Contest ID prefix (abc/arc/agc/ahc): "abc334" → (AtCoder, "abc334")
-/// - Unknown input: None
+/// Delegates OJ/contest-id detection to the pure `OJKind::detect`, then applies the
+/// infrastructure-level `is_safe_path_component` validation on the resulting contest_id,
+/// returning `None` when the id is not a safe single path component.
 fn parse_contest_input(input: &str) -> Option<(OJKind, String)> {
-    const ATCODER_URL_PREFIX: &str = "https://atcoder.jp/contests/";
-    if let Some(rest) = input.strip_prefix(ATCODER_URL_PREFIX) {
-        // Take only the first path segment (ignore trailing slashes or extra paths)
-        let contest_id = rest.trim_end_matches('/').split('/').next()?;
-        if contest_id.is_empty() {
-            return None;
-        }
-        let contest_id = contest_id.to_lowercase();
-        if !is_safe_path_component(&contest_id) {
-            return None;
-        }
-        return Some((OJKind::AtCoder, contest_id));
+    let (oj, contest_id) = OJKind::detect(input)?;
+    if !is_safe_path_component(&contest_id) {
+        return None;
     }
-    if let Some(oj) = OJKind::from_contest_id_prefix(input) {
-        let contest_id = input.to_lowercase();
-        if !is_safe_path_component(&contest_id) {
-            return None;
-        }
-        return Some((oj, contest_id));
-    }
-    None
+    Some((oj, contest_id))
 }
 
 /// Resolves and validates the OJ, contest_id, and language for `ce init`.
