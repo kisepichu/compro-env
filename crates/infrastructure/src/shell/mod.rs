@@ -255,6 +255,7 @@ fn build_controller_no_root() -> Result<Controller> {
 fn credential_kind_for(oj: &OJKind) -> CredentialKind {
     match oj {
         OJKind::AtCoder => CredentialKind::Cookie,
+        OJKind::LibraryChecker => CredentialKind::EmailPassword,
     }
 }
 
@@ -471,6 +472,7 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
     // Format OJ display name (capitalize first letter)
     let oj_display = match &result.oj_kind {
         OJKind::AtCoder => "AtCoder",
+        OJKind::LibraryChecker => "Library Checker",
     };
 
     println!(

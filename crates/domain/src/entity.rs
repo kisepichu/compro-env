@@ -6,6 +6,7 @@ use std::str::FromStr;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OJKind {
     AtCoder,
+    LibraryChecker,
 }
 
 /// Static descriptor used to detect an `OJKind` from a contest input string.
@@ -20,17 +21,27 @@ struct OjDescriptor {
 }
 
 /// Descriptor table for all supported online judges.
-const OJ_DESCRIPTORS: &[OjDescriptor] = &[OjDescriptor {
-    kind: OJKind::AtCoder,
-    url_host: "atcoder.jp",
-    url_path_prefix: "/contests/",
-    id_prefixes: &["abc", "arc", "agc", "ahc"],
-}];
+const OJ_DESCRIPTORS: &[OjDescriptor] = &[
+    OjDescriptor {
+        kind: OJKind::AtCoder,
+        url_host: "atcoder.jp",
+        url_path_prefix: "/contests/",
+        id_prefixes: &["abc", "arc", "agc", "ahc"],
+    },
+    OjDescriptor {
+        kind: OJKind::LibraryChecker,
+        url_host: "judge.yosupo.jp",
+        url_path_prefix: "/problem/",
+        // LibraryChecker has no contest-id naming convention; URL detection only.
+        id_prefixes: &[],
+    },
+];
 
 impl OJKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             OJKind::AtCoder => "atcoder",
+            OJKind::LibraryChecker => "librarychecker",
         }
     }
 
@@ -76,6 +87,7 @@ impl FromStr for OJKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "atcoder" => Ok(OJKind::AtCoder),
+            "librarychecker" => Ok(OJKind::LibraryChecker),
             _ => Err(format!("unknown online judge: {s}")),
         }
     }
@@ -892,5 +904,66 @@ mod detect_tests {
     #[test]
     fn atcoder_url_with_empty_id_returns_none() {
         assert_eq!(OJKind::detect("https://atcoder.jp/contests/"), None);
+    }
+
+    #[test]
+    fn detects_librarychecker_from_problem_url() {
+        assert_eq!(
+            OJKind::detect("https://judge.yosupo.jp/problem/aplusb"),
+            Some((OJKind::LibraryChecker, "aplusb".to_string()))
+        );
+    }
+
+    #[test]
+    fn librarychecker_url_with_trailing_slash_keeps_first_segment() {
+        assert_eq!(
+            OJKind::detect("https://judge.yosupo.jp/problem/aplusb/"),
+            Some((OJKind::LibraryChecker, "aplusb".to_string()))
+        );
+    }
+
+    #[test]
+    fn librarychecker_url_with_extra_path_segments_keeps_first_segment() {
+        assert_eq!(
+            OJKind::detect("https://judge.yosupo.jp/problem/aplusb/submissions"),
+            Some((OJKind::LibraryChecker, "aplusb".to_string()))
+        );
+    }
+
+    #[test]
+    fn librarychecker_url_with_empty_id_returns_none() {
+        assert_eq!(OJKind::detect("https://judge.yosupo.jp/problem/"), None);
+    }
+
+    #[test]
+    fn librarychecker_has_no_id_prefix_detection() {
+        // LibraryChecker has no contest-id naming convention; bare ids are not detected.
+        assert_eq!(OJKind::detect("aplusb"), None);
+    }
+}
+
+#[cfg(test)]
+mod ojkind_str_tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn atcoder_as_str_roundtrips() {
+        assert_eq!(OJKind::AtCoder.as_str(), "atcoder");
+        assert_eq!(OJKind::from_str("atcoder"), Ok(OJKind::AtCoder));
+    }
+
+    #[test]
+    fn librarychecker_as_str_roundtrips() {
+        assert_eq!(OJKind::LibraryChecker.as_str(), "librarychecker");
+        assert_eq!(
+            OJKind::from_str("librarychecker"),
+            Ok(OJKind::LibraryChecker)
+        );
+    }
+
+    #[test]
+    fn from_str_unknown_errors() {
+        assert!(OJKind::from_str("codeforces").is_err());
     }
 }

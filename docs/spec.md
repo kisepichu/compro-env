@@ -271,9 +271,12 @@ Session                             ← Value Object
                                     単一文字列で表すか拡張するかは未決 (TASK-037)。
 
 OJKind                              ← Value Object (enum)
-  実装済み: AtCoder のみ。LibraryChecker は TASK-035、AOJ 等はさらに後で追加予定。
-  AtCoder [| LibraryChecker (TASK-035) | AOJ ...]
-  as_str: AtCoder="atcoder" (追加時 LibraryChecker="librarychecker"。config/session キー)
+  AtCoder | LibraryChecker (TASK-035) [| AOJ ...]
+  as_str: AtCoder="atcoder" / LibraryChecker="librarychecker" (config/session キー)
+  TASK-035 (Phase C) で LibraryChecker variant・as_str/FromStr・URL descriptor を追加する。
+  ただし LC の OnlineJudge 実装は Phase D (TASK-036) まで無いため、Phase C 完了時点では
+  registry 解決・login は clean な anyhow エラー ("not yet implemented") を返す
+  (todo!() で panic させない)。詳細は docs/online_judges/librarychecker.md。
 
 Language                            ← Value Object (String の newtype)
   templates/{lang}/ ディレクトリ名がそのまま言語名になる。固定 enum ではない。
@@ -392,9 +395,11 @@ trait OnlineJudgeRegistry {
 コンテスト開始待機ロジック (ポーリング・カウントダウン表示) は `usecases/service/init.rs` に実装し、`get_contest_meta` で取得した時刻をもとに制御する。OJ 固有ロジックは含まない。  
 AtCoder の通常 `ce init` (開始後) は `get_contest_meta` + `get_problems_detail` の **2 リクエスト**のみ。LibraryChecker は問題情報 + サンプル取得のみ。
 
-> 実装状況: Phase A (TASK-033) 完了。`OnlineJudgeRegistry` による動的解決、`credential_kind`/
-> `login` によるログイン一般化、`submit -> SubmitOutcome` による提出一般化を実装済み。現状の
-> 登録 OJ は AtCoder のみ (`OnlineJudgeRegistryImpl`)。LibraryChecker は TASK-034〜037 で追加する。
+> 実装状況: Phase A (TASK-033) / Phase B (TASK-034) 完了。`OnlineJudgeRegistry` による動的解決、
+> `credential_kind`/`login` によるログイン一般化、`submit -> SubmitOutcome` による提出一般化、
+> descriptor + `OJKind::detect` による OJ 判定の拡張点化を実装済み。現状の登録 OJ は AtCoder のみ
+> (`OnlineJudgeRegistryImpl`)。LibraryChecker は variant 追加 (TASK-035/Phase C)・LC 実装
+> (TASK-036/Phase D)・config/session (TASK-037/Phase E) で段階的に追加する。
 
 ---
 

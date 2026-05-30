@@ -16,6 +16,20 @@
 - URL `https://judge.yosupo.jp/problem/{name}` → `(LibraryChecker, contest_id={name})`。
 - contest_id のプレフィックス命名規則は持たない。プレフィックス判定では検出しない。
 
+## 実装フェーズと中間状態
+
+LibraryChecker は段階的に追加する。Phase ごとの完了時状態と判断基準は次の通り。
+
+- **Phase C (TASK-035)**: `OJKind::LibraryChecker` variant・`as_str`/`FromStr` (`"librarychecker"`)・
+  URL descriptor を追加する。**この時点では LC の `OnlineJudge` 実装はまだ無い** (Phase D)。
+  - **判断基準**: `ce init <LC URL>` は `(LibraryChecker, name)` を検出するが、その先の OJ 解決
+    (registry) と login の資格情報解決は **clean な anyhow エラー** (例:
+    `"LibraryChecker is not yet implemented"`) を返す。`todo!()` で panic させない
+    (バイナリは使用可能なまま保ち、tests/clippy を通す)。
+  - AtCoder の既存挙動は一切変えない。LC 検出が増えるだけ。
+- **Phase D (TASK-036)**: 上記の clean エラー stub を実際の REST/Firebase 実装に置き換える。
+- **Phase E (TASK-037)**: config (lang_id) と session (Firebase token) の保存形式を確定する。
+
 ## エンドポイント (調査結果)
 
 REST API ベース URL: `https://v3.api.judge.yosupo.jp` (旧 gRPC から REST へ移行済み)。
