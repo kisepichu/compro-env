@@ -259,8 +259,9 @@ Session                             ← Value Object
                                     単一文字列で表すか拡張するかは未決 (TASK-037)。
 
 OJKind                              ← Value Object (enum)
-  AtCoder | LibraryChecker | AOJ | ...
-  as_str: AtCoder="atcoder", LibraryChecker="librarychecker" (config/session キー)
+  実装済み: AtCoder のみ。LibraryChecker は TASK-035、AOJ 等はさらに後で追加予定。
+  AtCoder [| LibraryChecker (TASK-035) | AOJ ...]
+  as_str: AtCoder="atcoder" (追加時 LibraryChecker="librarychecker"。config/session キー)
 
 Language                            ← Value Object (String の newtype)
   templates/{lang}/ ディレクトリ名がそのまま言語名になる。固定 enum ではない。
