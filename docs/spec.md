@@ -72,7 +72,12 @@ solution_file = "src/main.rs"
 
 [language.rust.atcoder]
 lang_id = "6088"
+
+[language.rust.librarychecker]
+lang_id = "rust"            # GET /langs の id (例)
 ```
+
+OJ ごとの提出言語 ID は `[language.{lang}.{oj}].lang_id` で対応付ける (oj = OJKind::as_str)。
 
 言語はユーザーが自由に追加できる。`templates/{lang}/` ディレクトリを追加するだけで `ce` がその言語名を認識する。`[language.{name}]` セクションは提出コマンドの設定に使用する (省略した場合はデフォルト設定のみ)。
 
@@ -87,7 +92,14 @@ lang_id = "6088"
 ```toml
 [atcoder]
 revel_session = "xxxxxxxx"
+
+# LibraryChecker は Firebase トークンを保存する (キー名・構造は TASK-037 で確定)
+# [librarychecker]
+# id_token = "..."
+# refresh_token = "..."
 ```
+
+OJ ごとにセクションを分ける (セクション名 = OJKind::as_str)。保存する値は OJ の認証方式に依る。
 
 ---
 
@@ -139,13 +151,18 @@ revel_session = "xxxxxxxx"
 
 ## OJ 判定ロジック
 
+各 OJ が判定材料 (URL パターン / contest_id プレフィックス) を申告し、判定器が走査する
+(一般化は TASK-034。詳細は `docs/online_judges/README.md`)。
+
 ```
 "abc334"     → "abc"/"arc"/"agc"/"ahc" プレフィックス → AtCoder
+"https://atcoder.jp/contests/abc334"   → URL パース → AtCoder, id="abc334"
+"https://judge.yosupo.jp/problem/aplusb" → URL パース → LibraryChecker, contest_id="aplusb" (単問)
 "aoj0000"    → "aoj" プレフィックス → AOJ (将来)
-"https://atcoder.jp/contests/abc334" → URL パース → AtCoder, id="abc334"
-"xyz999"     → 不明 → stdin: "OJ を選んでください [atcoder]: "
+"xyz999"     → 不明 → stdin: "OJ (e.g. atcoder): " (空 Enter でデフォルト)
 ```
 
+LibraryChecker は contest_id のプレフィックス命名規則を持たないため、URL かプロンプトで判定する。
 `ce init` 後は `.ce.toml` に保存するため、以降の判定は不要。
 
 ---
@@ -237,10 +254,13 @@ Solution                            ← Entity (独立 Aggregate)
 
 Session                             ← Value Object
   online_judge: OJKind
-  cookie: String                    REVEL_SESSION 等
+  cookie: String                    OJ 固有の認証材料。AtCoder は REVEL_SESSION。
+                                    LibraryChecker は Firebase idToken(+refreshToken)。
+                                    単一文字列で表すか拡張するかは未決 (TASK-037)。
 
 OJKind                              ← Value Object (enum)
-  AtCoder | AOJ | ...
+  AtCoder | LibraryChecker | AOJ | ...
+  as_str: AtCoder="atcoder", LibraryChecker="librarychecker" (config/session キー)
 
 Language                            ← Value Object (String の newtype)
   templates/{lang}/ ディレクトリ名がそのまま言語名になる。固定 enum ではない。
@@ -299,45 +319,52 @@ trait SessionRepository {
 
 ## OnlineJudge インターフェース (usecases 層)
 
+OJ 抽象の責務・一般化方針・個別 OJ 仕様は `docs/online_judges/` に集約する
+(`README.md` = 共通設計、`librarychecker.md` 等 = 個別)。ここではポートの要点のみ示す。
+
+複数 OJ 対応のため次を満たす (一般化は TASK-033〜037 で実施):
+
+- **動的解決**: `Service` は単一 `OnlineJudge` を固定で持たず、`OJKind` から対象実装を解決する
+  (usecases にレジストリ用ポートを定義し、infrastructure が各 OJ を登録)。`ce sub` / `ce test`
+  は `.ce.toml` の `OJKind` (`ContestRepository::get_oj_kind`) に従って OJ を選ぶ。
+- **ログイン**: OJ ごとに資格情報の種別が異なる (AtCoder = 手動 cookie / LibraryChecker =
+  email+password)。OJ は必要種別を申告し、資格情報から `Session` を生成できる。
+- **提出**: 「ブラウザで開く URL を返す」方式に固定しない。提出結果を表現する型を返し、
+  AtCoder は「開く URL」(userscript 前提)、LibraryChecker は「提出済み (提出 id/URL)」を返す。
+
 ```rust
-/// コンテストページ 1 回のフェッチで取れるメタ情報。
+/// コンテスト/問題取得 1 回のフェッチで取れるメタ情報。
 struct ContestMeta {
-    /// コンテスト開始時刻。取得できない場合は None。
+    /// 開始時刻。取得できない/概念がない場合は None (LibraryChecker は常に None)。
     start_time: Option<DateTime<Utc>>,
-    /// ナビバードロップダウンから取れた (problem_code, problem_id) ペア。
-    /// 現行コンテストでは空 Vec。空なら get_problems_detail 側で {contest_id}_{code} と推定する。
-    /// ABC/ARC 同時開催の旧コンテストでは arc103_a 等の実際の ID が入る。
+    /// (problem_code, problem_id) ペア。空なら get_problems_detail 側で推定する。
     problem_id_hints: Vec<(String, String)>,
 }
 
 trait OnlineJudge {
     fn name(&self) -> &str;
     fn whoami(&self, session: &Session) -> Result<String>;
-    /// コンテストページを 1 回フェッチして開始時刻と problem_id ヒントを返す。
+    /// 開始時刻と problem_id ヒントを返す。LibraryChecker は単問なので start_time=None・hints 空。
     fn get_contest_meta(&self, contest_id: &str) -> Result<ContestMeta>;
-    /// tasks_print ページを 1 回フェッチして全問題詳細を返す。
-    /// problem_id_hints が空なら {contest_id}_{code} と推定する。
+    /// 全問題詳細を返す。AtCoder は tasks_print から複数、LibraryChecker は当該 1 問を返す。
+    /// problem_id_hints が空なら {contest_id}_{code} 等と推定する。
     fn get_problems_detail(
         &self,
         contest_id: &str,
         session: Option<&Session>,
         problem_id_hints: &[(String, String)],
     ) -> Result<Vec<Problem>>;
-    fn submit(
-        &self,
-        contest_id: &str,
-        problem_id: &str,
-        lang_id: &str,
-        source: &str,
-        session: &Session,
-    ) -> Result<SubmitResult>;
+    // ログイン・提出は一般化対象 (詳細は docs/online_judges/README.md)。
+    // 提出は SubmitOutcome 相当 (OpenBrowser{url} | Submitted{submission_url}) を返す形にする。
 }
 ```
 
-`login(username, password)` は不要 (手動クッキー方式のため削除)。  
 `get_problems_detail` は公開コンテストなら session 不要 (`Option<&Session>`)。  
 コンテスト開始待機ロジック (ポーリング・カウントダウン表示) は `usecases/service/init.rs` に実装し、`get_contest_meta` で取得した時刻をもとに制御する。OJ 固有ロジックは含まない。  
-通常の `ce init` (コンテスト開始後) は `get_contest_meta` + `get_problems_detail` の **2 リクエスト**のみ。
+AtCoder の通常 `ce init` (開始後) は `get_contest_meta` + `get_problems_detail` の **2 リクエスト**のみ。LibraryChecker は問題情報 + サンプル取得のみ。
+
+> 注: 現行コードは提出を `build_submit_url(...) -> String` (ブラウザ URL) で実装しており、
+> 上記の提出一般化 (SubmitOutcome) は Phase A (TASK-033) での目標状態。
 
 ---
 
@@ -378,6 +405,8 @@ infrastructure/
     session_repository_impl.rs
   online_judge_impl/
     atcoder.rs
+    librarychecker.rs   ← LibraryChecker REST/Firebase 実装 (TASK-036)
+    registry.rs         ← OJKind → 実装の解決 (TASK-033)
   config_impl.rs
   shell/   ← clap エントリポイント
 ```
