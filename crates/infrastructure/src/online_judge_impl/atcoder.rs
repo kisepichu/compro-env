@@ -36,7 +36,7 @@ impl OnlineJudge for AtCoder {
                 if cookie.is_empty() {
                     anyhow::bail!("cookie must not be empty");
                 }
-                Ok(Session {
+                Ok(Session::Cookie {
                     online_judge: OJKind::AtCoder,
                     cookie: cookie.to_string(),
                 })
@@ -49,7 +49,7 @@ impl OnlineJudge for AtCoder {
 
     fn whoami(&self, session: &Session) -> Result<String> {
         // Set the REVEL_SESSION cookie before making the request.
-        let cookie = format!("REVEL_SESSION={}", session.cookie);
+        let cookie = format!("REVEL_SESSION={}", atcoder_cookie(session)?);
         self.client
             .get("https://atcoder.jp/home")
             .header(reqwest::header::COOKIE, cookie)
@@ -91,7 +91,7 @@ impl OnlineJudge for AtCoder {
         if let Some(session) = session {
             req = req.header(
                 reqwest::header::COOKIE,
-                format!("REVEL_SESSION={}", session.cookie),
+                format!("REVEL_SESSION={}", atcoder_cookie(session)?),
             );
         }
         let resp = req.send()?.error_for_status()?;
@@ -156,6 +156,15 @@ impl OnlineJudge for AtCoder {
         Ok(SubmitOutcome::OpenBrowser {
             url: url.to_string(),
         })
+    }
+}
+
+/// Extracts the REVEL_SESSION cookie from an AtCoder session.
+/// AtCoder only ever produces `Session::Cookie`; any other variant is a programming error.
+fn atcoder_cookie(session: &Session) -> Result<&str> {
+    match session {
+        Session::Cookie { cookie, .. } => Ok(cookie),
+        _ => anyhow::bail!("AtCoder requires a cookie session"),
     }
 }
 

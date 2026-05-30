@@ -14,7 +14,7 @@ impl Service {
         // The caller-specified OJ is authoritative for where the session is stored
         // (SessionRepository keys the section off `session.online_judge`). Enforce the
         // invariant so a mismatched `OnlineJudge::login` cannot write to the wrong OJ.
-        session.online_judge = oj;
+        session.set_online_judge(oj);
         self.session_repo.save(&session)
     }
 }

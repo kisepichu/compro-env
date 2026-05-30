@@ -70,27 +70,27 @@ impl Service {
         };
         let source = self.solution_repo.get_source(&solution, &file_path)?;
 
-        // 4. Get lang_id from config.
-        let lang_id = self.config.lang_id(&language, &oj_kind).ok_or_else(|| {
-            anyhow::anyhow!(
-                "lang_id not configured for language `{}` on `{}` \
-                (check config.toml; config parse errors also produce this)",
-                language,
-                oj_kind
-            )
-        })?;
+        // 4. Resolve lang_id: prefer the user's config.toml mapping; otherwise fall back
+        // to the OJ's default (LibraryChecker derives it from the language name).
+        let oj = self.online_judge(&oj_kind)?;
+        let lang_id = self
+            .config
+            .lang_id(&language, &oj_kind)
+            .or_else(|| oj.default_lang_id(&language))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "lang_id not configured for language `{}` on `{}` \
+                    (check config.toml; config parse errors also produce this)",
+                    language,
+                    oj_kind
+                )
+            })?;
 
         // 5. Submit via the OJ recorded in .ce.toml. The OJ decides whether this is a
         // direct submission or a browser URL, and enforces any OJ-specific size limits.
         // Some OJs (e.g. LibraryChecker) require a session; pass it when available.
         let session = self.session_repo.get(&oj_kind)?;
-        self.online_judge(&oj_kind)?.submit(
-            contest_id,
-            &problem.id,
-            &lang_id,
-            &source,
-            session.as_ref(),
-        )
+        oj.submit(contest_id, &problem.id, &lang_id, &source, session.as_ref())
     }
 }
 
