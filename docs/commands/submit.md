@@ -134,6 +134,12 @@ preprocess = "~/.config/ce/hooks/submit-preprocess.sh"   # 全言語共通の1�
   ※ `cargo-equip` の素の出力は「上 = 自分のコード / 下 = ライブラリを畳んだ module」で既に可読なため、
   元コードの重複掲載は必須でない (提出サイズ上限に注意)。
 
+### スクリプト例
+
+Rust ライブラリ展開 (cargo-equip) を行う実例は `hooks/submit-preprocess.sh` にある。
+`$CE_LANGUAGE` で分岐し、Rust は `cargo equip --check` で展開後コンパイルまで検証してから提出ソースを
+stdout に出す。他言語は `cat` で素通しする雛形。
+
 ## エラーケース
 
 - Unix 環境で提出前テストが失敗した: 終了コードを表示してエラー終了し、提出 URL は生成しない
