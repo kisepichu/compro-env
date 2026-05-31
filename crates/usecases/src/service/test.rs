@@ -136,8 +136,8 @@ mod tests {
         fn submit_file(&self, _: &Language) -> String {
             String::new()
         }
-        fn submit_preprocess(&self, _: &Language) -> String {
-            String::new()
+        fn submit_preprocess(&self) -> Option<String> {
+            None
         }
         fn lang_id(&self, _: &Language, _: &OJKind) -> Option<String> {
             None

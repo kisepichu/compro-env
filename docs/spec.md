@@ -28,6 +28,7 @@ compro-env/                         ← リポジトリルート
 ```
 
 **領域の区別**:
+
 - `.ce.toml` と `testcases/` は `ce` が管理するファイル。ユーザーは直接編集しない。
 - `{problem_code}/{solution_name}/` 以下がユーザーの作業領域。`ce init` / `ce solution add` 時に `templates/{lang}/` を展開して初期化され、以降はユーザーが自由に編集する。
 
@@ -75,9 +76,16 @@ lang_id = "6088"
 
 [language.rust.librarychecker]
 lang_id = "rust"            # GET /langs の id (例)
+
+[submit]
+preprocess = "~/.config/ce/hooks/submit-preprocess.sh"   # 提出前フック (任意、全言語共通)
 ```
 
 OJ ごとの提出言語 ID は `[language.{lang}.{oj}].lang_id` で対応付ける (oj = OJKind::as_str)。
+
+提出前 preprocess フックは `[submit].preprocess` (全言語共通の1本) のみ。アプリにバンドル/言語別ロジックを持たず、
+整形・ライブラリ展開・提出レイアウトをすべてユーザースクリプトに委ねる拡張点。言語別の分岐は `CE_LANGUAGE`
+env を使ってスクリプト内で行う (per-language config キーは設けない。詳細: `docs/commands/submit.md`)。
 
 言語はユーザーが自由に追加できる。`templates/{lang}/` ディレクトリを追加するだけで `ce` がその言語名を認識する。`[language.{name}]` セクションは提出コマンドの設定に使用する (省略した場合はデフォルト設定のみ)。
 
@@ -430,7 +438,8 @@ usecases/
     new_solution.rs  ContestRepository::exists() + ContestRepository::list_problem_codes() + SolutionRepository::exists() + ContestRepository::get_samples() + ContestRepository::get_problem() + SolutionRepository::create(solution, samples, input_format_raw, constraints_raw)
     test.rs       解法ディレクトリの ce.toml を読み test_command を sh -c 実行。exit code をそのまま返す
     submit.rs     solution の ce.toml から language 取得 + ContestRepository::get_problem() で problem_id 取得
-                  + SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::build_submit_url() → ブラウザ起動
+                  + SolutionRepository::get_source() + Config (lang_id) + (任意) preprocess フック実行
+                  (sh -c + env + stdin/stdout、test.rs と同じ機構) → OnlineJudge::submit() → SubmitOutcome
 
 interfaces/
   controller/
@@ -458,15 +467,16 @@ infrastructure/
 以下は Phase 1 非対応。パース失敗時は `ok: false` にフォールバックする。  
 実際の AtCoder 問題 (ac/test/data/test_problems.yml 収録) で確認済み。
 
-| 非対応パターン | 確認問題 |
-| --- | --- |
-| クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 (ループマーカーなし) | typical90-L |
-| T-testcases 型: pre[0]=`T` 単独 + pre[1]=ケース形式 | abc238-D |
-| ジャギー配列で SIZE_VAR がスカラー列に存在しない | — |
-| 斜め・上三角行列: 行ごとに長さが異なる (カンマ添字内の算術式 `{2N-1, 2N}` 等) | abc236-D |
-| ネストループ 2段以上 | — |
+| 非対応パターン                                                                | 確認問題    |
+| ----------------------------------------------------------------------------- | ----------- |
+| クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 (ループマーカーなし)     | typical90-L |
+| T-testcases 型: pre[0]=`T` 単独 + pre[1]=ケース形式                           | abc238-D    |
+| ジャギー配列で SIZE_VAR がスカラー列に存在しない                              | —           |
+| 斜め・上三角行列: 行ごとに長さが異なる (カンマ添字内の算術式 `{2N-1, 2N}` 等) | abc236-D    |
+| ネストループ 2段以上                                                          | —           |
 
 **Phase 1 対応済み** (以前は非対応だったが対応済み):
+
 - 算術式添字 (`{2N}`, `{N-1}`, `{N+1}`, `{2N-1}` 等): 配列サイズ・ループ上限として使用可能
   - `{NumIdent}` → `*` を自動挿入 (例: `{2N}` → `2*n`)
   - `{Ident±Num}` → 演算子を保持 (例: `{N-1}` → `n-1`)

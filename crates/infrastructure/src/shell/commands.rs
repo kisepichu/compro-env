@@ -63,6 +63,9 @@ pub enum Commands {
         contest: String,
         problem: String,
         solution: Option<String>,
+        /// Prepare the source (incl. preprocess) and print it without submitting
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

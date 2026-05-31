@@ -413,8 +413,8 @@ mod tests {
             String::new()
         }
 
-        fn submit_preprocess(&self, _lang: &Language) -> String {
-            String::new()
+        fn submit_preprocess(&self) -> Option<String> {
+            None
         }
 
         fn lang_id(&self, _lang: &Language, _oj: &OJKind) -> Option<String> {

@@ -186,6 +186,7 @@ pub fn run() -> Result<()> {
             contest,
             problem,
             solution,
+            dry_run,
         } => {
             if !is_safe_path_component(&contest) {
                 anyhow::bail!("invalid contest ID \"{contest}\": must be a single path component");
@@ -204,27 +205,44 @@ pub fn run() -> Result<()> {
                 );
             }
             let controller = build_controller()?;
-            match controller.submit(&SubmitCommand {
+            let command = SubmitCommand {
                 contest_id: contest,
                 problem_code: problem,
                 solution_name,
-            }) {
-                Ok(SubmitOutcome::OpenBrowser { url }) => {
-                    // stdout carries the URL only, so it stays copy/paste- and pipe-friendly.
-                    println!("{url}");
-                    open_browser(&url);
-                    Ok(())
+            };
+            if dry_run {
+                // Dry run: print the exact source that would be submitted and stop.
+                // No OJ contact, so it is safe to run repeatedly while iterating on
+                // the preprocess hook.
+                match controller.submit_dry_run(&command) {
+                    Ok(source) => {
+                        print!("{source}");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
                 }
-                Ok(SubmitOutcome::Submitted { submission_url }) => {
-                    // Human-facing note on stderr; stdout stays the URL only (same as above).
-                    eprintln!("Submitted.");
-                    println!("{submission_url}");
-                    open_browser(&submission_url);
-                    Ok(())
-                }
-                Err(e) => {
-                    eprintln!("{e}");
-                    std::process::exit(1);
+            } else {
+                match controller.submit(&command) {
+                    Ok(SubmitOutcome::OpenBrowser { url }) => {
+                        // stdout carries the URL only, so it stays copy/paste- and pipe-friendly.
+                        println!("{url}");
+                        open_browser(&url);
+                        Ok(())
+                    }
+                    Ok(SubmitOutcome::Submitted { submission_url }) => {
+                        // Human-facing note on stderr; stdout stays the URL only (same as above).
+                        eprintln!("Submitted.");
+                        println!("{submission_url}");
+                        open_browser(&submission_url);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
                 }
             }
         }
