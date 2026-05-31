@@ -77,8 +77,8 @@ LibraryChecker の `OnlineJudge` 実装を追加する。REST API (`https://v3.a
 
 - [x] `ce init <LC問題URL>` で単問コンテストとして問題・サンプルが取得できる
       (実 LC で確認: `ce init https://judge.yosupo.jp/problem/aplusb` → 2 サンプル取得・正しい出力)
-- [ ] `ce login librarychecker` で email+password ログインしトークン保存 (要実アカウント・手動確認)
-- [ ] `ce sub` で実際に提出され提出 URL が表示される (要実アカウント・手動確認)
+- [x] `ce login librarychecker` で email+password ログインしトークン保存 (実アカウントで確認済み)
+- [x] `ce sub` で実際に提出され提出 URL が表示される (実アカウントで確認済み)
 - [x] `cargo test --all && cargo clippy --all --all-features -- -D warnings && cargo fmt --all --check` 通過
 
 ## 未決事項 (解決済み)
@@ -109,5 +109,7 @@ LibraryChecker の `OnlineJudge` 実装を追加する。REST API (`https://v3.a
   「公開バケットの例ファイル」に確定 (問題ページ SPA のため)。`ce init` を実 LC で e2e 確認。
   全 257 テスト通過・clippy/fmt クリーン。login/submit は要実アカウント手動確認。
 - 2026-05-31: ユーザーフィードバックを受け 3 点追加対応 (contest_id 名前空間化 / task.md からの入力
-  フォーマット抽出 / lang_id 自動解決)。login は実アカウントで OK 確認済み。`ce init` を実 LC で再確認
-  (prefix・入力フォーマット抽出が機能)。全 264 テスト通過・clippy/fmt クリーン。submit は手動確認待ち。
+  フォーマット抽出 / lang_id 自動解決)。`ce init` を実 LC で再確認 (prefix・入力フォーマット抽出が機能)。
+- 2026-05-31: 実アカウントで `ce login` / `ce sub` を確認済み (入力コード生成・提出 OK)。PR #36 の Copilot
+  レビュー対応: パスワード trim バグ修正、lang_id 解決テスト追加、example 番号の 2 桁ゼロ埋め (idx>=10 対応)、
+  whoami のエラーを 401/403 時のみ「session expired」に限定、docs/task を実装に同期。

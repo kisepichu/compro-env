@@ -129,10 +129,22 @@ impl OnlineJudge for LibraryChecker {
 
     fn whoami(&self, session: &Session) -> Result<String> {
         let url = format!("{REST_BASE}/auth/current_user");
-        let body = self
-            .send_authed(session, |token| self.client.get(&url).bearer_auth(token))?
+        let resp = self.send_authed(session, |token| self.client.get(&url).bearer_auth(token))?;
+        // After send_authed's refresh-and-retry, a remaining 401/403 means re-login is
+        // needed. Other failures (5xx, 404, …) keep their original status so the message
+        // is not misleadingly attributed to an expired session.
+        let status = resp.status();
+        let body = resp
             .error_for_status()
-            .map_err(|_| anyhow::anyhow!("session expired. Run `ce login librarychecker` again."))?
+            .map_err(|e| {
+                if status == reqwest::StatusCode::UNAUTHORIZED
+                    || status == reqwest::StatusCode::FORBIDDEN
+                {
+                    anyhow::anyhow!("session expired. Run `ce login librarychecker` again.")
+                } else {
+                    anyhow::anyhow!(e)
+                }
+            })?
             .text()?;
         parse_current_username(&body)
     }
@@ -200,14 +212,14 @@ impl OnlineJudge for LibraryChecker {
                 .get(example_in_url(name, &info.testcases_version, idx))
                 .send()?
                 .error_for_status()
-                .with_context(|| format!("failed to fetch example_0{idx}.in"))?
+                .with_context(|| format!("failed to fetch example_{idx:02}.in"))?
                 .text()?;
             let output = self
                 .client
                 .get(example_out_url(name, &info.testcases_version, idx))
                 .send()?
                 .error_for_status()
-                .with_context(|| format!("failed to fetch example_0{idx}.out"))?
+                .with_context(|| format!("failed to fetch example_{idx:02}.out"))?
                 .text()?;
             samples.push(Sample { input, output });
         }
@@ -280,11 +292,12 @@ fn info_toml_url(name: &str, overall_version: &str) -> String {
 }
 
 fn example_in_url(name: &str, testcases_version: &str, idx: usize) -> String {
-    format!("{STORAGE_BASE}/v4/examples/{name}/{testcases_version}/in/example_0{idx}.in")
+    // Example files are zero-padded to two digits (example_00, …, example_10, …).
+    format!("{STORAGE_BASE}/v4/examples/{name}/{testcases_version}/in/example_{idx:02}.in")
 }
 
 fn example_out_url(name: &str, testcases_version: &str, idx: usize) -> String {
-    format!("{STORAGE_BASE}/v4/examples/{name}/{testcases_version}/out/example_0{idx}.out")
+    format!("{STORAGE_BASE}/v4/examples/{name}/{testcases_version}/out/example_{idx:02}.out")
 }
 
 fn task_md_url(name: &str, overall_version: &str) -> String {
@@ -488,6 +501,11 @@ mod tests {
         assert_eq!(
             example_out_url("aplusb", "TCV", 1),
             "https://storage.googleapis.com/v2-prod-library-checker-data-public/v4/examples/aplusb/TCV/out/example_01.out"
+        );
+        // Two-digit zero padding: idx >= 10 must not become a 3-digit "example_010".
+        assert_eq!(
+            example_in_url("aplusb", "TCV", 10),
+            "https://storage.googleapis.com/v2-prod-library-checker-data-public/v4/examples/aplusb/TCV/in/example_10.in"
         );
     }
 
