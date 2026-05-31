@@ -25,10 +25,12 @@
 `contest_id` と `Contest` 集約は OJ 横断の「取得単位」として扱う。
 
 - AtCoder: `contest_id` = コンテスト ID (`abc334`)、1 コンテストに複数 `Problem`。
-- LibraryChecker: コンテスト概念がないため **問題 = 単問コンテスト**。`contest_id` = 問題名
-  (`aplusb`)、`problems` は 1 件。ディレクトリ構造 (`solutions/{contest_id}/{problem_code}/`)
-  をそのまま再利用する。将来のライブラリ verify 機能 (ファイルごとに verify 問題を個別指定)
-  とも整合する。
+- LibraryChecker: コンテスト概念がないため **問題 = 単問コンテスト**。`contest_id` は
+  `librarychecker-` を冠した名前空間付き (`librarychecker-aplusb`)、`problems` は 1 件で
+  `Problem.id`/`code` は素の問題名 (`aplusb`)。名前空間化で AtCoder の contest_id と衝突せず、
+  id 単体で OJ が判別できる。ディレクトリ構造 (`solutions/{contest_id}/{problem_code}/`) はそのまま
+  再利用 (`solutions/librarychecker-aplusb/aplusb/`)。将来のライブラリ verify 機能とも整合する。
+  - descriptor に `contest_id_prefix` を持たせ、URL 抽出 id に前置する (OJKind::detect)。
 
 ## OJ の動的解決 (registry)
 
@@ -68,8 +70,10 @@ I/O を伴わないため domain 層に置き、infrastructure の `parse_contes
 
 - ポートは「資格情報種別の申告」と「資格情報 → `Session` の生成」を表現する
   (例: `credential_kind()` と `login(credentials) -> Session`)。
-- `Session` は OJ 固有の認証材料を保持する。AtCoder は cookie 文字列、LibraryChecker は
-  Firebase の idToken (+ refreshToken)。session.toml には OJ ごとのセクションで保存する。
+- `Session` は OJ 固有の認証材料を保持する。**enum で OJ 別の認証材料を型で区別する**
+  (確定): AtCoder は cookie 文字列、LibraryChecker は Firebase の idToken + refreshToken。
+  session.toml には OJ ごとのセクションで保存する。この型変更は Phase D (TASK-036) で行う
+  (login がトークンを生成し submit/whoami が消費するため、Phase E に分離できない)。
 
 ## 提出の一般化
 
@@ -82,6 +86,10 @@ I/O を伴わないため domain 層に置き、infrastructure の `parse_contes
 shell 層は返り値の種別に応じて、URL を開く / 提出 URL を表示する、を出し分ける。
 `ce sub` の提出前テスト (Unix で `test_command` を実行し exit 0 のみ続行) は OJ 非依存で維持する。
 
+**lang_id の解決**: submit は `config.lang_id(lang, oj)` を優先し、無ければ OJ の
+`OnlineJudge::default_lang_id(lang)` にフォールバックする。AtCoder は default = None (config 必須)。
+LibraryChecker は lang id が言語名とほぼ一致するため、言語名をデフォルトに使う (config 上書き可)。
+
 ## 各 OJ ドキュメント
 
 - [AtCoder](./atcoder.md)
@@ -89,6 +97,14 @@ shell 層は返り値の種別に応じて、URL を開く / 提出 URL を表�
 
 ## 未決事項
 
-- `Session` を cookie 単一文字列のまま OJ 固有トークンも表現するか、enum 等へ拡張するか。
-- LibraryChecker の idToken 失効時のリフレッシュをどのコマンドで行うか。
 - `ce init` の `--oj` 明示フラグ: **追加しない**で確定 (判定不能時は stdin プロンプト)。
+
+## 確定済み (旧未決)
+
+- `Session` の表現: **enum で OJ 別 auth を型区別する**で確定 (AtCoder=Cookie / LibraryChecker=Firebase
+  idToken+refreshToken)。Phase D で実装。
+- LibraryChecker の idToken 失効時のリフレッシュ: **オンデマンド更新**で確定。Bearer リクエストが
+  401/403 を返したら refreshToken で idToken を更新 (`securetoken.googleapis.com`) し 1 度だけ
+  再試行する。明示的な `ce login` 再実行は不要。refreshToken も失効していれば clean エラーで再ログインを促す。
+  - 永続する資格情報は **refreshToken**。`OnlineJudge` trait は `SessionRepository` に触れないため、
+    リフレッシュで得た新 idToken はプロセス内のみで使い、保存はしない (詳細は librarychecker.md)。

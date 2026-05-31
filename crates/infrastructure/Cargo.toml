@@ -12,12 +12,13 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.12", features = ["blocking", "cookies"] }
+reqwest = { version = "0.12", features = ["blocking", "cookies", "json"] }
 toml = "0.8"
 tera = "1"
 walkdir = "2"
 serde_json = "1"
 base64 = "0.22"
+rpassword = "7"
 
 [dev-dependencies]
 tempfile = "3"

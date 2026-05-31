@@ -62,17 +62,14 @@ pub fn run() -> Result<()> {
                     std::io::stdout().flush()?;
                     let mut email = String::new();
                     std::io::stdin().read_line(&mut email)?;
-                    // LIMITATION: the password is read with terminal echo (visible on screen).
-                    // No OJ uses this branch yet (only AtCoder = Cookie is registered); when
-                    // LibraryChecker login is wired (TASK-036), switch to no-echo input
-                    // (e.g. rpassword). Documented in docs/online_judges/librarychecker.md.
-                    print!("Password: ");
-                    std::io::stdout().flush()?;
-                    let mut password = String::new();
-                    std::io::stdin().read_line(&mut password)?;
+                    // Read the password without echoing it to the terminal.
+                    // `prompt_password` returns the input without the trailing newline, so
+                    // pass it through verbatim — trimming would corrupt passwords that
+                    // legitimately contain leading/trailing whitespace.
+                    let password = rpassword::prompt_password("Password: ")?;
                     Credentials::Password {
                         identifier: email.trim().to_string(),
-                        password: password.trim().to_string(),
+                        password,
                     }
                 }
             };

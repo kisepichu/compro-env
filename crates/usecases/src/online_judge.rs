@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use domain::entity::{OJKind, Problem, Session};
+use domain::entity::{Language, OJKind, Problem, Session};
 
 pub struct ContestMeta {
     pub start_time: Option<DateTime<Utc>>,
@@ -32,6 +32,14 @@ pub trait OnlineJudge {
 
     /// The credential kind this OJ expects for login.
     fn credential_kind(&self) -> CredentialKind;
+
+    /// A default submission `lang_id` for `language`, used when the user has not
+    /// configured one in config.toml. Returns None by default (the user must configure
+    /// it, e.g. AtCoder's numeric ids). OJs whose lang id equals the language name
+    /// (LibraryChecker) can derive a sensible default.
+    fn default_lang_id(&self, _language: &Language) -> Option<String> {
+        None
+    }
 
     /// Authenticates with the OJ and returns a `Session`.
     ///

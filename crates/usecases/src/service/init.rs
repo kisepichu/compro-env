@@ -449,7 +449,7 @@ mod tests {
     /// and `solution_repo.create` for each problem, and `InitResult` has 2 solutions.
     #[test]
     fn init_creates_contest_and_solutions() {
-        let session = Session {
+        let session = Session::Cookie {
             online_judge: OJKind::AtCoder,
             cookie: "cookie_value".to_string(),
         };
@@ -520,7 +520,7 @@ mod tests {
             create_unstarted_called: called.clone(),
         };
 
-        let session = Session {
+        let session = Session::Cookie {
             online_judge: OJKind::AtCoder,
             cookie: "cookie_value".to_string(),
         };

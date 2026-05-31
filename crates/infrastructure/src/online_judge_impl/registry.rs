@@ -1,18 +1,21 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use domain::entity::OJKind;
 use usecases::online_judge::{OnlineJudge, OnlineJudgeRegistry};
 
 use crate::online_judge_impl::atcoder::AtCoder;
+use crate::online_judge_impl::librarychecker::LibraryChecker;
 
 /// Production registry mapping each `OJKind` to its `OnlineJudge` implementation.
 pub struct OnlineJudgeRegistryImpl {
     atcoder: AtCoder,
+    librarychecker: LibraryChecker,
 }
 
 impl OnlineJudgeRegistryImpl {
     pub fn new() -> Result<Self> {
         Ok(Self {
             atcoder: AtCoder::new()?,
+            librarychecker: LibraryChecker::new()?,
         })
     }
 }
@@ -21,10 +24,7 @@ impl OnlineJudgeRegistry for OnlineJudgeRegistryImpl {
     fn get(&self, oj: &OJKind) -> Result<&dyn OnlineJudge> {
         match oj {
             OJKind::AtCoder => Ok(&self.atcoder),
-            // LibraryChecker is detected (Phase C) but its OnlineJudge impl lands in
-            // Phase D (TASK-036). Return a clean error instead of panicking so the
-            // binary stays usable until then.
-            OJKind::LibraryChecker => bail!("LibraryChecker is not yet implemented (TASK-036)"),
+            OJKind::LibraryChecker => Ok(&self.librarychecker),
         }
     }
 }
@@ -34,9 +34,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn get_librarychecker_errors_until_implemented() {
+    fn get_resolves_both_ojs() {
         let registry = OnlineJudgeRegistryImpl::new().expect("registry constructs");
-        let result = registry.get(&OJKind::LibraryChecker);
-        assert!(result.is_err());
+        assert_eq!(
+            registry
+                .get(&OJKind::AtCoder)
+                .expect("atcoder resolves")
+                .name(),
+            "atcoder"
+        );
+        assert_eq!(
+            registry
+                .get(&OJKind::LibraryChecker)
+                .expect("librarychecker resolves")
+                .name(),
+            "librarychecker"
+        );
     }
 }

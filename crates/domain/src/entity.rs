@@ -16,6 +16,9 @@ struct OjDescriptor {
     url_host: &'static str,
     /// Path segment that precedes the contest id, e.g. "/contests/".
     url_path_prefix: &'static str,
+    /// Prefix prepended to the id extracted from a URL, e.g. "librarychecker-".
+    /// Empty for OJs whose contest id is used verbatim (AtCoder).
+    contest_id_prefix: &'static str,
     /// contest_id prefixes (lowercase), e.g. ["abc", "arc", "agc", "ahc"].
     id_prefixes: &'static [&'static str],
 }
@@ -26,14 +29,19 @@ const OJ_DESCRIPTORS: &[OjDescriptor] = &[
         kind: OJKind::AtCoder,
         url_host: "atcoder.jp",
         url_path_prefix: "/contests/",
+        contest_id_prefix: "",
         id_prefixes: &["abc", "arc", "agc", "ahc"],
     },
     OjDescriptor {
         kind: OJKind::LibraryChecker,
         url_host: "judge.yosupo.jp",
         url_path_prefix: "/problem/",
-        // LibraryChecker has no contest-id naming convention; URL detection only.
-        id_prefixes: &[],
+        // LibraryChecker has no contest concept: a problem is a single-problem
+        // "contest". The id is namespaced with "librarychecker-" (e.g.
+        // "librarychecker-aplusb") so it cannot collide with AtCoder ids and is
+        // recognizable on its own. The bare problem name is recovered at fetch/submit.
+        contest_id_prefix: "librarychecker-",
+        id_prefixes: &["librarychecker-"],
     },
 ];
 
@@ -49,7 +57,8 @@ impl OJKind {
     ///
     /// Pure: no filesystem, no network, no path-safety validation.
     /// - URL match: `https://{url_host}{url_path_prefix}{id}...` → takes only the
-    ///   first path segment after the prefix, lowercased. Returns `None` if empty.
+    ///   first path segment after the prefix, lowercased, with `contest_id_prefix`
+    ///   prepended. Returns `None` if empty.
     /// - Prefix match: lowercased input starting with any `id_prefix` → the lowercased input.
     /// - Otherwise `None`.
     pub fn detect(input: &str) -> Option<(OJKind, String)> {
@@ -61,7 +70,10 @@ impl OJKind {
                 if id.is_empty() {
                     return None;
                 }
-                return Some((d.kind.clone(), id.to_lowercase()));
+                return Some((
+                    d.kind.clone(),
+                    format!("{}{}", d.contest_id_prefix, id.to_lowercase()),
+                ));
             }
         }
         // Then, try contest-id prefix matches.
@@ -352,16 +364,75 @@ impl Solution {
     }
 }
 
-/// OJ session credentials (Value Object)
+/// OJ session credentials (Value Object).
+///
+/// Each OJ stores different auth material, so this is an enum that distinguishes
+/// the credential kind by type:
+/// - `Cookie`: a manually-copied cookie (AtCoder `REVEL_SESSION`).
+/// - `Firebase`: Firebase Auth tokens (LibraryChecker `id_token` + `refresh_token`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Session {
-    pub online_judge: OJKind,
-    pub cookie: String,
+pub enum Session {
+    Cookie {
+        online_judge: OJKind,
+        cookie: String,
+    },
+    Firebase {
+        online_judge: OJKind,
+        id_token: String,
+        refresh_token: String,
+    },
+}
+
+impl Session {
+    /// The OJ this session authenticates against.
+    pub fn online_judge(&self) -> &OJKind {
+        match self {
+            Session::Cookie { online_judge, .. } => online_judge,
+            Session::Firebase { online_judge, .. } => online_judge,
+        }
+    }
+
+    /// Overrides the OJ. Used by the login service to enforce that the caller-specified
+    /// OJ is authoritative for where the session is stored.
+    pub fn set_online_judge(&mut self, oj: OJKind) {
+        match self {
+            Session::Cookie { online_judge, .. } => *online_judge = oj,
+            Session::Firebase { online_judge, .. } => *online_judge = oj,
+        }
+    }
 }
 
 #[cfg(test)]
 mod input_spec_tests {
     use super::*;
+
+    // Session enum: online_judge() accessor returns the OJ for each variant.
+    #[test]
+    fn session_online_judge_accessor() {
+        let cookie = Session::Cookie {
+            online_judge: OJKind::AtCoder,
+            cookie: "c".to_string(),
+        };
+        assert_eq!(cookie.online_judge(), &OJKind::AtCoder);
+
+        let firebase = Session::Firebase {
+            online_judge: OJKind::LibraryChecker,
+            id_token: "id".to_string(),
+            refresh_token: "rf".to_string(),
+        };
+        assert_eq!(firebase.online_judge(), &OJKind::LibraryChecker);
+    }
+
+    // Session enum: set_online_judge() overrides the OJ for either variant.
+    #[test]
+    fn session_set_online_judge() {
+        let mut s = Session::Cookie {
+            online_judge: OJKind::LibraryChecker,
+            cookie: "c".to_string(),
+        };
+        s.set_online_judge(OJKind::AtCoder);
+        assert_eq!(s.online_judge(), &OJKind::AtCoder);
+    }
 
     // 1. Problem can be constructed with input_format_raw: None and constraints_raw: None
     #[test]
@@ -908,9 +979,10 @@ mod detect_tests {
 
     #[test]
     fn detects_librarychecker_from_problem_url() {
+        // The id is namespaced with the "librarychecker-" prefix.
         assert_eq!(
             OJKind::detect("https://judge.yosupo.jp/problem/aplusb"),
-            Some((OJKind::LibraryChecker, "aplusb".to_string()))
+            Some((OJKind::LibraryChecker, "librarychecker-aplusb".to_string()))
         );
     }
 
@@ -918,7 +990,7 @@ mod detect_tests {
     fn librarychecker_url_with_trailing_slash_keeps_first_segment() {
         assert_eq!(
             OJKind::detect("https://judge.yosupo.jp/problem/aplusb/"),
-            Some((OJKind::LibraryChecker, "aplusb".to_string()))
+            Some((OJKind::LibraryChecker, "librarychecker-aplusb".to_string()))
         );
     }
 
@@ -926,7 +998,7 @@ mod detect_tests {
     fn librarychecker_url_with_extra_path_segments_keeps_first_segment() {
         assert_eq!(
             OJKind::detect("https://judge.yosupo.jp/problem/aplusb/submissions"),
-            Some((OJKind::LibraryChecker, "aplusb".to_string()))
+            Some((OJKind::LibraryChecker, "librarychecker-aplusb".to_string()))
         );
     }
 
@@ -936,8 +1008,14 @@ mod detect_tests {
     }
 
     #[test]
-    fn librarychecker_has_no_id_prefix_detection() {
-        // LibraryChecker has no contest-id naming convention; bare ids are not detected.
+    fn librarychecker_detects_namespaced_id_directly() {
+        // A namespaced id (e.g. re-running `ce init librarychecker-aplusb`) is detected
+        // via the "librarychecker-" prefix and returned verbatim.
+        assert_eq!(
+            OJKind::detect("librarychecker-aplusb"),
+            Some((OJKind::LibraryChecker, "librarychecker-aplusb".to_string()))
+        );
+        // A bare problem name has no naming convention and is not detected.
         assert_eq!(OJKind::detect("aplusb"), None);
     }
 }
