@@ -37,4 +37,6 @@ pub trait SubmitInput {
     fn contest_id(&self) -> String;
     fn problem_code(&self) -> String;
     fn solution_name(&self) -> String;
+    /// When true, prepare the source (incl. preprocess) but do not contact the OJ.
+    fn dry_run(&self) -> bool;
 }

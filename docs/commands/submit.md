@@ -11,13 +11,16 @@ AtCoder は Cloudflare Turnstile を導入しており、HTTP 直接送信での
 ## シグネチャ
 
 ```
-ce submit <contest_id> <problem_code> [solution_name]
-ce sub <contest_id> <problem_code> [solution_name]
+ce submit <contest_id> <problem_code> [solution_name] [--dry-run]
+ce sub <contest_id> <problem_code> [solution_name] [--dry-run]
 ```
 
 - `contest_id`: コンテスト ID
 - `problem_code`: 問題コード
 - `solution_name`: 解法名 (省略時: `main`)
+- `--dry-run`: 提出ソースの準備 (ソース読込 + preprocess フック) だけ行い、**OJ には一切送信せず**
+  最終的に提出されるソースを標準出力に表示して終了する。提出前テスト (手順1) も実行しない。
+  preprocess フックの整形・ライブラリ展開結果を OJ に何度も提出せずに確認するための安全モード
 
 ## 挙動
 

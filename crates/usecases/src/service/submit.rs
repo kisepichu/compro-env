@@ -1,8 +1,17 @@
 use anyhow::{Context, Result};
-use domain::entity::{Language, Solution};
+use domain::entity::{Language, OJKind, Solution};
 
 use super::Service;
 use crate::online_judge::SubmitOutcome;
+
+/// Everything `submit` needs after source preparation (read file + preprocess hook).
+struct PreparedSubmission {
+    oj_kind: OJKind,
+    problem_id: String,
+    lang_id: String,
+    /// The exact source that will be sent to the OJ (post-preprocess).
+    source: String,
+}
 
 impl Service {
     /// Submits a solution via the OJ recorded in `.ce.toml`.
@@ -30,6 +39,45 @@ impl Service {
             }
         }
 
+        let prepared = self.prepare_submission(contest_id, problem_code, solution_name)?;
+
+        // Submit via the OJ recorded in .ce.toml. The OJ decides whether this is a
+        // direct submission or a browser URL, and enforces any OJ-specific size limits.
+        // Some OJs (e.g. LibraryChecker) require a session; pass it when available.
+        let oj = self.online_judge(&prepared.oj_kind)?;
+        let session = self.session_repo.get(&prepared.oj_kind)?;
+        oj.submit(
+            contest_id,
+            &prepared.problem_id,
+            &prepared.lang_id,
+            &prepared.source,
+            session.as_ref(),
+        )
+    }
+
+    /// Prepares the submission source and returns it WITHOUT contacting the OJ
+    /// (no pre-submit test, no network). This is exactly the source `submit` would
+    /// send, so `ce submit --dry-run` can inspect formatting/library expansion safely.
+    pub fn submit_dry_run(
+        &self,
+        contest_id: &str,
+        problem_code: &str,
+        solution_name: &str,
+    ) -> Result<String> {
+        Ok(self
+            .prepare_submission(contest_id, problem_code, solution_name)?
+            .source)
+    }
+
+    /// Reads the solution source, resolves the OJ/problem/lang_id, and runs the
+    /// preprocess hook. Shared by `submit` and `submit_dry_run`; performs no network
+    /// I/O and no pre-submit test.
+    fn prepare_submission(
+        &self,
+        contest_id: &str,
+        problem_code: &str,
+        solution_name: &str,
+    ) -> Result<PreparedSubmission> {
         // 1. Locate solution directory and read ce.toml for language.
         let solution_dir = self
             .solution_repo
@@ -111,11 +159,12 @@ impl Service {
             _ => source,
         };
 
-        // 6. Submit via the OJ recorded in .ce.toml. The OJ decides whether this is a
-        // direct submission or a browser URL, and enforces any OJ-specific size limits.
-        // Some OJs (e.g. LibraryChecker) require a session; pass it when available.
-        let session = self.session_repo.get(&oj_kind)?;
-        oj.submit(contest_id, &problem.id, &lang_id, &source, session.as_ref())
+        Ok(PreparedSubmission {
+            oj_kind,
+            problem_id: problem.id,
+            lang_id,
+            source,
+        })
     }
 }
 
@@ -838,6 +887,23 @@ mod tests {
             received.borrow().as_deref(),
             Some("ORIGINAL"),
             "expected stdin to pass through once env vars matched"
+        );
+    }
+
+    /// dry-run returns the preprocessed source and never contacts the OJ.
+    #[test]
+    #[cfg(unix)]
+    fn submit_dry_run_returns_preprocessed_source_without_submitting() {
+        let (service, received, _dir) =
+            make_preprocess_service(Some("printf '%s' TRANSFORMED".to_string()), "ORIGINAL");
+        let out = service.submit_dry_run("abc001", "a", "main").unwrap();
+        assert_eq!(
+            out, "TRANSFORMED",
+            "dry-run should return the preprocessed source"
+        );
+        assert!(
+            received.borrow().is_none(),
+            "dry-run must not call the OJ's submit"
         );
     }
 }
