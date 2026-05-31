@@ -256,6 +256,38 @@ mod tests {
         assert_eq!(result, Some("5054".to_string()));
     }
 
+    /// lang_id resolves the LibraryChecker section: [language.rust.librarychecker].lang_id.
+    #[test]
+    #[serial]
+    fn lang_id_returns_librarychecker_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "[language.rust.librarychecker]\nlang_id = \"rust\"\n",
+        )
+        .unwrap();
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+
+        let result = ConfigImpl.lang_id(&Language::new("rust"), &OJKind::LibraryChecker);
+        assert_eq!(result, Some("rust".to_string()));
+    }
+
+    /// The OJ key discriminates sections: an atcoder-only config yields None for LibraryChecker.
+    #[test]
+    #[serial]
+    fn lang_id_is_scoped_per_oj() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "[language.rust.atcoder]\nlang_id = \"5054\"\n",
+        )
+        .unwrap();
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+
+        let result = ConfigImpl.lang_id(&Language::new("rust"), &OJKind::LibraryChecker);
+        assert_eq!(result, None);
+    }
+
     /// lang_id returns None when [language.rust.atcoder].lang_id is absent.
     #[test]
     #[serial]

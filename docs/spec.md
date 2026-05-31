@@ -93,13 +93,15 @@ OJ ごとの提出言語 ID は `[language.{lang}.{oj}].lang_id` で対応付け
 [atcoder]
 revel_session = "xxxxxxxx"
 
-# LibraryChecker は Firebase トークンを保存する (キー名・構造は TASK-037 で確定)
-# [librarychecker]
-# id_token = "..."
-# refresh_token = "..."
+[librarychecker]
+id_token = "..."          # Firebase idToken (短命、~3600s)
+refresh_token = "..."     # Firebase refreshToken (永続する資格情報)
 ```
 
 OJ ごとにセクションを分ける (セクション名 = OJKind::as_str)。保存する値は OJ の認証方式に依る。
+AtCoder は `revel_session` の cookie 文字列、LibraryChecker は Firebase の `id_token` + `refresh_token`。
+`Session` enum (`Cookie` / `Firebase`) が serde でセクション別にシリアライズされる
+(詳細は `docs/online_judges/librarychecker.md`)。
 
 ---
 
@@ -264,11 +266,11 @@ Solution                            ← Entity (独立 Aggregate)
   name: String                      "main", "sol2"
   language: Language
 
-Session                             ← Value Object
-  online_judge: OJKind
-  cookie: String                    OJ 固有の認証材料。AtCoder は REVEL_SESSION。
-                                    LibraryChecker は Firebase idToken(+refreshToken)。
-                                    単一文字列で表すか拡張するかは未決 (TASK-037)。
+Session                             ← Value Object (enum: OJ 別の認証材料を型で区別)
+  Cookie   { online_judge, cookie }                       AtCoder = REVEL_SESSION の cookie 文字列
+  Firebase { online_judge, id_token, refresh_token }      LibraryChecker = Firebase トークン
+  online_judge() / set_online_judge() アクセサで OJKind を取得・上書きする。
+  session.toml には OJ ごとのセクション (= OJKind::as_str) でシリアライズする。
 
 OJKind                              ← Value Object (enum)
   AtCoder | LibraryChecker (TASK-035) [| AOJ ...]
@@ -395,11 +397,12 @@ trait OnlineJudgeRegistry {
 コンテスト開始待機ロジック (ポーリング・カウントダウン表示) は `usecases/service/init.rs` に実装し、`get_contest_meta` で取得した時刻をもとに制御する。OJ 固有ロジックは含まない。  
 AtCoder の通常 `ce init` (開始後) は `get_contest_meta` + `get_problems_detail` の **2 リクエスト**のみ。LibraryChecker は問題情報 + サンプル取得のみ。
 
-> 実装状況: Phase A (TASK-033) / Phase B (TASK-034) 完了。`OnlineJudgeRegistry` による動的解決、
+> 実装状況: Phase A〜E すべて完了。`OnlineJudgeRegistry` による動的解決、
 > `credential_kind`/`login` によるログイン一般化、`submit -> SubmitOutcome` による提出一般化、
-> descriptor + `OJKind::detect` による OJ 判定の拡張点化を実装済み。現状の登録 OJ は AtCoder のみ
-> (`OnlineJudgeRegistryImpl`)。LibraryChecker は variant 追加 (TASK-035/Phase C)・LC 実装
-> (TASK-036/Phase D)・config/session (TASK-037/Phase E) で段階的に追加する。
+> descriptor + `OJKind::detect` による OJ 判定の拡張点化を実装済み。LibraryChecker は variant 追加
+> (TASK-035/Phase C)・REST/Firebase 実装 (TASK-036/Phase D)・config(lang_id)/session (TASK-037/Phase E)
+> まで実装済みで登録 OJ に含まれる。config/session は Phase D で先取り実装された
+> (Session enum 化は login が生成・submit/whoami が消費するため D に含めた)。
 
 ---
 
