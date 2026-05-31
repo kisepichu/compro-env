@@ -28,6 +28,7 @@ compro-env/                         ← リポジトリルート
 ```
 
 **領域の区別**:
+
 - `.ce.toml` と `testcases/` は `ce` が管理するファイル。ユーザーは直接編集しない。
 - `{problem_code}/{solution_name}/` 以下がユーザーの作業領域。`ce init` / `ce solution add` 時に `templates/{lang}/` を展開して初期化され、以降はユーザーが自由に編集する。
 
@@ -72,7 +73,19 @@ solution_file = "src/main.rs"
 
 [language.rust.atcoder]
 lang_id = "6088"
+
+[language.rust.librarychecker]
+lang_id = "rust"            # GET /langs の id (例)
+
+[submit]
+preprocess = "~/.config/ce/hooks/submit-preprocess.sh"   # 提出前フック (任意、全言語共通)
 ```
+
+OJ ごとの提出言語 ID は `[language.{lang}.{oj}].lang_id` で対応付ける (oj = OJKind::as_str)。
+
+提出前 preprocess フックは `[submit].preprocess` (全言語共通の1本) のみ。アプリにバンドル/言語別ロジックを持たず、
+整形・ライブラリ展開・提出レイアウトをすべてユーザースクリプトに委ねる拡張点。言語別の分岐は `CE_LANGUAGE`
+env を使ってスクリプト内で行う (per-language config キーは設けない。詳細: `docs/commands/submit.md`)。
 
 言語はユーザーが自由に追加できる。`templates/{lang}/` ディレクトリを追加するだけで `ce` がその言語名を認識する。`[language.{name}]` セクションは提出コマンドの設定に使用する (省略した場合はデフォルト設定のみ)。
 
@@ -87,7 +100,16 @@ lang_id = "6088"
 ```toml
 [atcoder]
 revel_session = "xxxxxxxx"
+
+[librarychecker]
+id_token = "..."          # Firebase idToken (短命、~3600s)
+refresh_token = "..."     # Firebase refreshToken (永続する資格情報)
 ```
+
+OJ ごとにセクションを分ける (セクション名 = OJKind::as_str)。保存する値は OJ の認証方式に依る。
+AtCoder は `revel_session` の cookie 文字列、LibraryChecker は Firebase の `id_token` + `refresh_token`。
+`Session` enum (`Cookie` / `Firebase`) が serde でセクション別にシリアライズされる
+(詳細は `docs/online_judges/librarychecker.md`)。
 
 ---
 
@@ -139,14 +161,31 @@ revel_session = "xxxxxxxx"
 
 ## OJ 判定ロジック
 
+各 OJ が判定材料 (URL ホスト/パターン / contest_id プレフィックス) を **descriptor** として申告し、
+domain の純粋関数 `OJKind::detect(input) -> Option<(OJKind, String)>` が descriptor を走査して
+`(OJKind, contest_id)` を返す。判定は I/O を行わない純粋ロジックなので domain 層に置く
+(詳細は `docs/online_judges/README.md`)。
+
+- 各 OJ は descriptor で「URL ホスト + パスパターン」「contest_id プレフィックス」を申告する。
+- infrastructure の `parse_contest_input` は `OJKind::detect` に委譲するだけにする
+  (パス安全性検証 `is_safe_path_component` の置き場は実装時に決定)。
+- OJ を増やす際は descriptor を 1 件追加するだけで判定器に組み込まれる (match の散在を避ける)。
+
 ```
 "abc334"     → "abc"/"arc"/"agc"/"ahc" プレフィックス → AtCoder
+"https://atcoder.jp/contests/abc334"   → URL パース → AtCoder, id="abc334"
+"https://judge.yosupo.jp/problem/aplusb" → URL パース → LibraryChecker, contest_id="aplusb" (単問)
 "aoj0000"    → "aoj" プレフィックス → AOJ (将来)
-"https://atcoder.jp/contests/abc334" → URL パース → AtCoder, id="abc334"
-"xyz999"     → 不明 → stdin: "OJ を選んでください [atcoder]: "
+"xyz999"     → 不明 → stdin: "OJ (e.g. atcoder): " (空 Enter でデフォルト)
 ```
 
+LibraryChecker は contest_id のプレフィックス命名規則を持たないため、URL かプロンプトで判定する。
 `ce init` 後は `.ce.toml` に保存するため、以降の判定は不要。
+
+**実装フェーズ**: 判定機構の拡張点化 (descriptor + `OJKind::detect`) は TASK-034 (Phase B)。
+ただし B では既存 AtCoder の判定をこの機構へ書き換えるリファクタに留め、挙動は不変とする
+(`--oj` 明示フラグは追加しない。stdin プロンプトを維持)。LibraryChecker の URL 判定 descriptor は
+`OJKind::LibraryChecker` variant が入る Phase C (TASK-035) で追加する。
 
 ---
 
@@ -235,12 +274,19 @@ Solution                            ← Entity (独立 Aggregate)
   name: String                      "main", "sol2"
   language: Language
 
-Session                             ← Value Object
-  online_judge: OJKind
-  cookie: String                    REVEL_SESSION 等
+Session                             ← Value Object (enum: OJ 別の認証材料を型で区別)
+  Cookie   { online_judge, cookie }                       AtCoder = REVEL_SESSION の cookie 文字列
+  Firebase { online_judge, id_token, refresh_token }      LibraryChecker = Firebase トークン
+  online_judge() / set_online_judge() アクセサで OJKind を取得・上書きする。
+  session.toml には OJ ごとのセクション (= OJKind::as_str) でシリアライズする。
 
 OJKind                              ← Value Object (enum)
-  AtCoder | AOJ | ...
+  AtCoder | LibraryChecker (TASK-035) [| AOJ ...]
+  as_str: AtCoder="atcoder" / LibraryChecker="librarychecker" (config/session キー)
+  TASK-035 (Phase C) で LibraryChecker variant・as_str/FromStr・URL descriptor を追加する。
+  ただし LC の OnlineJudge 実装は Phase D (TASK-036) まで無いため、Phase C 完了時点では
+  registry 解決・login は clean な anyhow エラー ("not yet implemented") を返す
+  (todo!() で panic させない)。詳細は docs/online_judges/librarychecker.md。
 
 Language                            ← Value Object (String の newtype)
   templates/{lang}/ ディレクトリ名がそのまま言語名になる。固定 enum ではない。
@@ -299,45 +345,72 @@ trait SessionRepository {
 
 ## OnlineJudge インターフェース (usecases 層)
 
+OJ 抽象の責務・一般化方針・個別 OJ 仕様は `docs/online_judges/` に集約する
+(`README.md` = 共通設計、`librarychecker.md` 等 = 個別)。ここではポートの要点のみ示す。
+
+複数 OJ 対応のため次を満たす (動的解決・ログイン・提出の一般化は TASK-033 / Phase A で実装済み。`OJKind::LibraryChecker` 追加と LC 実装は TASK-034〜037):
+
+- **動的解決**: `Service` は単一 `OnlineJudge` を固定で持たず、`OJKind` から対象実装を解決する
+  (usecases にレジストリ用ポートを定義し、infrastructure が各 OJ を登録)。`ce sub` / `ce test`
+  は `.ce.toml` の `OJKind` (`ContestRepository::get_oj_kind`) に従って OJ を選ぶ。
+- **ログイン**: OJ ごとに資格情報の種別が異なる (AtCoder = 手動 cookie / LibraryChecker =
+  email+password)。OJ は必要種別を申告し、資格情報から `Session` を生成できる。
+- **提出**: 「ブラウザで開く URL を返す」方式に固定しない。提出結果を表す `SubmitOutcome`
+  (usecases 層) を返し、AtCoder は `OpenBrowser{url}` (userscript 前提)、LibraryChecker は
+  `Submitted{submission_url}` (直接提出) を返す。旧 `domain::SubmitResult` は削除済み。
+
 ```rust
-/// コンテストページ 1 回のフェッチで取れるメタ情報。
+/// コンテスト/問題取得 1 回のフェッチで取れるメタ情報。
 struct ContestMeta {
-    /// コンテスト開始時刻。取得できない場合は None。
+    /// 開始時刻。取得できない/概念がない場合は None (LibraryChecker は常に None)。
     start_time: Option<DateTime<Utc>>,
-    /// ナビバードロップダウンから取れた (problem_code, problem_id) ペア。
-    /// 現行コンテストでは空 Vec。空なら get_problems_detail 側で {contest_id}_{code} と推定する。
-    /// ABC/ARC 同時開催の旧コンテストでは arc103_a 等の実際の ID が入る。
+    /// (problem_code, problem_id) ペア。空なら get_problems_detail 側で推定する。
     problem_id_hints: Vec<(String, String)>,
 }
 
 trait OnlineJudge {
     fn name(&self) -> &str;
     fn whoami(&self, session: &Session) -> Result<String>;
-    /// コンテストページを 1 回フェッチして開始時刻と problem_id ヒントを返す。
+    /// 開始時刻と problem_id ヒントを返す。LibraryChecker は単問なので start_time=None・hints 空。
     fn get_contest_meta(&self, contest_id: &str) -> Result<ContestMeta>;
-    /// tasks_print ページを 1 回フェッチして全問題詳細を返す。
-    /// problem_id_hints が空なら {contest_id}_{code} と推定する。
+    /// 全問題詳細を返す。AtCoder は tasks_print から複数、LibraryChecker は当該 1 問を返す。
+    /// problem_id_hints が空なら {contest_id}_{code} 等と推定する。
     fn get_problems_detail(
         &self,
         contest_id: &str,
         session: Option<&Session>,
         problem_id_hints: &[(String, String)],
     ) -> Result<Vec<Problem>>;
+    /// 資格情報の種別を申告し (Cookie | EmailPassword)、資格情報から Session を生成する。
+    fn credential_kind(&self) -> CredentialKind;
+    fn login(&self, credentials: &Credentials) -> Result<Session>;
+    /// 提出。OpenBrowser{url} (AtCoder) か Submitted{submission_url} (直接提出) を返す。
     fn submit(
         &self,
         contest_id: &str,
         problem_id: &str,
         lang_id: &str,
         source: &str,
-        session: &Session,
-    ) -> Result<SubmitResult>;
+        session: Option<&Session>,
+    ) -> Result<SubmitOutcome>;
+}
+
+// OJ の動的解決ポート (実装は infrastructure)。
+trait OnlineJudgeRegistry {
+    fn get(&self, oj: &OJKind) -> Result<&dyn OnlineJudge>;
 }
 ```
 
-`login(username, password)` は不要 (手動クッキー方式のため削除)。  
 `get_problems_detail` は公開コンテストなら session 不要 (`Option<&Session>`)。  
 コンテスト開始待機ロジック (ポーリング・カウントダウン表示) は `usecases/service/init.rs` に実装し、`get_contest_meta` で取得した時刻をもとに制御する。OJ 固有ロジックは含まない。  
-通常の `ce init` (コンテスト開始後) は `get_contest_meta` + `get_problems_detail` の **2 リクエスト**のみ。
+AtCoder の通常 `ce init` (開始後) は `get_contest_meta` + `get_problems_detail` の **2 リクエスト**のみ。LibraryChecker は問題情報 + サンプル取得のみ。
+
+> 実装状況: Phase A〜E すべて完了。`OnlineJudgeRegistry` による動的解決、
+> `credential_kind`/`login` によるログイン一般化、`submit -> SubmitOutcome` による提出一般化、
+> descriptor + `OJKind::detect` による OJ 判定の拡張点化を実装済み。LibraryChecker は variant 追加
+> (TASK-035/Phase C)・REST/Firebase 実装 (TASK-036/Phase D)・config(lang_id)/session (TASK-037/Phase E)
+> まで実装済みで登録 OJ に含まれる。config/session は Phase D で先取り実装された
+> (Session enum 化は login が生成・submit/whoami が消費するため D に含めた)。
 
 ---
 
@@ -365,7 +438,8 @@ usecases/
     new_solution.rs  ContestRepository::exists() + ContestRepository::list_problem_codes() + SolutionRepository::exists() + ContestRepository::get_samples() + ContestRepository::get_problem() + SolutionRepository::create(solution, samples, input_format_raw, constraints_raw)
     test.rs       解法ディレクトリの ce.toml を読み test_command を sh -c 実行。exit code をそのまま返す
     submit.rs     solution の ce.toml から language 取得 + ContestRepository::get_problem() で problem_id 取得
-                  + SolutionRepository::get_source() + Config (lang_id) + OnlineJudge::build_submit_url() → ブラウザ起動
+                  + SolutionRepository::get_source() + Config (lang_id) + (任意) preprocess フック実行
+                  (sh -c + env + stdin/stdout、test.rs と同じ機構) → OnlineJudge::submit() → SubmitOutcome
 
 interfaces/
   controller/
@@ -378,6 +452,8 @@ infrastructure/
     session_repository_impl.rs
   online_judge_impl/
     atcoder.rs
+    librarychecker.rs   ← LibraryChecker REST/Firebase 実装 (TASK-036)
+    registry.rs         ← OJKind → 実装の解決 (TASK-033)
   config_impl.rs
   shell/   ← clap エントリポイント
 ```
@@ -391,15 +467,16 @@ infrastructure/
 以下は Phase 1 非対応。パース失敗時は `ok: false` にフォールバックする。  
 実際の AtCoder 問題 (ac/test/data/test_problems.yml 収録) で確認済み。
 
-| 非対応パターン | 確認問題 |
-| --- | --- |
-| クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 (ループマーカーなし) | typical90-L |
-| T-testcases 型: pre[0]=`T` 単独 + pre[1]=ケース形式 | abc238-D |
-| ジャギー配列で SIZE_VAR がスカラー列に存在しない | — |
-| 斜め・上三角行列: 行ごとに長さが異なる (カンマ添字内の算術式 `{2N-1, 2N}` 等) | abc236-D |
-| ネストループ 2段以上 | — |
+| 非対応パターン                                                                | 確認問題    |
+| ----------------------------------------------------------------------------- | ----------- |
+| クエリ型: 複数 `<pre>` ブロック + 数字始まりサブ形式 (ループマーカーなし)     | typical90-L |
+| T-testcases 型: pre[0]=`T` 単独 + pre[1]=ケース形式                           | abc238-D    |
+| ジャギー配列で SIZE_VAR がスカラー列に存在しない                              | —           |
+| 斜め・上三角行列: 行ごとに長さが異なる (カンマ添字内の算術式 `{2N-1, 2N}` 等) | abc236-D    |
+| ネストループ 2段以上                                                          | —           |
 
 **Phase 1 対応済み** (以前は非対応だったが対応済み):
+
 - 算術式添字 (`{2N}`, `{N-1}`, `{N+1}`, `{2N-1}` 等): 配列サイズ・ループ上限として使用可能
   - `{NumIdent}` → `*` を自動挿入 (例: `{2N}` → `2*n`)
   - `{Ident±Num}` → 演算子を保持 (例: `{N-1}` → `n-1`)

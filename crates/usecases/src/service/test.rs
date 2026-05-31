@@ -60,7 +60,9 @@ impl Service {
 mod tests {
     use crate::{
         config::Config,
-        online_judge::{ContestMeta, OnlineJudge},
+        online_judge::{
+            ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge, SubmitOutcome,
+        },
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
@@ -78,6 +80,12 @@ mod tests {
         fn name(&self) -> &str {
             "stub"
         }
+        fn credential_kind(&self) -> CredentialKind {
+            CredentialKind::Cookie
+        }
+        fn login(&self, _: &Credentials) -> Result<Session> {
+            todo!()
+        }
         fn whoami(&self, _: &Session) -> Result<String> {
             Ok(String::new())
         }
@@ -92,7 +100,14 @@ mod tests {
         ) -> Result<Vec<Problem>> {
             todo!()
         }
-        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
+        fn submit(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&Session>,
+        ) -> Result<SubmitOutcome> {
             todo!()
         }
     }
@@ -121,8 +136,8 @@ mod tests {
         fn submit_file(&self, _: &Language) -> String {
             String::new()
         }
-        fn submit_preprocess(&self, _: &Language) -> String {
-            String::new()
+        fn submit_preprocess(&self) -> Option<String> {
+            None
         }
         fn lang_id(&self, _: &Language, _: &OJKind) -> Option<String> {
             None
@@ -185,7 +200,7 @@ mod tests {
 
     fn make_service(solution_dir: PathBuf, testcases_dir: PathBuf) -> Service {
         Service::new(
-            Box::new(StubOJ),
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ))),
             Box::new(StubContestRepo { testcases_dir }),
             Box::new(StubSolutionRepo { solution_dir }),
             Box::new(StubSession),

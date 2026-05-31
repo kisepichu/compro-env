@@ -6,27 +6,84 @@ use std::str::FromStr;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OJKind {
     AtCoder,
+    LibraryChecker,
 }
+
+/// Static descriptor used to detect an `OJKind` from a contest input string.
+struct OjDescriptor {
+    kind: OJKind,
+    /// URL host, e.g. "atcoder.jp".
+    url_host: &'static str,
+    /// Path segment that precedes the contest id, e.g. "/contests/".
+    url_path_prefix: &'static str,
+    /// Prefix prepended to the id extracted from a URL, e.g. "librarychecker-".
+    /// Empty for OJs whose contest id is used verbatim (AtCoder).
+    contest_id_prefix: &'static str,
+    /// contest_id prefixes (lowercase), e.g. ["abc", "arc", "agc", "ahc"].
+    id_prefixes: &'static [&'static str],
+}
+
+/// Descriptor table for all supported online judges.
+const OJ_DESCRIPTORS: &[OjDescriptor] = &[
+    OjDescriptor {
+        kind: OJKind::AtCoder,
+        url_host: "atcoder.jp",
+        url_path_prefix: "/contests/",
+        contest_id_prefix: "",
+        id_prefixes: &["abc", "arc", "agc", "ahc"],
+    },
+    OjDescriptor {
+        kind: OJKind::LibraryChecker,
+        url_host: "judge.yosupo.jp",
+        url_path_prefix: "/problem/",
+        // LibraryChecker has no contest concept: a problem is a single-problem
+        // "contest". The id is namespaced with "librarychecker-" (e.g.
+        // "librarychecker-aplusb") so it cannot collide with AtCoder ids and is
+        // recognizable on its own. The bare problem name is recovered at fetch/submit.
+        contest_id_prefix: "librarychecker-",
+        id_prefixes: &["librarychecker-"],
+    },
+];
 
 impl OJKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             OJKind::AtCoder => "atcoder",
+            OJKind::LibraryChecker => "librarychecker",
         }
     }
 
-    /// Infer OJ kind from contest ID prefix.
-    pub fn from_contest_id_prefix(id: &str) -> Option<Self> {
-        let lower = id.to_lowercase();
-        if lower.starts_with("abc")
-            || lower.starts_with("arc")
-            || lower.starts_with("ahc")
-            || lower.starts_with("agc")
-        {
-            Some(OJKind::AtCoder)
-        } else {
-            None
+    /// Detects the OJ kind and contest id from a contest input string (URL or id).
+    ///
+    /// Pure: no filesystem, no network, no path-safety validation.
+    /// - URL match: `https://{url_host}{url_path_prefix}{id}...` → takes only the
+    ///   first path segment after the prefix, lowercased, with `contest_id_prefix`
+    ///   prepended. Returns `None` if empty.
+    /// - Prefix match: lowercased input starting with any `id_prefix` → the lowercased input.
+    /// - Otherwise `None`.
+    pub fn detect(input: &str) -> Option<(OJKind, String)> {
+        // First, try URL matches.
+        for d in OJ_DESCRIPTORS {
+            let url_prefix = format!("https://{}{}", d.url_host, d.url_path_prefix);
+            if let Some(rest) = input.strip_prefix(&url_prefix) {
+                let id = rest.trim_end_matches('/').split('/').next()?;
+                if id.is_empty() {
+                    return None;
+                }
+                return Some((
+                    d.kind.clone(),
+                    format!("{}{}", d.contest_id_prefix, id.to_lowercase()),
+                ));
+            }
         }
+        // Then, try contest-id prefix matches.
+        let lower = input.to_lowercase();
+        for d in OJ_DESCRIPTORS {
+            if d.id_prefixes.iter().any(|p| lower.starts_with(p)) {
+                return Some((d.kind.clone(), lower));
+            }
+        }
+        None
     }
 }
 
@@ -42,6 +99,7 @@ impl FromStr for OJKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "atcoder" => Ok(OJKind::AtCoder),
+            "librarychecker" => Ok(OJKind::LibraryChecker),
             _ => Err(format!("unknown online judge: {s}")),
         }
     }
@@ -306,22 +364,75 @@ impl Solution {
     }
 }
 
-/// OJ session credentials (Value Object)
+/// OJ session credentials (Value Object).
+///
+/// Each OJ stores different auth material, so this is an enum that distinguishes
+/// the credential kind by type:
+/// - `Cookie`: a manually-copied cookie (AtCoder `REVEL_SESSION`).
+/// - `Firebase`: Firebase Auth tokens (LibraryChecker `id_token` + `refresh_token`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Session {
-    pub online_judge: OJKind,
-    pub cookie: String,
+pub enum Session {
+    Cookie {
+        online_judge: OJKind,
+        cookie: String,
+    },
+    Firebase {
+        online_judge: OJKind,
+        id_token: String,
+        refresh_token: String,
+    },
 }
 
-/// Result of a submission
-#[derive(Debug, Clone)]
-pub struct SubmitResult {
-    pub submission_url: String,
+impl Session {
+    /// The OJ this session authenticates against.
+    pub fn online_judge(&self) -> &OJKind {
+        match self {
+            Session::Cookie { online_judge, .. } => online_judge,
+            Session::Firebase { online_judge, .. } => online_judge,
+        }
+    }
+
+    /// Overrides the OJ. Used by the login service to enforce that the caller-specified
+    /// OJ is authoritative for where the session is stored.
+    pub fn set_online_judge(&mut self, oj: OJKind) {
+        match self {
+            Session::Cookie { online_judge, .. } => *online_judge = oj,
+            Session::Firebase { online_judge, .. } => *online_judge = oj,
+        }
+    }
 }
 
 #[cfg(test)]
 mod input_spec_tests {
     use super::*;
+
+    // Session enum: online_judge() accessor returns the OJ for each variant.
+    #[test]
+    fn session_online_judge_accessor() {
+        let cookie = Session::Cookie {
+            online_judge: OJKind::AtCoder,
+            cookie: "c".to_string(),
+        };
+        assert_eq!(cookie.online_judge(), &OJKind::AtCoder);
+
+        let firebase = Session::Firebase {
+            online_judge: OJKind::LibraryChecker,
+            id_token: "id".to_string(),
+            refresh_token: "rf".to_string(),
+        };
+        assert_eq!(firebase.online_judge(), &OJKind::LibraryChecker);
+    }
+
+    // Session enum: set_online_judge() overrides the OJ for either variant.
+    #[test]
+    fn session_set_online_judge() {
+        let mut s = Session::Cookie {
+            online_judge: OJKind::LibraryChecker,
+            cookie: "c".to_string(),
+        };
+        s.set_online_judge(OJKind::AtCoder);
+        assert_eq!(s.online_judge(), &OJKind::AtCoder);
+    }
 
     // 1. Problem can be constructed with input_format_raw: None and constraints_raw: None
     #[test]
@@ -788,5 +899,149 @@ mod language_tests {
         let serialized = serde_json::to_string(&original).unwrap();
         let deserialized: Language = serde_json::from_str(&serialized).unwrap();
         assert_eq!(original, deserialized);
+    }
+}
+
+#[cfg(test)]
+mod detect_tests {
+    use super::*;
+
+    #[test]
+    fn detects_atcoder_from_contest_url() {
+        assert_eq!(
+            OJKind::detect("https://atcoder.jp/contests/abc334"),
+            Some((OJKind::AtCoder, "abc334".to_string()))
+        );
+    }
+
+    #[test]
+    fn atcoder_url_with_trailing_slash_keeps_first_segment() {
+        assert_eq!(
+            OJKind::detect("https://atcoder.jp/contests/abc334/"),
+            Some((OJKind::AtCoder, "abc334".to_string()))
+        );
+    }
+
+    #[test]
+    fn atcoder_url_with_extra_path_segments_keeps_first_segment() {
+        assert_eq!(
+            OJKind::detect("https://atcoder.jp/contests/abc334/tasks/abc334_a"),
+            Some((OJKind::AtCoder, "abc334".to_string()))
+        );
+    }
+
+    #[test]
+    fn atcoder_url_with_uppercase_id_is_lowercased() {
+        assert_eq!(
+            OJKind::detect("https://atcoder.jp/contests/ABC334"),
+            Some((OJKind::AtCoder, "abc334".to_string()))
+        );
+    }
+
+    #[test]
+    fn detects_atcoder_from_abc_prefix_id() {
+        assert_eq!(
+            OJKind::detect("abc334"),
+            Some((OJKind::AtCoder, "abc334".to_string()))
+        );
+    }
+
+    #[test]
+    fn detects_atcoder_from_agc_prefix_id() {
+        assert_eq!(
+            OJKind::detect("agc001"),
+            Some((OJKind::AtCoder, "agc001".to_string()))
+        );
+    }
+
+    #[test]
+    fn uppercase_prefix_id_is_lowercased() {
+        assert_eq!(
+            OJKind::detect("ARC100"),
+            Some((OJKind::AtCoder, "arc100".to_string()))
+        );
+    }
+
+    #[test]
+    fn unknown_contest_id_returns_none() {
+        assert_eq!(OJKind::detect("xyz123"), None);
+    }
+
+    #[test]
+    fn unknown_url_host_returns_none() {
+        assert_eq!(OJKind::detect("https://example.com/contests/abc334"), None);
+    }
+
+    #[test]
+    fn atcoder_url_with_empty_id_returns_none() {
+        assert_eq!(OJKind::detect("https://atcoder.jp/contests/"), None);
+    }
+
+    #[test]
+    fn detects_librarychecker_from_problem_url() {
+        // The id is namespaced with the "librarychecker-" prefix.
+        assert_eq!(
+            OJKind::detect("https://judge.yosupo.jp/problem/aplusb"),
+            Some((OJKind::LibraryChecker, "librarychecker-aplusb".to_string()))
+        );
+    }
+
+    #[test]
+    fn librarychecker_url_with_trailing_slash_keeps_first_segment() {
+        assert_eq!(
+            OJKind::detect("https://judge.yosupo.jp/problem/aplusb/"),
+            Some((OJKind::LibraryChecker, "librarychecker-aplusb".to_string()))
+        );
+    }
+
+    #[test]
+    fn librarychecker_url_with_extra_path_segments_keeps_first_segment() {
+        assert_eq!(
+            OJKind::detect("https://judge.yosupo.jp/problem/aplusb/submissions"),
+            Some((OJKind::LibraryChecker, "librarychecker-aplusb".to_string()))
+        );
+    }
+
+    #[test]
+    fn librarychecker_url_with_empty_id_returns_none() {
+        assert_eq!(OJKind::detect("https://judge.yosupo.jp/problem/"), None);
+    }
+
+    #[test]
+    fn librarychecker_detects_namespaced_id_directly() {
+        // A namespaced id (e.g. re-running `ce init librarychecker-aplusb`) is detected
+        // via the "librarychecker-" prefix and returned verbatim.
+        assert_eq!(
+            OJKind::detect("librarychecker-aplusb"),
+            Some((OJKind::LibraryChecker, "librarychecker-aplusb".to_string()))
+        );
+        // A bare problem name has no naming convention and is not detected.
+        assert_eq!(OJKind::detect("aplusb"), None);
+    }
+}
+
+#[cfg(test)]
+mod ojkind_str_tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn atcoder_as_str_roundtrips() {
+        assert_eq!(OJKind::AtCoder.as_str(), "atcoder");
+        assert_eq!(OJKind::from_str("atcoder"), Ok(OJKind::AtCoder));
+    }
+
+    #[test]
+    fn librarychecker_as_str_roundtrips() {
+        assert_eq!(OJKind::LibraryChecker.as_str(), "librarychecker");
+        assert_eq!(
+            OJKind::from_str("librarychecker"),
+            Ok(OJKind::LibraryChecker)
+        );
+    }
+
+    #[test]
+    fn from_str_unknown_errors() {
+        assert!(OJKind::from_str("codeforces").is_err());
     }
 }

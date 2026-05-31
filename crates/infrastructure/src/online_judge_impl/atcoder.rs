@@ -1,8 +1,10 @@
 use anyhow::Result;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use chrono::{DateTime, Utc};
-use domain::entity::{Problem, Session};
-use usecases::online_judge::{ContestMeta, OnlineJudge};
+use domain::entity::{OJKind, Problem, Session};
+use usecases::online_judge::{
+    ContestMeta, CredentialKind, Credentials, OnlineJudge, SubmitOutcome,
+};
 
 pub struct AtCoder {
     client: reqwest::blocking::Client,
@@ -21,9 +23,33 @@ impl OnlineJudge for AtCoder {
         "atcoder"
     }
 
+    fn credential_kind(&self) -> CredentialKind {
+        CredentialKind::Cookie
+    }
+
+    fn login(&self, credentials: &Credentials) -> Result<Session> {
+        // AtCoder uses a manually copied REVEL_SESSION cookie (no programmatic login
+        // due to Cloudflare Turnstile). Wrap the trimmed cookie into a Session.
+        match credentials {
+            Credentials::Cookie(cookie) => {
+                let cookie = cookie.trim();
+                if cookie.is_empty() {
+                    anyhow::bail!("cookie must not be empty");
+                }
+                Ok(Session::Cookie {
+                    online_judge: OJKind::AtCoder,
+                    cookie: cookie.to_string(),
+                })
+            }
+            Credentials::Password { .. } => {
+                anyhow::bail!("AtCoder login expects a REVEL_SESSION cookie, not a password")
+            }
+        }
+    }
+
     fn whoami(&self, session: &Session) -> Result<String> {
         // Set the REVEL_SESSION cookie before making the request.
-        let cookie = format!("REVEL_SESSION={}", session.cookie);
+        let cookie = format!("REVEL_SESSION={}", atcoder_cookie(session)?);
         self.client
             .get("https://atcoder.jp/home")
             .header(reqwest::header::COOKIE, cookie)
@@ -65,7 +91,7 @@ impl OnlineJudge for AtCoder {
         if let Some(session) = session {
             req = req.header(
                 reqwest::header::COOKIE,
-                format!("REVEL_SESSION={}", session.cookie),
+                format!("REVEL_SESSION={}", atcoder_cookie(session)?),
             );
         }
         let resp = req.send()?.error_for_status()?;
@@ -82,13 +108,17 @@ impl OnlineJudge for AtCoder {
         Ok(problems)
     }
 
-    fn build_submit_url(
+    fn submit(
         &self,
         contest_id: &str,
         problem_id: &str,
         lang_id: &str,
         source: &str,
-    ) -> String {
+        _session: Option<&Session>,
+    ) -> Result<SubmitOutcome> {
+        // AtCoder cannot accept direct HTTP submissions (Cloudflare Turnstile), so the
+        // solution is carried in a URL fragment and submitted via the browser userscript.
+
         // Encode {lang_id, source} as URL-safe base64 JSON and embed in the fragment.
         // The Tampermonkey userscript reads this fragment and auto-fills the submit form.
         // See docs/userscript.md for the full protocol.
@@ -98,6 +128,18 @@ impl OnlineJudge for AtCoder {
         })
         .to_string();
         let fragment = format!("ce={}", URL_SAFE.encode(payload.as_bytes()));
+
+        // Guard against source files too large for a browser URL. Measure the actual
+        // encoded fragment rather than estimating: JSON escaping of control characters
+        // (`\u00XX`) can expand a byte up to 6×, so a source-length estimate is unsafe.
+        const MAX_FRAGMENT_BYTES: usize = 32 * 1024;
+        if fragment.len() > MAX_FRAGMENT_BYTES {
+            anyhow::bail!(
+                "source file is too large to submit via URL fragment \
+                 (fragment {} bytes, max {MAX_FRAGMENT_BYTES})",
+                fragment.len()
+            );
+        }
 
         // Build the URL via reqwest::Url so that contest_id and problem_id are
         // percent-encoded, producing a well-formed URL even if they contain
@@ -111,7 +153,18 @@ impl OnlineJudge for AtCoder {
         url.query_pairs_mut()
             .append_pair("taskScreenName", problem_id);
         url.set_fragment(Some(&fragment));
-        url.to_string()
+        Ok(SubmitOutcome::OpenBrowser {
+            url: url.to_string(),
+        })
+    }
+}
+
+/// Extracts the REVEL_SESSION cookie from an AtCoder session.
+/// AtCoder only ever produces `Session::Cookie`; any other variant is a programming error.
+fn atcoder_cookie(session: &Session) -> Result<&str> {
+    match session {
+        Session::Cookie { cookie, .. } => Ok(cookie),
+        _ => anyhow::bail!("AtCoder requires a cookie session"),
     }
 }
 
@@ -607,10 +660,16 @@ var userScreenName = "";
     }
 
     #[test]
-    fn build_submit_url_encodes_payload_in_fragment() {
-        use usecases::online_judge::OnlineJudge as _;
+    fn submit_returns_open_browser_url_encoding_payload_in_fragment() {
+        use usecases::online_judge::{OnlineJudge as _, SubmitOutcome};
         let oj = AtCoder::new().expect("AtCoder::new");
-        let url = oj.build_submit_url("abc001", "abc001_a", "4026", "fn main() {}");
+        let outcome = oj
+            .submit("abc001", "abc001_a", "4026", "fn main() {}", None)
+            .expect("submit should build a browser URL");
+        let url = match outcome {
+            SubmitOutcome::OpenBrowser { url } => url,
+            other => panic!("expected OpenBrowser, got {other:?}"),
+        };
         // URL structure: https://atcoder.jp/contests/abc001/submit?taskScreenName=abc001_a#ce=<base64>
         assert!(url.starts_with("https://atcoder.jp/contests/abc001/submit?"));
         assert!(url.contains("taskScreenName=abc001_a"));

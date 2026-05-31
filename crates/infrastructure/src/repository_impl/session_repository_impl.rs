@@ -62,15 +62,34 @@ fn save_session_to_path(session: &Session, path: &Path) -> Result<()> {
         toml::Table::new()
     };
 
-    let section_key = match &session.online_judge {
+    let section_key = match session.online_judge() {
         OJKind::AtCoder => "atcoder",
+        OJKind::LibraryChecker => "librarychecker",
     };
 
     let mut section = toml::Table::new();
-    section.insert(
-        "revel_session".to_string(),
-        toml::Value::String(session.cookie.clone()),
-    );
+    match session {
+        Session::Cookie { cookie, .. } => {
+            section.insert(
+                "revel_session".to_string(),
+                toml::Value::String(cookie.clone()),
+            );
+        }
+        Session::Firebase {
+            id_token,
+            refresh_token,
+            ..
+        } => {
+            section.insert(
+                "id_token".to_string(),
+                toml::Value::String(id_token.clone()),
+            );
+            section.insert(
+                "refresh_token".to_string(),
+                toml::Value::String(refresh_token.clone()),
+            );
+        }
+    }
     table.insert(section_key.to_string(), toml::Value::Table(section));
 
     std::fs::write(path, toml::to_string(&table)?)?;
@@ -98,6 +117,7 @@ fn delete_session_from_path(oj: &OJKind, path: &Path) -> Result<bool> {
 
     let section_key = match oj {
         OJKind::AtCoder => "atcoder",
+        OJKind::LibraryChecker => "librarychecker",
     };
 
     if table.remove(section_key).is_none() {
@@ -129,18 +149,37 @@ fn get_session_from_path(oj: &OJKind, path: &Path) -> Result<Option<Session>> {
     let contents = std::fs::read_to_string(path)?;
     let table: toml::Table = toml::from_str(&contents)?;
 
-    let cookie = match oj {
-        OJKind::AtCoder => table
-            .get("atcoder")
-            .and_then(|v| v.get("revel_session"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
-    };
-
-    Ok(cookie.map(|c| Session {
-        online_judge: oj.clone(),
-        cookie: c,
-    }))
+    match oj {
+        OJKind::AtCoder => {
+            let cookie = table
+                .get("atcoder")
+                .and_then(|v| v.get("revel_session"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            Ok(cookie.map(|c| Session::Cookie {
+                online_judge: OJKind::AtCoder,
+                cookie: c,
+            }))
+        }
+        OJKind::LibraryChecker => {
+            let section = table.get("librarychecker");
+            let id_token = section
+                .and_then(|v| v.get("id_token"))
+                .and_then(|v| v.as_str());
+            let refresh_token = section
+                .and_then(|v| v.get("refresh_token"))
+                .and_then(|v| v.as_str());
+            // Both tokens are required; a partial section is treated as no session.
+            match (id_token, refresh_token) {
+                (Some(id_token), Some(refresh_token)) => Ok(Some(Session::Firebase {
+                    online_judge: OJKind::LibraryChecker,
+                    id_token: id_token.to_string(),
+                    refresh_token: refresh_token.to_string(),
+                })),
+                _ => Ok(None),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -174,7 +213,7 @@ mod tests {
 
     /// Helper: create a Session for AtCoder with the given cookie value.
     fn atcoder_session(cookie: &str) -> Session {
-        Session {
+        Session::Cookie {
             online_judge: OJKind::AtCoder,
             cookie: cookie.to_string(),
         }
@@ -206,11 +245,73 @@ mod tests {
 
         assert_eq!(
             result,
-            Some(Session {
+            Some(Session::Cookie {
                 online_judge: OJKind::AtCoder,
                 cookie: "my_cookie_value".to_string(),
             }),
             "expected Some(Session {{ ... }}) with correct cookie"
+        );
+    }
+
+    /// LibraryChecker session round-trips through save() and get():
+    /// id_token + refresh_token are persisted to a `[librarychecker]` section and read back.
+    #[test]
+    #[serial]
+    fn librarychecker_session_round_trips() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+
+        let repo = SessionRepositoryImpl;
+        let session = Session::Firebase {
+            online_judge: OJKind::LibraryChecker,
+            id_token: "id_token_value".to_string(),
+            refresh_token: "refresh_token_value".to_string(),
+        };
+        repo.save(&session).expect("save should succeed");
+
+        let contents = fs::read_to_string(tmp.path().join("session.toml"))
+            .expect("session.toml should have been written");
+        assert!(
+            contents.contains("[librarychecker]"),
+            "expected [librarychecker] section, got: {contents}"
+        );
+
+        let result = repo
+            .get(&OJKind::LibraryChecker)
+            .expect("get should not return Err");
+        assert_eq!(result, Some(session));
+    }
+
+    /// Saving an AtCoder session and a LibraryChecker session preserves both: the
+    /// `[atcoder]` and `[librarychecker]` sections coexist in session.toml.
+    #[test]
+    #[serial]
+    fn saving_two_ojs_preserves_both_sections() {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+
+        let repo = SessionRepositoryImpl;
+        repo.save(&atcoder_session("ac_cookie"))
+            .expect("save atcoder should succeed");
+        repo.save(&Session::Firebase {
+            online_judge: OJKind::LibraryChecker,
+            id_token: "id".to_string(),
+            refresh_token: "rf".to_string(),
+        })
+        .expect("save lc should succeed");
+
+        assert_eq!(
+            repo.get(&OJKind::AtCoder).unwrap(),
+            Some(atcoder_session("ac_cookie")),
+            "atcoder session should survive saving a librarychecker session"
+        );
+        assert_eq!(
+            repo.get(&OJKind::LibraryChecker).unwrap(),
+            Some(Session::Firebase {
+                online_judge: OJKind::LibraryChecker,
+                id_token: "id".to_string(),
+                refresh_token: "rf".to_string(),
+            })
         );
     }
 

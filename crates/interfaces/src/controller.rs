@@ -14,7 +14,7 @@ impl Controller {
     }
 
     pub fn login(&self, args: &dyn LoginInput) -> Result<()> {
-        self.service.login(args.oj(), args.cookie())
+        self.service.login(args.oj(), args.credentials())
     }
 
     pub fn whoami(&self, args: &dyn WhoamiInput) -> Result<String> {
@@ -58,8 +58,18 @@ impl Controller {
         )
     }
 
-    pub fn submit(&self, args: &dyn SubmitInput) -> Result<domain::entity::SubmitResult> {
+    pub fn submit(&self, args: &dyn SubmitInput) -> Result<usecases::online_judge::SubmitOutcome> {
         self.service.submit(
+            &args.contest_id(),
+            &args.problem_code(),
+            &args.solution_name(),
+        )
+    }
+
+    /// Prepares the submission source (incl. preprocess) without contacting the OJ.
+    /// Returns the exact source `submit` would send. Backs `ce submit --dry-run`.
+    pub fn submit_dry_run(&self, args: &dyn SubmitInput) -> Result<String> {
+        self.service.submit_dry_run(
             &args.contest_id(),
             &args.problem_code(),
             &args.solution_name(),

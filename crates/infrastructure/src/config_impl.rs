@@ -84,8 +84,22 @@ impl Config for ConfigImpl {
         }
     }
 
-    fn submit_preprocess(&self, _lang: &Language) -> String {
-        String::new()
+    fn submit_preprocess(&self) -> Option<String> {
+        let path = Self::config_toml_path().ok()?;
+        if !path.exists() {
+            return None;
+        }
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|e| eprintln!("warning: failed to read {}: {e}", path.display()))
+            .ok()?;
+        let table: toml::Table = toml::from_str(&contents)
+            .map_err(|e| eprintln!("warning: failed to parse {}: {e}", path.display()))
+            .ok()?;
+        table
+            .get("submit")
+            .and_then(|v| v.get("preprocess"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
     fn lang_id(&self, lang: &Language, oj: &OJKind) -> Option<String> {
@@ -256,6 +270,38 @@ mod tests {
         assert_eq!(result, Some("5054".to_string()));
     }
 
+    /// lang_id resolves the LibraryChecker section: [language.rust.librarychecker].lang_id.
+    #[test]
+    #[serial]
+    fn lang_id_returns_librarychecker_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "[language.rust.librarychecker]\nlang_id = \"rust\"\n",
+        )
+        .unwrap();
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+
+        let result = ConfigImpl.lang_id(&Language::new("rust"), &OJKind::LibraryChecker);
+        assert_eq!(result, Some("rust".to_string()));
+    }
+
+    /// The OJ key discriminates sections: an atcoder-only config yields None for LibraryChecker.
+    #[test]
+    #[serial]
+    fn lang_id_is_scoped_per_oj() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "[language.rust.atcoder]\nlang_id = \"5054\"\n",
+        )
+        .unwrap();
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+
+        let result = ConfigImpl.lang_id(&Language::new("rust"), &OJKind::LibraryChecker);
+        assert_eq!(result, None);
+    }
+
     /// lang_id returns None when [language.rust.atcoder].lang_id is absent.
     #[test]
     #[serial]
@@ -276,6 +322,49 @@ mod tests {
         let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         let result = ConfigImpl.lang_id(&Language::new("rust"), &OJKind::AtCoder);
+        assert_eq!(result, None);
+    }
+
+    /// submit_preprocess returns the configured command from [submit].preprocess.
+    #[test]
+    #[serial]
+    fn submit_preprocess_returns_configured_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "[submit]\npreprocess = \"~/.config/ce/hooks/pre.sh\"\n",
+        )
+        .unwrap();
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+
+        let result = ConfigImpl.submit_preprocess();
+        assert_eq!(result, Some("~/.config/ce/hooks/pre.sh".to_string()));
+    }
+
+    /// submit_preprocess returns None when [submit].preprocess is absent.
+    #[test]
+    #[serial]
+    fn submit_preprocess_returns_none_when_not_configured() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "[default]\nlanguage = \"rust\"\n",
+        )
+        .unwrap();
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+
+        let result = ConfigImpl.submit_preprocess();
+        assert_eq!(result, None);
+    }
+
+    /// submit_preprocess returns None when config.toml does not exist.
+    #[test]
+    #[serial]
+    fn submit_preprocess_returns_none_when_no_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
+
+        let result = ConfigImpl.submit_preprocess();
         assert_eq!(result, None);
     }
 }

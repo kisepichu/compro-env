@@ -3,6 +3,7 @@ use domain::entity::{Language, OJKind};
 use interfaces::controller::input::{
     InitInput, LoginInput, LogoutInput, NewInput, SubmitInput, TestInput, WhoamiInput,
 };
+use usecases::online_judge::Credentials;
 
 #[derive(Parser)]
 #[command(name = "ce", about = "Competitive programming environment")]
@@ -13,20 +14,23 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Log in to an OJ by saving your REVEL_SESSION cookie
+    /// Log in to an OJ. The required input depends on the OJ.
     ///
-    /// Steps:
+    /// AtCoder uses a manually copied REVEL_SESSION cookie:
     ///   1. Open https://atcoder.jp and log in with your browser.
     ///   2. Open DevTools > Application > Cookies > https://atcoder.jp
     ///   3. Copy the value of REVEL_SESSION.
     ///   4. Run: ce login [atcoder]
     ///      You will be prompted to paste the cookie value.
     ///      Alternatively, pass it directly: ce login [atcoder] --cookie VALUE
+    ///
+    /// Other OJs may prompt for different credentials (e.g. email + password).
     #[command(verbatim_doc_comment)]
     Login {
         /// Target OJ (default: atcoder)
         oj: Option<String>,
-        /// REVEL_SESSION cookie value (prompted interactively if omitted)
+        /// REVEL_SESSION cookie value for cookie-based OJs like AtCoder
+        /// (prompted interactively if omitted; ignored by password-based OJs)
         #[arg(long)]
         cookie: Option<String>,
     },
@@ -59,6 +63,9 @@ pub enum Commands {
         contest: String,
         problem: String,
         solution: Option<String>,
+        /// Prepare the source (incl. preprocess) and print it without submitting
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -81,14 +88,14 @@ pub enum SolutionSubcommand {
 
 pub struct LoginCommand {
     pub oj: OJKind,
-    pub cookie: String,
+    pub credentials: Credentials,
 }
 impl LoginInput for LoginCommand {
     fn oj(&self) -> OJKind {
         self.oj.clone()
     }
-    fn cookie(&self) -> String {
-        self.cookie.clone()
+    fn credentials(&self) -> Credentials {
+        self.credentials.clone()
     }
 }
 

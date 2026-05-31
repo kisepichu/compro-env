@@ -1,17 +1,29 @@
 use anyhow::{Context, Result};
-use domain::entity::{Language, Solution, SubmitResult};
+use domain::entity::{Language, OJKind, Solution};
 
 use super::Service;
+use crate::online_judge::SubmitOutcome;
+
+/// Everything `submit` needs after source preparation (read file + preprocess hook).
+struct PreparedSubmission {
+    oj_kind: OJKind,
+    problem_id: String,
+    lang_id: String,
+    /// The exact source that will be sent to the OJ (post-preprocess).
+    source: String,
+}
 
 impl Service {
-    /// Builds the browser submit URL and returns it.
-    /// The caller (shell layer) opens the URL in the default browser.
+    /// Submits a solution via the OJ recorded in `.ce.toml`.
+    ///
+    /// Returns a `SubmitOutcome`: a browser URL to open (AtCoder) or a completed
+    /// submission's URL (OJs with direct submission). The shell layer acts on it.
     pub fn submit(
         &self,
         contest_id: &str,
         problem_code: &str,
         solution_name: &str,
-    ) -> Result<SubmitResult> {
+    ) -> Result<SubmitOutcome> {
         // 0. Run the solution's test command before preparing submission.
         //
         // `Service::test` currently executes `test_command` via `sh -c`, so
@@ -27,6 +39,45 @@ impl Service {
             }
         }
 
+        let prepared = self.prepare_submission(contest_id, problem_code, solution_name)?;
+
+        // Submit via the OJ recorded in .ce.toml. The OJ decides whether this is a
+        // direct submission or a browser URL, and enforces any OJ-specific size limits.
+        // Some OJs (e.g. LibraryChecker) require a session; pass it when available.
+        let oj = self.online_judge(&prepared.oj_kind)?;
+        let session = self.session_repo.get(&prepared.oj_kind)?;
+        oj.submit(
+            contest_id,
+            &prepared.problem_id,
+            &prepared.lang_id,
+            &prepared.source,
+            session.as_ref(),
+        )
+    }
+
+    /// Prepares the submission source and returns it WITHOUT contacting the OJ
+    /// (no pre-submit test, no network). This is exactly the source `submit` would
+    /// send, so `ce submit --dry-run` can inspect formatting/library expansion safely.
+    pub fn submit_dry_run(
+        &self,
+        contest_id: &str,
+        problem_code: &str,
+        solution_name: &str,
+    ) -> Result<String> {
+        Ok(self
+            .prepare_submission(contest_id, problem_code, solution_name)?
+            .source)
+    }
+
+    /// Reads the solution source, resolves the OJ/problem/lang_id, and runs the
+    /// preprocess hook. Shared by `submit` and `submit_dry_run`; performs no network
+    /// I/O and no pre-submit test.
+    fn prepare_submission(
+        &self,
+        contest_id: &str,
+        problem_code: &str,
+        solution_name: &str,
+    ) -> Result<PreparedSubmission> {
         // 1. Locate solution directory and read ce.toml for language.
         let solution_dir = self
             .solution_repo
@@ -67,48 +118,143 @@ impl Service {
         };
         let source = self.solution_repo.get_source(&solution, &file_path)?;
 
-        // 4. Get lang_id from config.
-        let lang_id = self.config.lang_id(&language, &oj_kind).ok_or_else(|| {
-            anyhow::anyhow!(
-                "lang_id not configured for language `{}` on `{}` \
-                (check config.toml; config parse errors also produce this)",
-                language,
-                oj_kind
-            )
-        })?;
+        // 4. Resolve lang_id: prefer the user's config.toml mapping; otherwise fall back
+        // to the OJ's default (LibraryChecker derives it from the language name).
+        let oj = self.online_judge(&oj_kind)?;
+        let lang_id = self
+            .config
+            .lang_id(&language, &oj_kind)
+            .or_else(|| oj.default_lang_id(&language))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "lang_id not configured for language `{}` on `{}` \
+                    (check config.toml; config parse errors also produce this)",
+                    language,
+                    oj_kind
+                )
+            })?;
 
-        // 5. Guard against source files too large for a browser URL.
-        // Compute an upper bound on the base64 fragment length:
-        //   JSON payload = overhead (~30 + lang_id.len()) + source (×2 worst-case JSON escaping)
-        //   base64 expansion = ceil(json_bytes / 3) × 4
-        let json_upper = source.len() * 2 + lang_id.len() + 30;
-        let fragment_upper = json_upper.div_ceil(3) * 4;
-        const MAX_FRAGMENT_BYTES: usize = 32 * 1024;
-        if fragment_upper > MAX_FRAGMENT_BYTES {
-            anyhow::bail!(
-                "source file is too large to submit via URL fragment \
-                 (estimated fragment {} bytes, max {})",
-                fragment_upper,
-                MAX_FRAGMENT_BYTES,
-            );
-        }
+        // 5. Run the preprocess hook if configured. The hook receives the original
+        // source on stdin and prints the submission source to stdout; a non-zero exit
+        // aborts submission. Language/OJ branching lives in the user's script (passed
+        // via env), so there is a single global hook rather than a per-language one.
+        // Unix-only (uses `sh -c`, like `ce test`); other platforms skip it.
+        #[cfg(unix)]
+        let source = match self.config.submit_preprocess() {
+            Some(command) if !command.trim().is_empty() => run_preprocess_hook(
+                &command,
+                &source,
+                &PreprocessContext {
+                    language: language.as_str(),
+                    oj: oj_kind.as_str(),
+                    contest_id,
+                    problem_code,
+                    problem_id: &problem.id,
+                    solution_name,
+                    solution_dir: &solution_dir,
+                    source_file: &solution_dir.join(&file_path),
+                    lang_id: &lang_id,
+                },
+            )?,
+            _ => source,
+        };
 
-        // 6. Build the browser submit URL.
-        let url = self
-            .online_judge
-            .build_submit_url(contest_id, &problem.id, &lang_id, &source);
-
-        Ok(SubmitResult {
-            submission_url: url,
+        Ok(PreparedSubmission {
+            oj_kind,
+            problem_id: problem.id,
+            lang_id,
+            source,
         })
     }
+}
+
+/// Context passed to the preprocess hook as environment variables.
+#[cfg(unix)]
+struct PreprocessContext<'a> {
+    language: &'a str,
+    oj: &'a str,
+    contest_id: &'a str,
+    problem_code: &'a str,
+    problem_id: &'a str,
+    solution_name: &'a str,
+    solution_dir: &'a std::path::Path,
+    source_file: &'a std::path::Path,
+    lang_id: &'a str,
+}
+
+/// Runs the user's preprocess `command` via `sh -c`, feeding `source` on stdin and
+/// returning its stdout as the submission source. The hook's stderr is streamed to the
+/// terminal. A non-zero exit is reported as an error so submission is aborted.
+#[cfg(unix)]
+fn run_preprocess_hook(command: &str, source: &str, ctx: &PreprocessContext) -> Result<String> {
+    use std::io::{Read as _, Write as _};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(ctx.solution_dir)
+        .env("CE_LANGUAGE", ctx.language)
+        .env("CE_OJ", ctx.oj)
+        .env("CE_CONTEST_ID", ctx.contest_id)
+        .env("CE_PROBLEM_CODE", ctx.problem_code)
+        .env("CE_PROBLEM_ID", ctx.problem_id)
+        .env("CE_SOLUTION_NAME", ctx.solution_name)
+        .env("CE_SOLUTION_DIR", ctx.solution_dir)
+        .env("CE_SOURCE_FILE", ctx.source_file)
+        .env("CE_LANG_ID", ctx.lang_id)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .with_context(|| "failed to launch preprocess hook via sh")?;
+
+    // Write the source on a separate thread while we drain stdout here. Both the
+    // source and the hook's output can exceed the OS pipe buffer (expanded sources
+    // are large), so writing all of stdin before reading stdout would deadlock.
+    let mut stdin = child
+        .stdin
+        .take()
+        .expect("stdin was requested via Stdio::piped");
+    let source_bytes = source.as_bytes().to_vec();
+    let writer = std::thread::spawn(move || {
+        // A hook may legitimately not read all of stdin (e.g. cargo-equip reads the
+        // crate, not stdin); the resulting BrokenPipe is expected, so ignore write
+        // errors. The hook's exit status is the real signal.
+        let _ = stdin.write_all(&source_bytes);
+        // `stdin` drops here, closing the pipe so a reading hook sees EOF.
+    });
+
+    let mut stdout = Vec::new();
+    child
+        .stdout
+        .take()
+        .expect("stdout was requested via Stdio::piped")
+        .read_to_end(&mut stdout)
+        .with_context(|| "failed to read preprocess hook stdout")?;
+
+    let status = child
+        .wait()
+        .with_context(|| "failed to wait for preprocess hook")?;
+    let _ = writer.join();
+
+    if !status.success() {
+        anyhow::bail!(
+            "preprocess hook failed with exit code {}; submission skipped",
+            status.code().unwrap_or(1)
+        );
+    }
+    String::from_utf8(stdout).with_context(|| "preprocess hook produced non-UTF-8 output")
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
         config::Config,
-        online_judge::{ContestMeta, OnlineJudge},
+        online_judge::{
+            ContestMeta, CredentialKind, Credentials, OnlineJudge, OnlineJudgeRegistry,
+            SingleOnlineJudge, SubmitOutcome,
+        },
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
@@ -117,17 +263,25 @@ mod tests {
     };
     use anyhow::Result;
     use domain::entity::{Contest, Language, OJKind, Problem, Sample, Session, Solution};
+    use std::cell::RefCell;
     use std::path::PathBuf;
+    use std::rc::Rc;
 
     // ── Stub helpers ─────────────────────────────────────────────────────────
 
     struct StubOJ {
         submit_url: String,
-        panic_on_build_submit_url: bool,
+        panic_on_submit: bool,
     }
     impl OnlineJudge for StubOJ {
         fn name(&self) -> &str {
             "stub"
+        }
+        fn credential_kind(&self) -> CredentialKind {
+            CredentialKind::Cookie
+        }
+        fn login(&self, _: &Credentials) -> Result<Session> {
+            todo!()
         }
         fn whoami(&self, _: &Session) -> Result<String> {
             Ok(String::new())
@@ -143,11 +297,20 @@ mod tests {
         ) -> Result<Vec<Problem>> {
             todo!()
         }
-        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
-            if self.panic_on_build_submit_url {
-                panic!("build_submit_url must not be called");
+        fn submit(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&Session>,
+        ) -> Result<SubmitOutcome> {
+            if self.panic_on_submit {
+                panic!("submit must not be called");
             }
-            self.submit_url.clone()
+            Ok(SubmitOutcome::OpenBrowser {
+                url: self.submit_url.clone(),
+            })
         }
     }
 
@@ -169,6 +332,7 @@ mod tests {
     struct StubConfig {
         lang_id: Option<String>,
         submit_file: String,
+        submit_preprocess: Option<String>,
     }
     impl Config for StubConfig {
         fn default_language(&self) -> Result<Language> {
@@ -180,8 +344,8 @@ mod tests {
         fn submit_file(&self, _: &Language) -> String {
             self.submit_file.clone()
         }
-        fn submit_preprocess(&self, _: &Language) -> String {
-            String::new()
+        fn submit_preprocess(&self) -> Option<String> {
+            self.submit_preprocess.clone()
         }
         fn lang_id(&self, _: &Language, _: &OJKind) -> Option<String> {
             self.lang_id.clone()
@@ -258,18 +422,126 @@ mod tests {
         }
     }
 
+    /// OJ stub that exposes a configurable `default_lang_id` and records the `lang_id`
+    /// passed to `submit`, so tests can assert how submit resolves it.
+    struct LangCapturingOJ {
+        default_lang_id: Option<String>,
+        received_lang_id: Rc<RefCell<Option<String>>>,
+    }
+    impl OnlineJudge for LangCapturingOJ {
+        fn name(&self) -> &str {
+            "stub"
+        }
+        fn credential_kind(&self) -> CredentialKind {
+            CredentialKind::Cookie
+        }
+        fn default_lang_id(&self, _: &Language) -> Option<String> {
+            self.default_lang_id.clone()
+        }
+        fn login(&self, _: &Credentials) -> Result<Session> {
+            todo!()
+        }
+        fn whoami(&self, _: &Session) -> Result<String> {
+            Ok(String::new())
+        }
+        fn get_contest_meta(&self, _: &str) -> Result<ContestMeta> {
+            todo!()
+        }
+        fn get_problems_detail(
+            &self,
+            _: &str,
+            _: Option<&Session>,
+            _: &[(String, String)],
+        ) -> Result<Vec<Problem>> {
+            todo!()
+        }
+        fn submit(
+            &self,
+            _: &str,
+            _: &str,
+            lang_id: &str,
+            _: &str,
+            _: Option<&Session>,
+        ) -> Result<SubmitOutcome> {
+            *self.received_lang_id.borrow_mut() = Some(lang_id.to_string());
+            Ok(SubmitOutcome::Submitted {
+                submission_url: "https://example.test/submission/1".to_string(),
+            })
+        }
+    }
+
+    /// Builds a Service whose OJ is a `LangCapturingOJ`. Returns the service, the
+    /// captured-lang_id handle, and the TempDir (kept alive for the test).
+    fn make_capturing_service(
+        config_lang_id: Option<String>,
+        default_lang_id: Option<String>,
+    ) -> (Service, Rc<RefCell<Option<String>>>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            ce_toml_with_language_and_passing_test(),
+        )
+        .unwrap();
+        let received = Rc::new(RefCell::new(None));
+        let service = Service::new(
+            Box::new(SingleOnlineJudge::new(Box::new(LangCapturingOJ {
+                default_lang_id,
+                received_lang_id: Rc::clone(&received),
+            }))),
+            Box::new(StubContestRepo {
+                problem: default_problem(),
+            }),
+            Box::new(StubSolutionRepo {
+                solution_dir: dir.path().to_path_buf(),
+                source: Some("fn main() {}".to_string()),
+            }),
+            Box::new(StubSession { session: None }),
+            Box::new(StubConfig {
+                lang_id: config_lang_id,
+                submit_file: "src/main.rs".to_string(),
+                submit_preprocess: None,
+            }),
+        );
+        (service, received, dir)
+    }
+
+    /// When config.toml has no lang_id, submit falls back to the OJ's default_lang_id.
+    #[test]
+    fn submit_falls_back_to_default_lang_id_when_config_missing() {
+        let (service, received, _dir) = make_capturing_service(None, Some("rust".to_string()));
+        service.submit("abc001", "a", "main").unwrap();
+        assert_eq!(
+            received.borrow().as_deref(),
+            Some("rust"),
+            "expected submit to use the OJ default_lang_id when config has none"
+        );
+    }
+
+    /// A configured lang_id takes priority over the OJ's default_lang_id.
+    #[test]
+    fn submit_prefers_config_lang_id_over_default() {
+        let (service, received, _dir) =
+            make_capturing_service(Some("9999".to_string()), Some("rust".to_string()));
+        service.submit("abc001", "a", "main").unwrap();
+        assert_eq!(
+            received.borrow().as_deref(),
+            Some("9999"),
+            "expected configured lang_id to take priority over the default"
+        );
+    }
+
     fn make_service(
         solution_dir: PathBuf,
         source: Option<String>,
         lang_id: Option<String>,
         submit_url: String,
-        panic_on_build_submit_url: bool,
+        panic_on_submit: bool,
     ) -> Service {
         Service::new(
-            Box::new(StubOJ {
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ {
                 submit_url,
-                panic_on_build_submit_url,
-            }),
+                panic_on_submit,
+            }))),
             Box::new(StubContestRepo {
                 problem: default_problem(),
             }),
@@ -281,6 +553,7 @@ mod tests {
             Box::new(StubConfig {
                 lang_id,
                 submit_file: "src/main.rs".to_string(),
+                submit_preprocess: None,
             }),
         )
     }
@@ -295,9 +568,65 @@ mod tests {
         }
     }
 
-    /// Happy path: SubmitResult.submission_url is the URL returned by StubOJ.
+    /// A registry that records which OJKind was requested, returning a fixed StubOJ.
+    /// `requested` is shared via Rc so the test can inspect it after the Service runs.
+    struct RecordingRegistry {
+        oj: StubOJ,
+        requested: Rc<RefCell<Vec<OJKind>>>,
+    }
+    impl OnlineJudgeRegistry for RecordingRegistry {
+        fn get(&self, oj: &OJKind) -> Result<&dyn OnlineJudge> {
+            self.requested.borrow_mut().push(oj.clone());
+            Ok(&self.oj)
+        }
+    }
+
+    /// submit resolves the OnlineJudge using the OJKind recorded in .ce.toml
+    /// (ContestRepository::get_oj_kind), not a fixed implementation.
     #[test]
-    fn submit_happy_path_returns_submission_url() {
+    fn submit_resolves_online_judge_from_contest_oj_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            ce_toml_with_language_and_passing_test(),
+        )
+        .unwrap();
+        let requested = Rc::new(RefCell::new(vec![]));
+        let service = Service::new(
+            Box::new(RecordingRegistry {
+                oj: StubOJ {
+                    submit_url: "https://atcoder.jp/contests/abc001/submit#ce=XXX".to_string(),
+                    panic_on_submit: false,
+                },
+                requested: Rc::clone(&requested),
+            }),
+            // StubContestRepo::get_oj_kind returns OJKind::AtCoder.
+            Box::new(StubContestRepo {
+                problem: default_problem(),
+            }),
+            Box::new(StubSolutionRepo {
+                solution_dir: dir.path().to_path_buf(),
+                source: Some("fn main() {}".to_string()),
+            }),
+            Box::new(StubSession { session: None }),
+            Box::new(StubConfig {
+                lang_id: Some("6088".to_string()),
+                submit_file: "src/main.rs".to_string(),
+                submit_preprocess: None,
+            }),
+        );
+        service.submit("abc001", "a", "main").unwrap();
+        // The OJ resolved for submission is the one stored in .ce.toml.
+        let requested = requested.borrow();
+        assert!(
+            requested.contains(&OJKind::AtCoder),
+            "expected submit to resolve the OJ from .ce.toml (AtCoder), got: {requested:?}"
+        );
+    }
+
+    /// Happy path: submit returns the OpenBrowser outcome with the URL from StubOJ.
+    #[test]
+    fn submit_happy_path_returns_open_browser_outcome() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("ce.toml"),
@@ -314,7 +643,7 @@ mod tests {
             false,
         );
         let result = service.submit("abc001", "a", "main").unwrap();
-        assert_eq!(result.submission_url, expected_url);
+        assert_eq!(result, SubmitOutcome::OpenBrowser { url: expected_url });
     }
 
     /// A non-zero pre-submit test exits before source reading or URL generation.
@@ -421,6 +750,209 @@ mod tests {
         assert!(
             err.to_string().contains("lang_id"),
             "unexpected error: {err}"
+        );
+    }
+
+    // ── preprocess hook tests (Unix-only: the hook runs via `sh -c`) ───────────
+
+    /// OJ stub that records the `source` passed to `submit`, so preprocess tests can
+    /// assert what was actually submitted.
+    #[cfg(unix)]
+    struct SourceCapturingOJ {
+        received_source: Rc<RefCell<Option<String>>>,
+    }
+    #[cfg(unix)]
+    impl OnlineJudge for SourceCapturingOJ {
+        fn name(&self) -> &str {
+            "stub"
+        }
+        fn credential_kind(&self) -> CredentialKind {
+            CredentialKind::Cookie
+        }
+        fn login(&self, _: &Credentials) -> Result<Session> {
+            todo!()
+        }
+        fn whoami(&self, _: &Session) -> Result<String> {
+            Ok(String::new())
+        }
+        fn get_contest_meta(&self, _: &str) -> Result<ContestMeta> {
+            todo!()
+        }
+        fn get_problems_detail(
+            &self,
+            _: &str,
+            _: Option<&Session>,
+            _: &[(String, String)],
+        ) -> Result<Vec<Problem>> {
+            todo!()
+        }
+        fn submit(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            source: &str,
+            _: Option<&Session>,
+        ) -> Result<SubmitOutcome> {
+            *self.received_source.borrow_mut() = Some(source.to_string());
+            Ok(SubmitOutcome::Submitted {
+                submission_url: "https://example.test/submission/1".to_string(),
+            })
+        }
+    }
+
+    /// Builds a Service whose OJ records the submitted source and whose config carries
+    /// the given preprocess command and source. Returns the service, the captured-source
+    /// handle, and the TempDir (kept alive for the test).
+    #[cfg(unix)]
+    fn make_preprocess_service(
+        preprocess: Option<String>,
+        source: &str,
+    ) -> (Service, Rc<RefCell<Option<String>>>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            ce_toml_with_language_and_passing_test(),
+        )
+        .unwrap();
+        let received = Rc::new(RefCell::new(None));
+        let service = Service::new(
+            Box::new(SingleOnlineJudge::new(Box::new(SourceCapturingOJ {
+                received_source: Rc::clone(&received),
+            }))),
+            Box::new(StubContestRepo {
+                problem: default_problem(),
+            }),
+            Box::new(StubSolutionRepo {
+                solution_dir: dir.path().to_path_buf(),
+                source: Some(source.to_string()),
+            }),
+            Box::new(StubSession { session: None }),
+            Box::new(StubConfig {
+                lang_id: Some("6088".to_string()),
+                submit_file: "src/main.rs".to_string(),
+                submit_preprocess: preprocess,
+            }),
+        );
+        (service, received, dir)
+    }
+
+    /// A configured preprocess hook transforms the source: its stdout is submitted.
+    #[test]
+    #[cfg(unix)]
+    fn submit_runs_preprocess_hook_and_submits_its_stdout() {
+        let (service, received, _dir) =
+            make_preprocess_service(Some("printf '%s' TRANSFORMED".to_string()), "ORIGINAL");
+        service.submit("abc001", "a", "main").unwrap();
+        assert_eq!(
+            received.borrow().as_deref(),
+            Some("TRANSFORMED"),
+            "expected the hook's stdout to be submitted"
+        );
+    }
+
+    /// With no preprocess hook configured, the original source is submitted unchanged.
+    #[test]
+    #[cfg(unix)]
+    fn submit_without_preprocess_submits_original_source() {
+        let (service, received, _dir) = make_preprocess_service(None, "ORIGINAL");
+        service.submit("abc001", "a", "main").unwrap();
+        assert_eq!(
+            received.borrow().as_deref(),
+            Some("ORIGINAL"),
+            "expected the original source to be submitted when no hook is set"
+        );
+    }
+
+    /// A hook that exits non-zero aborts submission; the OJ's submit is never reached.
+    #[test]
+    #[cfg(unix)]
+    fn submit_aborts_when_preprocess_hook_fails() {
+        let (service, received, _dir) =
+            make_preprocess_service(Some("exit 3".to_string()), "ORIGINAL");
+        let err = service.submit("abc001", "a", "main").unwrap_err();
+        assert!(
+            err.to_string().contains("preprocess hook failed"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            received.borrow().is_none(),
+            "submit must not be called when the preprocess hook fails"
+        );
+    }
+
+    /// The hook receives the documented context env vars. The script verifies each and
+    /// passes stdin through with `cat`; any mismatch makes it exit non-zero (→ submit
+    /// would error), so an Ok result with the unchanged source confirms the env.
+    #[test]
+    #[cfg(unix)]
+    fn submit_passes_context_env_to_preprocess_hook() {
+        let script = "test \"$CE_LANGUAGE\" = rust \
+             && test \"$CE_OJ\" = atcoder \
+             && test \"$CE_LANG_ID\" = 6088 \
+             && test \"$CE_CONTEST_ID\" = abc001 \
+             && test \"$CE_PROBLEM_CODE\" = a \
+             && test \"$CE_PROBLEM_ID\" = abc001_a \
+             && test \"$CE_SOLUTION_NAME\" = main \
+             && test -n \"$CE_SOLUTION_DIR\" \
+             && test -n \"$CE_SOURCE_FILE\" \
+             && cat";
+        let (service, received, _dir) =
+            make_preprocess_service(Some(script.to_string()), "ORIGINAL");
+        service
+            .submit("abc001", "a", "main")
+            .expect("expected submit to succeed when env vars match");
+        assert_eq!(
+            received.borrow().as_deref(),
+            Some("ORIGINAL"),
+            "expected stdin to pass through once env vars matched"
+        );
+    }
+
+    /// dry-run returns the preprocessed source and never contacts the OJ.
+    #[test]
+    #[cfg(unix)]
+    fn submit_dry_run_returns_preprocessed_source_without_submitting() {
+        let (service, received, _dir) =
+            make_preprocess_service(Some("printf '%s' TRANSFORMED".to_string()), "ORIGINAL");
+        let out = service.submit_dry_run("abc001", "a", "main").unwrap();
+        assert_eq!(
+            out, "TRANSFORMED",
+            "dry-run should return the preprocessed source"
+        );
+        assert!(
+            received.borrow().is_none(),
+            "dry-run must not call the OJ's submit"
+        );
+    }
+
+    /// Regression: a hook that both consumes a large stdin and emits a large stdout
+    /// (here `cat` with ~1 MB) must not deadlock on the pipe buffers.
+    #[test]
+    #[cfg(unix)]
+    fn submit_preprocess_handles_large_io_without_deadlock() {
+        let big = "x".repeat(1_000_000);
+        let (service, _received, _dir) = make_preprocess_service(Some("cat".to_string()), &big);
+        let out = service.submit_dry_run("abc001", "a", "main").unwrap();
+        assert_eq!(
+            out.len(),
+            big.len(),
+            "cat should echo the full large source"
+        );
+    }
+
+    /// Regression: a hook that ignores a large stdin (like cargo-equip, which reads the
+    /// crate not stdin) must not hang or error on the unread input.
+    #[test]
+    #[cfg(unix)]
+    fn submit_preprocess_ok_when_hook_ignores_large_stdin() {
+        let big = "y".repeat(1_000_000);
+        let (service, _received, _dir) =
+            make_preprocess_service(Some("printf '%s' DONE".to_string()), &big);
+        let out = service.submit_dry_run("abc001", "a", "main").unwrap();
+        assert_eq!(
+            out, "DONE",
+            "hook output should be used even if stdin is unread"
         );
     }
 }

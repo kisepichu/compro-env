@@ -1,16 +1,21 @@
-コマンドの仕様からタスクファイルを生成し、実装を開始する。
+仕様からタスクファイルを生成し、実装を開始する。対象は CLI コマンド単体に限らず、OJ 連携やドメイン抽象のようなサブシステム横断トピックでもよい。
 
 ## 手順
 
 手順に沿って進める。特に、ブランチを切ることと、チェックをすること、コミットやプッシュする前に止まることを忘れない。
 
-1. 引数からコマンド名を取得する (例: `/spec-do login` → `login`)
-   - 引数がなければ「どのコマンドを実装しますか?」と聞く
-2. `docs/commands/{command}.md` を読む。なければ `docs/spec.md` の該当部分を読む
+1. 引数から対象を取得する
+   - 対象は CLI コマンド名 (例: `/spec-do login` → `login`) でも、サブシステム/トピック名 (例: `/spec-do online-judge`, `/spec-do librarychecker`) でもよい
+   - 引数がなければ「どの対象を実装しますか?」と聞く
+2. 対象の仕様ドキュメントを読む
+   - コマンドなら `docs/commands/{command}.md`、トピックなら `docs/{topic}.md` (例: `docs/online_judges/{name}.md`)
+   - なければ `docs/spec.md` の該当部分を読む
 3. `CLAUDE.md` のアーキテクチャルールを確認する
 4. 実装を DDD レイヤーごとに分解してタスクを洗い出す
-5. タスクファイルを `tasks/doing/TASK-NNN-{command}.md` に作成する。ブランチの切り方をユーザーに確認して、 dev から切る
+5. タスクファイルを `tasks/doing/TASK-NNN-{slug}.md` に作成する。ブランチの切り方をユーザーに確認して、 dev から切る
+   - `{slug}` は対象を表す短い識別子 (コマンド名、または `oj-librarychecker` 等のトピックスラグ)
    - NNN は既存タスクの連番 (todo/ doing/ done/ を合わせて最大番号 + 1)
+   - 横断トピックで作業が大きい場合は、レイヤーや機能単位で複数タスクに分割してよい
 6. タスクファイルのチェックリスト項目ごとに以下の TDD サイクルを回す:
 
    **RED フェーズ** — `.claude/agents/test-writer-prompt.md` のテンプレートを使い、
@@ -34,11 +39,11 @@
 ## タスクファイル形式
 
 ```markdown
-# TASK-{NNN}: ce {command} 実装
+# TASK-{NNN}: {対象} 実装
 
 ## 参照仕様
 
-- docs/commands/{command}.md
+- docs/commands/{command}.md または docs/{topic}.md (+ docs/spec.md の該当セクション)
 
 ## 実装チェックリスト
 

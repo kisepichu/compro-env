@@ -53,7 +53,7 @@ impl Service {
         let session = self.session_repo.get(&oj)?;
 
         // Step 2: Check start time and wait if needed
-        let meta = self.online_judge.get_contest_meta(contest_id)?;
+        let meta = self.online_judge(&oj)?.get_contest_meta(contest_id)?;
         if let Some(start_time) = meta.start_time
             && start_time > chrono::Utc::now()
         {
@@ -76,7 +76,7 @@ impl Service {
                     std::thread::sleep(std::time::Duration::from_secs(1));
                 } else {
                     // Within 10 seconds of start or already started: poll for problems
-                    match self.online_judge.get_problems_detail(
+                    match self.online_judge(&oj)?.get_problems_detail(
                         contest_id,
                         session.as_ref(),
                         &meta.problem_id_hints,
@@ -119,7 +119,7 @@ impl Service {
         }
 
         // Step 3: Get problems (no waiting required)
-        let problems = self.online_judge.get_problems_detail(
+        let problems = self.online_judge(&oj)?.get_problems_detail(
             contest_id,
             session.as_ref(),
             &meta.problem_id_hints,
@@ -217,7 +217,9 @@ mod tests {
 
     use crate::{
         config::Config,
-        online_judge::{ContestMeta, OnlineJudge},
+        online_judge::{
+            ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge, SubmitOutcome,
+        },
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
@@ -253,6 +255,14 @@ mod tests {
             "stub"
         }
 
+        fn credential_kind(&self) -> CredentialKind {
+            CredentialKind::Cookie
+        }
+
+        fn login(&self, _credentials: &Credentials) -> Result<Session> {
+            todo!()
+        }
+
         fn whoami(&self, _session: &Session) -> Result<String> {
             Ok("stub_user".to_string())
         }
@@ -273,7 +283,14 @@ mod tests {
             Ok(self.problems.clone())
         }
 
-        fn build_submit_url(&self, _: &str, _: &str, _: &str, _: &str) -> String {
+        fn submit(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: Option<&Session>,
+        ) -> Result<SubmitOutcome> {
             todo!()
         }
     }
@@ -396,8 +413,8 @@ mod tests {
             String::new()
         }
 
-        fn submit_preprocess(&self, _lang: &Language) -> String {
-            String::new()
+        fn submit_preprocess(&self) -> Option<String> {
+            None
         }
 
         fn lang_id(&self, _lang: &Language, _oj: &OJKind) -> Option<String> {
@@ -412,7 +429,7 @@ mod tests {
         solution_repo: StubSolutionRepo,
     ) -> Service {
         Service::new(
-            Box::new(oj),
+            Box::new(SingleOnlineJudge::new(Box::new(oj))),
             Box::new(contest_repo),
             Box::new(solution_repo),
             Box::new(StubSessionRepo { session }),
@@ -432,7 +449,7 @@ mod tests {
     /// and `solution_repo.create` for each problem, and `InitResult` has 2 solutions.
     #[test]
     fn init_creates_contest_and_solutions() {
-        let session = Session {
+        let session = Session::Cookie {
             online_judge: OJKind::AtCoder,
             cookie: "cookie_value".to_string(),
         };
@@ -503,16 +520,16 @@ mod tests {
             create_unstarted_called: called.clone(),
         };
 
-        let session = Session {
+        let session = Session::Cookie {
             online_judge: OJKind::AtCoder,
             cookie: "cookie_value".to_string(),
         };
 
         let service = Service::new(
-            Box::new(StubOJ {
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ {
                 problems: vec![make_problem("a")],
                 start_time: None, // no start time known
-            }),
+            }))),
             Box::new(contest_repo),
             Box::new(StubSolutionRepo {
                 created: RefCell::new(vec![]),
@@ -585,10 +602,10 @@ mod tests {
         }
 
         let service = Service::new(
-            Box::new(StubOJ {
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ {
                 problems: vec![make_problem("a")],
                 start_time: None,
-            }),
+            }))),
             Box::new(AlreadyExistsRepo),
             Box::new(StubSolutionRepo {
                 created: RefCell::new(vec![]),
