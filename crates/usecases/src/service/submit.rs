@@ -187,7 +187,7 @@ struct PreprocessContext<'a> {
 /// terminal. A non-zero exit is reported as an error so submission is aborted.
 #[cfg(unix)]
 fn run_preprocess_hook(command: &str, source: &str, ctx: &PreprocessContext) -> Result<String> {
-    use std::io::Write as _;
+    use std::io::{Read as _, Write as _};
     use std::process::{Command, Stdio};
 
     let mut child = Command::new("sh")
@@ -209,23 +209,42 @@ fn run_preprocess_hook(command: &str, source: &str, ctx: &PreprocessContext) -> 
         .spawn()
         .with_context(|| "failed to launch preprocess hook via sh")?;
 
-    child
+    // Write the source on a separate thread while we drain stdout here. Both the
+    // source and the hook's output can exceed the OS pipe buffer (expanded sources
+    // are large), so writing all of stdin before reading stdout would deadlock.
+    let mut stdin = child
         .stdin
         .take()
-        .expect("stdin was requested via Stdio::piped")
-        .write_all(source.as_bytes())
-        .with_context(|| "failed to write source to preprocess hook stdin")?;
+        .expect("stdin was requested via Stdio::piped");
+    let source_bytes = source.as_bytes().to_vec();
+    let writer = std::thread::spawn(move || {
+        // A hook may legitimately not read all of stdin (e.g. cargo-equip reads the
+        // crate, not stdin); the resulting BrokenPipe is expected, so ignore write
+        // errors. The hook's exit status is the real signal.
+        let _ = stdin.write_all(&source_bytes);
+        // `stdin` drops here, closing the pipe so a reading hook sees EOF.
+    });
 
-    let output = child
-        .wait_with_output()
+    let mut stdout = Vec::new();
+    child
+        .stdout
+        .take()
+        .expect("stdout was requested via Stdio::piped")
+        .read_to_end(&mut stdout)
+        .with_context(|| "failed to read preprocess hook stdout")?;
+
+    let status = child
+        .wait()
         .with_context(|| "failed to wait for preprocess hook")?;
-    if !output.status.success() {
+    let _ = writer.join();
+
+    if !status.success() {
         anyhow::bail!(
             "preprocess hook failed with exit code {}; submission skipped",
-            output.status.code().unwrap_or(1)
+            status.code().unwrap_or(1)
         );
     }
-    String::from_utf8(output.stdout).with_context(|| "preprocess hook produced non-UTF-8 output")
+    String::from_utf8(stdout).with_context(|| "preprocess hook produced non-UTF-8 output")
 }
 
 #[cfg(test)]
@@ -904,6 +923,36 @@ mod tests {
         assert!(
             received.borrow().is_none(),
             "dry-run must not call the OJ's submit"
+        );
+    }
+
+    /// Regression: a hook that both consumes a large stdin and emits a large stdout
+    /// (here `cat` with ~1 MB) must not deadlock on the pipe buffers.
+    #[test]
+    #[cfg(unix)]
+    fn submit_preprocess_handles_large_io_without_deadlock() {
+        let big = "x".repeat(1_000_000);
+        let (service, _received, _dir) = make_preprocess_service(Some("cat".to_string()), &big);
+        let out = service.submit_dry_run("abc001", "a", "main").unwrap();
+        assert_eq!(
+            out.len(),
+            big.len(),
+            "cat should echo the full large source"
+        );
+    }
+
+    /// Regression: a hook that ignores a large stdin (like cargo-equip, which reads the
+    /// crate not stdin) must not hang or error on the unread input.
+    #[test]
+    #[cfg(unix)]
+    fn submit_preprocess_ok_when_hook_ignores_large_stdin() {
+        let big = "y".repeat(1_000_000);
+        let (service, _received, _dir) =
+            make_preprocess_service(Some("printf '%s' DONE".to_string()), &big);
+        let out = service.submit_dry_run("abc001", "a", "main").unwrap();
+        assert_eq!(
+            out, "DONE",
+            "hook output should be used even if stdin is unread"
         );
     }
 }
