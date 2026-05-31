@@ -209,7 +209,6 @@ pub fn run() -> Result<()> {
                 contest_id: contest,
                 problem_code: problem,
                 solution_name,
-                dry_run,
             };
             if dry_run {
                 // Dry run: print the exact source that would be submitted and stop.

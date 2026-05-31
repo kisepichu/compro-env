@@ -176,7 +176,6 @@ pub struct SubmitCommand {
     pub contest_id: String,
     pub problem_code: String,
     pub solution_name: String,
-    pub dry_run: bool,
 }
 impl SubmitInput for SubmitCommand {
     fn contest_id(&self) -> String {
@@ -187,8 +186,5 @@ impl SubmitInput for SubmitCommand {
     }
     fn solution_name(&self) -> String {
         self.solution_name.clone()
-    }
-    fn dry_run(&self) -> bool {
-        self.dry_run
     }
 }

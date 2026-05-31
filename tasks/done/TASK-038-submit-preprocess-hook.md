@@ -60,7 +60,7 @@
 
 ### 4. 検証
 
-- [x] `cargo test --all` — 121 passed (うち新規: config 3, submit preprocess 4)
+- [x] `cargo test --all` — パス (新規: config_impl 3, submit preprocess 4, dry-run 1)
 - [x] `cargo clippy --all --all-features -- -D warnings` — 警告なし
 - [x] `cargo fmt --all --check` — クリーン
 
@@ -77,4 +77,9 @@
 - 2026-05-31: 仕様確定 (docs/commands/submit.md「提出前 preprocess フック」節)・タスク生成。
 - 2026-05-31: 実装完了。trait を `submit_preprocess(&self) -> Option<String>` に変更、config_impl で
   `[submit].preprocess` 読込、submit.rs に `run_preprocess_hook`(sh -c + 9 env + stdin/stdout、Unix 限定)を
-  追加。全ゲート (test/clippy/fmt) パス。未実施: 実機での Rust ライブラリ展開 (cargo-equip) 手動デモ。
+  追加。全ゲート (test/clippy/fmt) パス。
+- 2026-06-01: `ce submit --dry-run`(OJ 非送信でソース準備のみ表示)を追加。source 準備を
+  `Service::prepare_submission` に集約。`hooks/submit-preprocess.sh`(cargo-equip 例)を追加し、
+  `templates/rust/Cargo.toml.tera` を edition 2021 に変更(cargo-equip が 2024 非対応)。
+  実機で aplusb の `--dry-run` が cargo-equip 展開済みソースを出力することを確認済み
+  (judge 上での AC は未確認)。
