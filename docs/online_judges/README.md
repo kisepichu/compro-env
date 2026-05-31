@@ -11,14 +11,14 @@
 - `OnlineJudge` は usecases 層のポート (trait)。実装は infrastructure 層 (`online_judge_impl/`)。
 - ツールは最初からマルチ OJ を想定する。`.ce.toml` に `online_judge` を保存し、`ce test` /
   `ce sub` 時に `ContestRepository::get_oj_kind` で復元する。
-- 現状は AtCoder のみ実装されている。LibraryChecker を追加するにあたり、AtCoder 前提が
-  残る箇所 (OnlineJudge の固定注入・ブラウザ提出固定・手動 cookie ログイン固定) を一般化する。
-- **実装状況**: 下記「動的解決」「ログインの一般化」「提出の一般化」は TASK-033 (Phase A) で、
-  「OJ 判定」の拡張点化 (descriptor + `OJKind::detect`) は TASK-034 (Phase B) で、
-  `OJKind::LibraryChecker` 追加と LC URL 判定は TASK-035 (Phase C) で実装済み。
-  LC 実装 (TASK-036/Phase D)、config/session (TASK-037/Phase E) は未着手。
-  - Phase C 完了時点では LC を検出するが registry 解決・login は clean エラーを返す
-    (実装は Phase D)。詳細は [librarychecker.md](./librarychecker.md) の「実装フェーズと中間状態」。
+- AtCoder と LibraryChecker の両方が実装済み。AtCoder 前提が残っていた箇所
+  (OnlineJudge の固定注入・ブラウザ提出固定・手動 cookie ログイン固定) は一般化済み。
+- **実装状況**: Phase A〜E すべて実装済み。下記「動的解決」「ログインの一般化」「提出の一般化」は
+  TASK-033 (Phase A)、「OJ 判定」の拡張点化 (descriptor + `OJKind::detect`) は TASK-034 (Phase B)、
+  `OJKind::LibraryChecker` 追加と LC URL 判定は TASK-035 (Phase C)、LC の REST/Firebase 実装は
+  TASK-036 (Phase D)、config(lang_id)/session は TASK-037 (Phase E) で実装済み。
+  config/session は Phase D で先取り実装された (Session enum 化は login の生成物 = submit/whoami の
+  消費物のため D に含めた)。詳細は [librarychecker.md](./librarychecker.md) の「実装フェーズと中間状態」。
 
 ## 「コンテスト」の一般化
 

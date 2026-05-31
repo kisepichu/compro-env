@@ -34,11 +34,14 @@ LibraryChecker は段階的に追加する。Phase ごとの完了時状態と�
     `"LibraryChecker is not yet implemented"`) を返す。`todo!()` で panic させない
     (バイナリは使用可能なまま保ち、tests/clippy を通す)。
   - AtCoder の既存挙動は一切変えない。LC 検出が増えるだけ。
-- **Phase D (TASK-036)**: 上記の clean エラー stub を実際の REST/Firebase 実装に置き換える。
-  あわせて `Session` を enum 化して Firebase トークンを保持できるようにする (login が生成・
-  submit/whoami が消費するため Phase D に含める)。
-- **Phase E (TASK-037)**: config (lang_id) の解決を LibraryChecker でも機能させる。
-  Session の保存形式は Phase D で確定済みのため、E は config (lang_id) に焦点を絞る。
+- **Phase D (TASK-036)**: 上記の clean エラー stub を実際の REST/Firebase 実装に置き換えた。
+  あわせて `Session` を enum 化して Firebase トークンを保持できるようにした (login が生成・
+  submit/whoami が消費するため Phase D に含めた)。**実装の都合上、config (lang_id) の解決と
+  session.toml の `[librarychecker]` 保存・読み出しも Phase D で先取り実装した** (Phase E のコードは
+  D で出揃った)。
+- **Phase E (TASK-037)**: config (lang_id) / session は D で実装済みのため、E はクローズ作業として
+  仕様ドリフトの解消 (本ドキュメント・README・spec.md の同期) と LC 固有の lang_id 解決テスト追加を
+  行った。**実装済み。**
 
 ## エンドポイント (調査結果)
 
