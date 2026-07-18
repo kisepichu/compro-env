@@ -1,0 +1,136 @@
+online_judge = "atcoder"
+contest_id = "abc462"
+
+[[problems]]
+id = "abc462_a"
+code = "a"
+title = "Secret Numbers"
+input_format_raw = """
+S
+"""
+constraints_raw = "S は英小文字と数字のみからなる長さ 1 以上 50 以下の文字列"
+
+[[problems]]
+id = "abc462_b"
+code = "b"
+title = "Gift"
+input_format_raw = '''
+N
+K_1 A_{1,1} A_{1,2} \ldots A_{1,K_1}
+K_2 A_{2,1} A_{2,2} \ldots A_{2,K_2}
+\vdots
+K_N A_{N,1} A_{N,2} \ldots A_{N,K_N}
+'''
+constraints_raw = '''
+2\le N\le 100
+
+1\le K_i\le N-1
+
+1\le A_{i,1} < A_{i,2} < \cdots < A_{i,K_i}\le N
+
+A_{i,j} \neq i
+
+入力される値は全て整数'''
+
+[[problems]]
+id = "abc462_c"
+code = "c"
+title = "Not Covered Points"
+input_format_raw = '''
+N
+X_1 Y_1
+X_2 Y_2
+\vdots
+X_N Y_N
+'''
+constraints_raw = '''
+1\le N\le 3\times 10^5
+
+1\le X_i,Y_i\le N
+
+X,Y はそれぞれ (1,2,\ldots,N) の順列
+
+入力される値は全て整数'''
+
+[[problems]]
+id = "abc462_d"
+code = "d"
+title = "Accomplice"
+input_format_raw = """
+N D\r
+S_1 T_1\r
+S_2 T_2\r
+\\vdots\r
+S_N T_N\r
+"""
+constraints_raw = """
+2 \\leq N \\leq 2 \\times 10^5
+\r
+1 \\leq S_i \\leq T_i \\leq 10^6
+\r
+1 \\leq D \\leq 10^6
+\r
+入力される値は全て整数"""
+
+[[problems]]
+id = "abc462_e"
+code = "e"
+title = "Alternating Costs"
+input_format_raw = '''
+T
+\text{case}_1
+\text{case}_2
+\vdots
+\text{case}_T
+
+A B X Y
+'''
+constraints_raw = '''
+1\le T\le 2\times 10^5
+
+1\le A,B\le 10^9
+
+-10^9\le X,Y\le 10^9
+
+入力される値は全て整数'''
+
+[[problems]]
+id = "abc462_f"
+code = "f"
+title = "More ABC"
+input_format_raw = '''
+T
+\mathrm{case}_1
+\mathrm{case}_2
+\vdots
+\mathrm{case}_T
+
+S
+K
+'''
+constraints_raw = '''
+1\leq T\leq 10^5
+
+S は英大文字のみからなる長さ 3 以上 3\times 10^5 以下の文字列
+
+1\leq K \leq 10
+
+それぞれの入力において、各テストケースの S の長さの総和は 3\times 10^5 以下である。
+
+T,K は整数'''
+
+[[problems]]
+id = "abc462_g"
+code = "g"
+title = "Completely Wrong"
+input_format_raw = '''
+N
+C_1 C_2 \ldots C_N
+G_1 G_2 \ldots G_N
+'''
+constraints_raw = '''
+1\le N\le 2\times 10^5
+
+1\le C_i,G_k\le N
+
+入力される値は全て整数'''

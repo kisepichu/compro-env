@@ -1,0 +1,9 @@
+online_judge = "librarychecker"
+contest_id = "librarychecker-aplusb"
+
+[[problems]]
+id = "aplusb"
+code = "aplusb"
+title = "A + B"
+input_format_raw = "A B"
+constraints_raw = '- 0 \leq A, B \leq 1000000000'

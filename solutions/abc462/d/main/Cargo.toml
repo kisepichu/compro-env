@@ -1,0 +1,14 @@
+[workspace]
+
+[package]
+name = "d-main"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+
+[[bin]]
+name = "d-main"
+path = "src/main.rs"
+
+[dependencies]
+proconio = "0.4"
