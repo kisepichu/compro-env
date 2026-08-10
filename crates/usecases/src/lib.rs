@@ -1,3 +1,4 @@
+pub mod command_runner;
 pub mod config;
 pub mod input_format;
 pub mod library_analysis;
