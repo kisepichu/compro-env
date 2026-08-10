@@ -255,6 +255,11 @@ pub struct LanguageConfig {
     pub analyzer: AnalyzerConfig,
     pub expected_toolchains: Vec<ExpectedToolchain>,
     pub online_judges: BTreeMap<String, OnlineJudgeLanguageMapping>,
+    /// Solution-root-relative path of the file adapters and OJ submissions
+    /// should treat as the entry point. Defaults to `src/main.rs` when
+    /// omitted; kept configurable per language so the platform stays free of
+    /// hard-coded language semantics.
+    pub entry_file: String,
 }
 
 impl LanguageConfig {
@@ -398,6 +403,7 @@ mod tests {
             },
             expected_toolchains: vec![],
             online_judges: BTreeMap::new(),
+            entry_file: "src/main.rs".into(),
         };
         assert_eq!(cfg.effective_display_name(), "cpp");
         assert_eq!(cfg.effective_syntax_highlight(), "cpp");

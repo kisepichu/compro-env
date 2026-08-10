@@ -78,6 +78,7 @@ struct RawLanguage {
     check_command: Option<String>,
     check_timeout_seconds: Option<u32>,
     syntax_highlight: Option<String>,
+    entry_file: Option<String>,
     analyzer: Option<RawAnalyzer>,
     #[serde(default)]
     expected_toolchains: Vec<RawToolchain>,
@@ -173,6 +174,7 @@ fn validate_language(
         check_command,
         check_timeout_seconds,
         syntax_highlight,
+        entry_file,
         analyzer,
         expected_toolchains,
         online_judges,
@@ -278,6 +280,11 @@ fn validate_language(
         typed_online_judges.insert(oj, OnlineJudgeLanguageMapping { language_id });
     }
 
+    let entry_file = entry_file
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "src/main.rs".to_string());
+
     Ok(LanguageConfig {
         id: id.clone(),
         display_name: display_name
@@ -296,6 +303,7 @@ fn validate_language(
         analyzer,
         expected_toolchains: typed_toolchains,
         online_judges: typed_online_judges,
+        entry_file,
     })
 }
 

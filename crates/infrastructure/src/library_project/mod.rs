@@ -5,3 +5,4 @@
 pub mod config;
 pub mod discovery;
 pub mod metadata;
+pub mod solution_metadata;
