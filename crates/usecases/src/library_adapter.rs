@@ -31,12 +31,12 @@ pub enum AdapterRunError {
     },
 
     #[error(
-        "adapter {command:?} did not finish within {seconds}s\n\
+        "adapter {command:?} did not finish within {timeout_ms}ms\n\
          stderr tail:\n{stderr_tail}"
     )]
     Timeout {
         command: String,
-        seconds: u64,
+        timeout_ms: u128,
         stderr_tail: String,
     },
 
@@ -63,7 +63,16 @@ pub enum AdapterRunError {
         stderr_tail: String,
     },
 
-    #[error("adapter {command:?} produced invalid JSON: {source}\nstderr tail:\n{stderr_tail}")]
+    #[error("failed to serialize adapter request to JSON: {source}")]
+    RequestSerialization {
+        #[source]
+        source: serde_json::Error,
+    },
+
+    #[error(
+        "adapter {command:?} produced invalid JSON on stdout: {source}\n\
+         stderr tail:\n{stderr_tail}"
+    )]
     InvalidJson {
         command: String,
         #[source]

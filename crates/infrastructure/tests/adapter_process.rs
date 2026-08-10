@@ -281,8 +281,14 @@ printf '\377\376\372'
 
 #[test]
 fn environment_is_isolated_from_parent() {
-    // Spawn the runner with only an allowlisted variable — the fixture will
-    // write the entire environment to a marker file we can inspect.
+    // Spawn the runner with only allowlisted variables. Cargo always sets
+    // CARGO_MANIFEST_DIR in the parent when running tests, so if `env_clear`
+    // were skipped that variable would land in the child. We never mutate the
+    // parent env here — Rust flags `std::env::set_var` as `unsafe` because it
+    // races with other threads reading env, so tests must not touch it.
+    let cargo_manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .expect("Cargo sets CARGO_MANIFEST_DIR when running tests");
+
     let dir = TempDir::new().unwrap();
     let marker = dir.path().join("env.txt");
     let marker_str = marker.display().to_string();
@@ -299,14 +305,6 @@ JSON
 "#,
         ),
     );
-    // Ensure parent has a variable we don't allowlist so we can prove it's gone.
-    // SAFETY: This test binary is single-threaded during setup because the
-    // integration harness runs each test on its own thread with a synchronous
-    // env mutation before spawning the child; no other thread accesses env
-    // between now and the runner's `env_clear`.
-    unsafe {
-        std::env::set_var("CE_ADAPTER_SECRET", "leaked");
-    }
     let mut env = minimal_env();
     env.insert("CE_ADAPTER_TAG".into(), "allowed".into());
     let r = ProcessLibraryAdapterRunner::new(std::env::current_dir().unwrap(), env);
@@ -316,8 +314,27 @@ JSON
     assert_eq!(response.adapter.name, "a");
 
     let observed = std::fs::read_to_string(&marker).unwrap();
-    assert!(observed.contains("CE_ADAPTER_TAG=allowed"));
-    assert!(!observed.contains("CE_ADAPTER_SECRET"));
+    // Positive: allowlisted values are visible.
+    assert!(
+        observed.contains("CE_ADAPTER_TAG=allowed"),
+        "child env missing allowlisted CE_ADAPTER_TAG:\n{observed}"
+    );
+    // Negative: the parent's CARGO_MANIFEST_DIR must never leak into the child.
+    assert!(
+        !observed.contains(&format!("CARGO_MANIFEST_DIR={cargo_manifest_dir}")),
+        "child env leaked CARGO_MANIFEST_DIR:\n{observed}"
+    );
+    // Belt-and-suspenders: no key we did not allowlist should appear.
+    let child_keys: std::collections::BTreeSet<&str> = observed
+        .lines()
+        .filter_map(|line| line.split_once('=').map(|(k, _)| k))
+        .collect();
+    for parent_only in ["CARGO_MANIFEST_DIR", "RUSTUP_TOOLCHAIN"] {
+        assert!(
+            !child_keys.contains(parent_only),
+            "child env leaked {parent_only}:\n{observed}"
+        );
+    }
 }
 
 // ─── argv correctness ────────────────────────────────────────────────────────

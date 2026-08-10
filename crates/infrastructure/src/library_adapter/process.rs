@@ -75,12 +75,8 @@ impl LibraryAdapterRunner for ProcessLibraryAdapterRunner {
     ) -> Result<AnalysisResponse, AdapterRunError> {
         let command_display = executable.display().to_string();
 
-        let request_json =
-            serde_json::to_vec(request).map_err(|source| AdapterRunError::InvalidJson {
-                command: command_display.clone(),
-                source,
-                stderr_tail: String::new(),
-            })?;
+        let request_json = serde_json::to_vec(request)
+            .map_err(|source| AdapterRunError::RequestSerialization { source })?;
 
         let mut cmd = Command::new(executable);
         cmd.args(&self.extra_args);
@@ -207,22 +203,22 @@ impl LibraryAdapterRunner for ProcessLibraryAdapterRunner {
                 Ok(response)
             }
             Ok(None) => {
-                // Timeout: terminate the child's process group, then wait
-                // out the pipes before reporting.
-                terminate_process_group(pid);
+                // Timeout: terminate the child (and, on Unix, its whole process
+                // group) before waiting so descendants cannot outlive us.
+                terminate_child(&mut child, pid);
                 let _ = child.wait();
                 let _ = write_join.join();
                 let _ = stdout_join.join();
                 let stderr_bytes = stderr_join.join().unwrap_or_default();
                 Err(AdapterRunError::Timeout {
                     command: command_display,
-                    seconds: timeout.as_secs(),
+                    timeout_ms: timeout.as_millis(),
                     stderr_tail: String::from_utf8_lossy(&stderr_bytes).into_owned(),
                 })
             }
             Err(source) => {
                 // wait_timeout itself failed; make sure the child does not linger.
-                terminate_process_group(pid);
+                terminate_child(&mut child, pid);
                 let _ = child.wait();
                 Err(AdapterRunError::Io {
                     command: command_display,
@@ -317,19 +313,22 @@ fn format_exit_status(status: &std::process::ExitStatus) -> String {
     }
 }
 
-#[cfg(unix)]
-fn terminate_process_group(pid: u32) {
-    let pgid: libc::pid_t = pid as libc::pid_t;
-    unsafe {
-        libc::killpg(pgid, libc::SIGTERM);
+/// Terminate the child (and, on Unix, its whole process group) so a timeout
+/// cannot leave descendants running. `Child::kill` is a belt-and-suspenders
+/// call that also fires on non-Unix targets where process groups do not exist.
+fn terminate_child(child: &mut std::process::Child, pid: u32) {
+    #[cfg(unix)]
+    {
+        let pgid: libc::pid_t = pid as libc::pid_t;
+        unsafe {
+            libc::killpg(pgid, libc::SIGTERM);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
     }
-    std::thread::sleep(Duration::from_millis(200));
-    unsafe {
-        libc::killpg(pgid, libc::SIGKILL);
-    }
-}
-
-#[cfg(not(unix))]
-fn terminate_process_group(_pid: u32) {
-    // Windows: rely on Child::kill via the caller.
+    #[cfg(not(unix))]
+    let _ = pid;
+    let _ = child.kill();
 }
