@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn loads_valid_three_language_config() {
-        let contents = std::fs::read_to_string(fixture_root().join("config-valid.toml")).unwrap();
+        let contents = std::fs::read_to_string(fixture_root().join("config.toml")).unwrap();
         let config = load_str(&contents).unwrap();
 
         assert_eq!(
@@ -618,7 +618,7 @@ command = ["./bin/rust"]
         // The same file also hosts the existing CLI configuration.
         let contents = format!(
             "{}\n\n[default]\nlanguage = \"rust\"\n",
-            std::fs::read_to_string(fixture_root().join("config-valid.toml")).unwrap()
+            std::fs::read_to_string(fixture_root().join("config.toml")).unwrap()
         );
         let config = load_str(&contents).unwrap();
         assert_eq!(config.languages.len(), 3);
@@ -652,7 +652,7 @@ command = ["./bin/rust-global"]
 
         let repo_tmp = tempfile::tempdir().unwrap();
         let repo_config = repo_tmp.path().join("config.toml");
-        std::fs::copy(fixture_root().join("config-valid.toml"), &repo_config).unwrap();
+        std::fs::copy(fixture_root().join("config.toml"), &repo_config).unwrap();
 
         // Snapshot and restore CE_CONFIG_DIR so this test does not leak into others.
         let previous = std::env::var_os("CE_CONFIG_DIR");

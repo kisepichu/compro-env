@@ -3,3 +3,5 @@
 //! (spec §6.1: project-local config is not merged with the user-global one).
 
 pub mod config;
+pub mod discovery;
+pub mod metadata;

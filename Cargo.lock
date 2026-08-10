@@ -938,6 +938,7 @@ dependencies = [
  "chrono",
  "clap",
  "domain",
+ "globset",
  "interfaces",
  "reqwest",
  "rpassword",
