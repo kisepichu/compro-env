@@ -90,9 +90,17 @@ impl CommandRunner for UnixCommandRunner {
         }
 
         // Timeout hit: signal the whole process group. Send SIGTERM first,
-        // wait up to KILL_GRACE, then SIGKILL. Errors from `killpg` when the
-        // group has already exited (ESRCH) are ignored.
-        let _ = killpg(child_pid, Signal::SIGTERM);
+        // wait up to KILL_GRACE, then SIGKILL. ESRCH (group already exited) is
+        // benign; any other errno is a real failure and surfaces to the caller
+        // so we don't silently pretend to have signalled the group.
+        match killpg(child_pid, Signal::SIGTERM) {
+            Ok(()) | Err(Errno::ESRCH) => {}
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "failed to SIGTERM child process group (pid {child_pid}): {e}"
+                ));
+            }
+        }
         let grace_deadline = Instant::now() + KILL_GRACE;
         while Instant::now() < grace_deadline {
             match child.try_wait() {

@@ -22,9 +22,37 @@ use crate::{
 use interfaces::controller::Controller;
 use interfaces::controller::input::CheckInput;
 use usecases::check::{CheckSelection, LanguageCheckStatus};
+use usecases::command_runner::CommandRunner;
 use usecases::config::Config as _;
 use usecases::online_judge::{CredentialKind, Credentials, SubmitOutcome};
 use usecases::service::Service;
+
+// The Unix-only runner lives at `crate::command_runner_impl::UnixCommandRunner`;
+// on other targets we fall back to a stub that reports the platform as
+// unsupported at runtime (spec §7.1). This keeps `infrastructure` compiling
+// everywhere while still failing loudly if `ce check` / `ce test` are invoked.
+#[cfg(unix)]
+fn default_command_runner() -> Box<dyn CommandRunner> {
+    Box::new(crate::command_runner_impl::UnixCommandRunner)
+}
+
+#[cfg(not(unix))]
+struct UnsupportedCommandRunner;
+
+#[cfg(not(unix))]
+impl CommandRunner for UnsupportedCommandRunner {
+    fn run_streaming(
+        &self,
+        _: &usecases::command_runner::CommandRequest,
+    ) -> Result<usecases::command_runner::CommandOutcome> {
+        anyhow::bail!("running external commands requires a Unix host (spec §7.1)")
+    }
+}
+
+#[cfg(not(unix))]
+fn default_command_runner() -> Box<dyn CommandRunner> {
+    Box::new(UnsupportedCommandRunner)
+}
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
@@ -292,6 +320,9 @@ pub fn run() -> Result<()> {
                     LanguageCheckStatus::Failed { exit_code } => {
                         println!("[{}] failed (exit {exit_code})", result.language)
                     }
+                    LanguageCheckStatus::KilledBySignal => {
+                        println!("[{}] failed (killed by signal)", result.language)
+                    }
                     LanguageCheckStatus::TimedOut => println!("[{}] timed out", result.language),
                     LanguageCheckStatus::Skipped => println!("[{}] skipped", result.language),
                 }
@@ -313,7 +344,7 @@ fn build_controller_no_root() -> Result<Controller> {
         Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SessionRepositoryImpl),
         Box::new(ConfigImpl),
-        Box::new(crate::command_runner_impl::UnixCommandRunner),
+        default_command_runner(),
     );
     Ok(Controller::new(service))
 }
@@ -680,7 +711,7 @@ fn build_controller() -> Result<Controller> {
         Box::new(SolutionRepositoryImpl::new(root.clone())),
         Box::new(SessionRepositoryImpl),
         Box::new(ConfigImpl),
-        Box::new(crate::command_runner_impl::UnixCommandRunner),
+        default_command_runner(),
     );
 
     Ok(Controller::new(service))

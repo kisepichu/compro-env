@@ -38,7 +38,14 @@ pub enum CheckSelection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LanguageCheckStatus {
     Passed,
-    Failed { exit_code: i32 },
+    Failed {
+        exit_code: i32,
+    },
+    /// Child was terminated by an external signal before returning an exit
+    /// code. Kept distinct from `Failed { exit_code: -1 }` so the summary can
+    /// report the real cause and callers do not confuse it with a program that
+    /// actually returned `-1`.
+    KilledBySignal,
     TimedOut,
     Skipped,
 }
@@ -139,16 +146,13 @@ pub fn run_checks(
                             eprintln!("[{language_id}] passed");
                             LanguageCheckStatus::Passed
                         }
-                        // The runner reports a killed-by-signal child as
-                        // `exit_code = None`. Treat that as a failure so
-                        // aggregate_success reflects reality.
                         Some(code) => {
                             eprintln!("[{language_id}] failed (exit {code})");
                             LanguageCheckStatus::Failed { exit_code: code }
                         }
                         None => {
                             eprintln!("[{language_id}] failed (killed by signal)");
-                            LanguageCheckStatus::Failed { exit_code: -1 }
+                            LanguageCheckStatus::KilledBySignal
                         }
                     }
                 }
