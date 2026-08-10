@@ -76,6 +76,8 @@ Invoke `/pr` with `main` as the explicit base. The PR body must link the approve
 
 Invoke `/pr-review`. Address or explain every comment, resolve only replied threads, and continue the Copilot re-review loop until it reports no comments or no new comments.
 
+**Do not run the `/pr-review` waiter from inside a spawned subagent.** The `wait-*-review.py` scripts are started with `run_in_background: true` and then the caller ends its turn to wait for the completion notification. A subagent with no live children is treated as completed by the harness, so its background wait is torn down and the review loop stops mid-poll (observed on plan 039). Run the waiter from the top-level agent that owns this rollout, or keep the whole leaf plan (implementation + PR + review) inside a single non-subagent session. If the implementation was delegated to a subagent, the top-level agent must take the PR-review loop back once the subagent finishes pushing.
+
 - [ ] **Step 8: Merge before unlocking dependents**
 
 After required checks and review pass, merge to `main`. Dependent workers must verify the merged state themselves rather than relying only on a plan checkbox.
