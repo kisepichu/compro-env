@@ -1,4 +1,7 @@
 use anyhow::Result;
+use domain::library::LibraryProjectConfig;
+use std::path::Path;
+use usecases::check::{CheckSelection, CheckSummary};
 use usecases::service::Service;
 
 pub mod input;
@@ -74,5 +77,17 @@ impl Controller {
             &args.problem_code(),
             &args.solution_name(),
         )
+    }
+
+    /// Runs `ce check` against the given project config. The shell layer is
+    /// responsible for parsing `--language` into `selection` and locating the
+    /// repository root, so this pass-through stays free of clap types.
+    pub fn check(
+        &self,
+        config: &LibraryProjectConfig,
+        selection: &CheckSelection,
+        repository_root: &Path,
+    ) -> Result<CheckSummary> {
+        self.service.check(config, selection, repository_root)
     }
 }

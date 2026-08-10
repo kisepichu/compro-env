@@ -260,6 +260,7 @@ mod tests {
             solution_repository::SolutionRepository,
         },
         service::Service,
+        test_support::SpawningCommandRunner,
     };
     use anyhow::Result;
     use domain::entity::{Contest, Language, OJKind, Problem, Sample, Session, Solution};
@@ -501,6 +502,7 @@ mod tests {
                 submit_file: "src/main.rs".to_string(),
                 submit_preprocess: None,
             }),
+            Box::new(SpawningCommandRunner),
         );
         (service, received, dir)
     }
@@ -555,6 +557,7 @@ mod tests {
                 submit_file: "src/main.rs".to_string(),
                 submit_preprocess: None,
             }),
+            Box::new(SpawningCommandRunner),
         )
     }
 
@@ -614,6 +617,7 @@ mod tests {
                 submit_file: "src/main.rs".to_string(),
                 submit_preprocess: None,
             }),
+            Box::new(SpawningCommandRunner),
         );
         service.submit("abc001", "a", "main").unwrap();
         // The OJ resolved for submission is the one stored in .ce.toml.
@@ -833,6 +837,7 @@ mod tests {
                 submit_file: "src/main.rs".to_string(),
                 submit_preprocess: preprocess,
             }),
+            Box::new(SpawningCommandRunner),
         );
         (service, received, dir)
     }

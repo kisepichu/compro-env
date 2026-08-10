@@ -22,11 +22,17 @@ ce test <contest_id> <problem_code> [solution_name]
 
 1. `contest_id` と `problem_code` を小文字に正規化する (`ce init` と同様)
 2. `solutions/{contest_id}/{problem_code}/{solution_name}/ce.toml` を読む
-3. `test_command` を `sh -c` 経由で実行する
+3. `test_command` を共通の `CommandRunner` 経由 (`sh -c <command>`) で実行する。
+   `ce check` と同じ実装を再利用しており、プロセスグループ管理と timeout 制御が入る (詳細: `docs/commands/check.md`, spec §7.1)。
    - 作業ディレクトリ: 解法ディレクトリ (`solutions/{contest_id}/{problem_code}/{solution_name}/`)
-   - 環境変数 `CE_TESTCASES_DIR` に `solutions/{contest_id}/testcases/{problem_code}/` の絶対パスをセット
+   - タイムアウト: `test_timeout_seconds` (既定 600 秒、正の整数のみ許可、`ce.toml` に書く)
+   - 環境変数は親から丸ごと継承しない。以下だけを明示的に渡す:
+     - `PATH` (親から継承。`sh` および外部ツール解決に必須)
+     - `HOME`, `TERM` (親に設定されていれば継承)
+     - `CE_TESTCASES_DIR` に `solutions/{contest_id}/testcases/{problem_code}/` の絶対パスをセット
 4. 標準出力・標準エラーはそのまま端末に流す
-5. `test_command` の終了コードをそのまま `ce test` の終了コードとして返す
+5. `test_command` の終了コードをそのまま `ce test` の終了コードとして返す。
+   タイムアウトは exit 124 として扱い、stderr に `test_command timed out after Ns` を出す
 
 Unix 環境では `ce sub` が提出前にこのテスト処理を実行し、終了コードが 0 以外なら提出 URL を生成しない（詳細: `docs/commands/submit.md`）。
 
@@ -53,6 +59,7 @@ Unix 環境では `ce sub` が提出前にこのテスト処理を実行し、�
 - 解法ディレクトリが存在しない: `ce init` を実行するよう促して exit 1
 - 解法ディレクトリはあるが `ce.toml` がない: テンプレートに `ce.toml.tera` を追加するよう促して exit 1
 - `test_command` キーが未定義: エラーメッセージを表示して exit 1
+- `test_timeout_seconds` が非正整数 (0 や負数): エラーメッセージを表示して exit 1
 - 非 Unix 環境で実行した: 未対応であることを表示して exit 1
 - コマンド起動失敗 (`sh` が見つからない等): エラーメッセージを表示して exit 1
 

@@ -1,3 +1,5 @@
+#[cfg(unix)]
+pub mod command_runner_impl;
 pub mod config_impl;
 pub mod library_adapter;
 pub mod library_project;

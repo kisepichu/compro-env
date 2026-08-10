@@ -42,11 +42,11 @@ pub trait CommandRunner {
 }
 ```
 
-- [ ] Write failing tests for stdout/stderr streaming, exit code, environment replacement, timeout,
+- [x] Write failing tests for stdout/stderr streaming, exit code, environment replacement, timeout,
       SIGTERM then five-second SIGKILL, child process-group death, and subsequent command execution.
-- [ ] Implement `UnixCommandRunner`; never use `sh -c` inside the runner.
-- [ ] Run `cargo test -p infrastructure --test command_runner`.
-- [ ] Invoke `/commit` with `feat: run commands with streaming timeouts`.
+- [x] Implement `UnixCommandRunner`; never use `sh -c` inside the runner.
+- [x] Run `cargo test -p infrastructure --test command_runner`.
+- [x] Invoke `/commit` with `feat: run commands with streaming timeouts`.
 
 ### Task 2: Implement `ce check` and migrate solution tests
 
@@ -74,18 +74,20 @@ pub fn run_checks(
 ) -> Result<CheckSummary>;
 ```
 
-- [ ] Write failing tests for stable order, filter, skip, aggregate failure, configured/default timeout,
+- [x] Write failing tests for stable order, filter, skip, aggregate failure, configured/default timeout,
       continued execution, exported `CE_*` paths/language, and no solution `test_command` execution.
-- [ ] Implement `ce check [--language <id>]`; use project-local config and direct argv commands.
-- [ ] Migrate `Service::test` to the runner with default `test_timeout_seconds = 600` without behavior drift.
-- [ ] Run `cargo test -p usecases check`, `cargo test -p usecases service::test`, and
+- [x] Implement `ce check [--language <id>]`; use project-local config and direct argv commands.
+- [x] Migrate `Service::test` to the runner with default `test_timeout_seconds = 600` without behavior drift.
+- [x] Run `cargo test -p usecases check`, `cargo test -p usecases service::test`, and
       `cargo test -p infrastructure check_command`.
-- [ ] Invoke `/commit` with `feat: add project library checks`.
+- [x] Invoke `/commit` with `feat: add project library checks`.
 
 ### Task 3: Deliver check
 
-- [ ] Run a mixed fixture where one language fails and prove all selected languages ran.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record library check completion`.
+- [x] Run a mixed fixture where one language fails and prove all selected languages ran.
+      Covered by `crates/infrastructure/tests/check_command.rs::aggregate_failure_records_all_results`
+      and `::continues_after_middle_failure` (both green).
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record library check completion`.
 - [ ] Invoke `/pr --base main`; link plan 054 and state that it unblocks plan 055.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
