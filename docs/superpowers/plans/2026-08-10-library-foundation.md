@@ -46,7 +46,7 @@
   `ToolchainIdentity`.
 - Produces: `schema::analysis_schema() -> schemars::Schema` and `schema::write_analysis_schema(&Path) -> anyhow::Result<()>`.
 
-- [ ] **Step 1: Register the crate and write a failing round-trip test**
+- [x] **Step 1: Register the crate and write a failing round-trip test**
 
 Add the workspace member and shared dependencies `schemars = "1"` and `sha2 = "0.10"`. Write this test shape in `tests/protocol.rs`:
 
@@ -69,13 +69,13 @@ fn empty_protocol_fixture_round_trips() {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and observe the missing API**
+- [x] **Step 2: Run the focused test and observe the missing API**
 
 Run: `cargo test -p library-adapter-protocol --test protocol empty_protocol_fixture_round_trips`
 
 Expected: compilation fails because the protocol types and constant do not exist.
 
-- [ ] **Step 3: Define strict protocol v1 types**
+- [x] **Step 3: Define strict protocol v1 types**
 
 Use `#[serde(deny_unknown_fields)]` on structs and snake-case tagged enums. The central signatures are:
 
@@ -107,7 +107,7 @@ pub enum Dependency {
 
 Represent analysis state as `Complete`, `Partial`, or `Failed`; diagnostic severity as `Info`, `Warning`, or `Error`. Keep symbol `kind` as a validated string in the core rather than a protocol enum.
 
-- [ ] **Step 4: Add strict invalid-version and unknown-field tests**
+- [x] **Step 4: Add strict invalid-version and unknown-field tests**
 
 Deserialize `invalid-version-response.json`, then validate through a helper:
 
@@ -119,7 +119,7 @@ pub fn validate_version(actual: u32) -> Result<(), ProtocolVersionError> {
 
 Assert version `2` is rejected and an added unknown JSON key fails serde deserialization.
 
-- [ ] **Step 5: Generate and compare the checked-in schema**
+- [x] **Step 5: Generate and compare the checked-in schema**
 
 Add a test that writes `analysis_schema()` to a temporary file and compares normalized bytes with `analysis-v1.schema.json`. Regenerate the checked-in file through a small test-only example or `write_analysis_schema` call; do not hand-maintain a second schema.
 
@@ -127,7 +127,7 @@ Run: `cargo test -p library-adapter-protocol`
 
 Expected: all protocol, fixture, version, and schema-drift tests pass.
 
-- [ ] **Step 6: Commit the protocol boundary**
+- [x] **Step 6: Commit the protocol boundary**
 
 Invoke `/commit` with explicit protocol/workspace paths and message:
 
@@ -148,9 +148,9 @@ feat: define strict library adapter protocol
 - Produces: `LibraryId::parse(&str) -> Result<LibraryId, IdError>`.
 - Produces: `SolutionId::parse(&str) -> Result<SolutionId, IdError>`.
 - Produces: `LibraryProjectConfig`, `LanguageConfig`, `AnalyzerConfig`, `SiteConfig`, and `ExpectedToolchain`.
-- Produces: `LibraryFile`, `PublishedSolution`, `DiscoveryManifest`, `AnalysisSnapshot`, and `TargetAnalysisState`.
+- Produces: `LibraryFile`, `PublishedSolution`, `DiscoveryManifest` (with a `Vec<DiscoveryDiagnostic>` for non-fatal warnings such as empty-language and orphan sidecars), `AnalysisSnapshot`, and `TargetAnalysisState`.
 
-- [ ] **Step 1: Write failing ID and publication tests**
+- [x] **Step 1: Write failing ID and publication tests**
 
 Add unit tests proving:
 
@@ -163,7 +163,7 @@ assert!(LibraryId::parse("../private.rs").is_err());
 
 Also construct a private `LibraryFile` and assert `managed == true` while `published == false`.
 
-- [ ] **Step 2: Run the domain tests and observe missing modules**
+- [x] **Step 2: Run the domain tests and observe missing modules**
 
 Run these focused filters separately:
 
@@ -175,7 +175,7 @@ cargo test -p domain solution::tests
 
 Expected: compilation fails because the modules and types are absent.
 
-- [ ] **Step 3: Implement IDs and model boundaries**
+- [x] **Step 3: Implement IDs and model boundaries**
 
 Use newtypes with private strings. Validate language IDs against `[a-z][a-z0-9-]*`; validate repository paths component-by-component without Unicode normalization or case folding. Define:
 
@@ -198,7 +198,7 @@ pub struct AnalysisSnapshot {
 
 Keep `domain::entity::Solution` unchanged for current CLI commands; the new `PublishedSolution` represents discovery metadata and avoids a broad refactor.
 
-- [ ] **Step 4: Add stable-order and state-separation tests**
+- [x] **Step 4: Add stable-order and state-separation tests**
 
 Prove libraries sort by ID bytes, dependency and symbol states remain independent, and cyclic direct edges are representable without graph traversal.
 
@@ -206,7 +206,7 @@ Run: `cargo test -p domain`
 
 Expected: all old and new domain tests pass.
 
-- [ ] **Step 5: Commit the domain boundary**
+- [x] **Step 5: Commit the domain boundary**
 
 Invoke `/commit` with message:
 
@@ -228,7 +228,7 @@ feat: model library discovery and analysis state
 - Produces: `ProjectLibraryConfigLoader::load(repository_root: &Path) -> anyhow::Result<LibraryProjectConfig>`.
 - Consumes: domain configuration types from Task 2.
 
-- [ ] **Step 1: Write failing strict-config tests**
+- [x] **Step 1: Write failing strict-config tests**
 
 Cover a valid three-language config and assertions for missing root/include/analyzer command, empty command arrays, unknown keys, invalid language IDs, invalid timeouts, duplicate toolchains, and missing production site metadata.
 
@@ -239,17 +239,17 @@ assert_eq!(config.languages.keys().map(LanguageId::as_str).collect::<Vec<_>>(),
 assert_eq!(config.languages[&LanguageId::parse("rust").unwrap()].analyzer.timeout_seconds, 600);
 ```
 
-- [ ] **Step 2: Run the focused tests and observe the missing loader**
+- [x] **Step 2: Run the focused tests and observe the missing loader**
 
 Run: `cargo test -p infrastructure library_project::config`
 
 Expected: compilation fails because `ProjectLibraryConfigLoader` does not exist.
 
-- [ ] **Step 3: Implement serde-backed strict parsing**
+- [x] **Step 3: Implement serde-backed strict parsing**
 
 Parse only `<repository_root>/config.toml`; do not call `ConfigImpl` or inspect `CE_CONFIG_DIR`. Use private raw `Deserialize` structs with `deny_unknown_fields`, then validate into domain types. Root/analyzer relative paths stay repository-relative and commands remain argv arrays.
 
-- [ ] **Step 4: Prove global config is ignored**
+- [x] **Step 4: Prove global config is ignored**
 
 Set `CE_CONFIG_DIR` to a fixture containing a conflicting `[library]` section and assert the repository config wins unchanged.
 
@@ -257,7 +257,7 @@ Run: `cargo test -p infrastructure library_project::config`
 
 Expected: all strict config tests pass without reading the user-global file.
 
-- [ ] **Step 5: Commit project configuration**
+- [x] **Step 5: Commit project configuration**
 
 Invoke `/commit` with message:
 
@@ -283,25 +283,25 @@ feat: parse project-local library configuration
 - Produces: `LibraryDiscovery::discover(&Path, &LibraryProjectConfig) -> anyhow::Result<DiscoveryManifest>`.
 - Produces: `parse_library_sidecar(&Path) -> anyhow::Result<LibraryMetadata>` and `parse_directory_index(&Path) -> anyhow::Result<DirectoryMetadata>`.
 
-- [ ] **Step 1: Write failing mixed-language discovery tests**
+- [x] **Step 1: Write failing mixed-language discovery tests**
 
 Assert the fixture returns four libraries ordered by repository path, retains `private.rs` as managed, marks only that file unpublished, and associates `source.ext.md` without treating it as source.
 
-- [ ] **Step 2: Run the discovery test and observe the missing implementation**
+- [x] **Step 2: Run the discovery test and observe the missing implementation**
 
 Run: `cargo test -p infrastructure --test library_discovery`
 
 Expected: compilation fails because `LibraryDiscovery` is absent.
 
-- [ ] **Step 3: Implement include/exclude enumeration**
+- [x] **Step 3: Implement include/exclude enumeration**
 
 Use `walkdir` without following links and `globset` against `/`-separated paths relative to each language root. Reject missing roots and symlink candidates, warn through a returned diagnostics collection for zero matches, and sort final IDs by raw UTF-8 bytes.
 
-- [ ] **Step 4: Implement strict TOML frontmatter parsing**
+- [x] **Step 4: Implement strict TOML frontmatter parsing**
 
 Support sidecar keys `title`, `publish`, `relations`, and `dependency_overrides`; support only `title` in `_index.md`. Require `+++` TOML fences when frontmatter exists and reject orphan sidecars, malformed TOML, empty titles, and unknown keys.
 
-- [ ] **Step 5: Add failure fixtures**
+- [x] **Step 5: Add failure fixtures**
 
 Create temporary tests for excluded files, orphan sidecars, malformed frontmatter, symlinked files/directories, root escape attempts, duplicate relations, and `_index.md` unknown keys.
 
@@ -309,7 +309,7 @@ Run: `cargo test -p infrastructure --test library_discovery`
 
 Expected: success and stable results across reversed fixture creation order.
 
-- [ ] **Step 6: Commit library discovery**
+- [x] **Step 6: Commit library discovery**
 
 Invoke `/commit` with message:
 
@@ -331,21 +331,21 @@ feat: discover managed library sources
 - Produces: strict parsing of `publish`, RFC 3339 `solved_at`, `test_command`, `test_timeout_seconds`, and optional `[verify]` into `PublishedSolution`.
 - Produces: solution ID `{contest_id}/{problem_code}/{solution_name}` and entry path from language configuration.
 
-- [ ] **Step 1: Write failing opt-in publication tests**
+- [x] **Step 1: Write failing opt-in publication tests**
 
 Assert the LibraryChecker fixture is public with an explicit `solved_at`, while the private fixture is omitted from adapter solution targets. Assert `[verify]` on a private solution is rejected.
 
-- [ ] **Step 2: Run the focused tests and observe missing solution parsing**
+- [x] **Step 2: Run the focused tests and observe missing solution parsing**
 
 Run: `cargo test -p infrastructure --test solution_discovery`
 
 Expected: tests fail because solution discovery is not wired.
 
-- [ ] **Step 3: Parse solution and contest metadata**
+- [x] **Step 3: Parse solution and contest metadata**
 
 Read each `solutions/<contest>/<problem>/<solution>/ce.toml` and the contest `.ce.toml`. Preserve current CLI keys while rejecting unknown library-publication keys. Require timezone-bearing RFC 3339 `solved_at` for public or verified solutions; do not infer time from Git or filesystems.
 
-- [ ] **Step 4: Validate verify references and orphan results structurally**
+- [x] **Step 4: Validate verify references and orphan results structurally**
 
 Require non-empty unique `[verify].libraries`, explicit or project-mapped OJ language ID, and public
 direct targets. Because a solution ID is `{contest_id}/{problem_code}/{solution_name}`, its result path is
@@ -356,7 +356,7 @@ Run: `cargo test -p infrastructure --test solution_discovery`
 
 Expected: public/private, invalid time, missing test command for verify, and unknown-language cases all pass.
 
-- [ ] **Step 5: Commit solution discovery**
+- [x] **Step 5: Commit solution discovery**
 
 Invoke `/commit` with message:
 
@@ -378,25 +378,25 @@ feat: discover public and verified solutions
 - Produces: direct internal edges only; reverse edges and transitive closure are pure methods on `AnalysisSnapshot`.
 - Consumes: protocol v1 responses and Task 2 domain models.
 
-- [ ] **Step 1: Write a failing three-language normalization test**
+- [x] **Step 1: Write a failing three-language normalization test**
 
 Load one response for each language, normalize them, and assert source hashes, direct edges, reverse edges, a cyclic closure, independent dependency/symbol state, observed toolchains, and a stable snapshot hash.
 
-- [ ] **Step 2: Run the focused test and observe the missing pipeline**
+- [x] **Step 2: Run the focused test and observe the missing pipeline**
 
 Run: `cargo test -p usecases --test library_analysis`
 
 Expected: compilation fails because `normalize_analysis` is absent.
 
-- [ ] **Step 3: Validate response completeness before normalization**
+- [x] **Step 3: Validate response completeness before normalization**
 
 Reject schema mismatch, wrong adapter language target sets, missing/extra/duplicate libraries or solutions, unsafe paths, internal dependencies outside the same language manifest, duplicate toolchain names, invalid locations, and transitive fixture edges marked as direct-contract violations.
 
-- [ ] **Step 4: Normalize and hash deterministic state**
+- [x] **Step 4: Normalize and hash deterministic state**
 
 Sort all maps/arrays by the specification, SHA-256 source bytes and canonical JSON, derive reverse edges and cycle-safe closures, and keep adapter diagnostics separate from public projection. Do not add a cross-run cache.
 
-- [ ] **Step 5: Add negative and stability tests**
+- [x] **Step 5: Add negative and stability tests**
 
 Prove shuffled inputs have the same snapshot hash and test every rejection from Step 3. Prove changing only adapter/toolchain identity leaves source closure hashes unchanged while observed identity remains recorded.
 
@@ -404,7 +404,7 @@ Run: `cargo test -p usecases --test library_analysis`
 
 Expected: all mixed-language, malformed-response, and deterministic-hash tests pass.
 
-- [ ] **Step 6: Commit snapshot normalization**
+- [x] **Step 6: Commit snapshot normalization**
 
 Invoke `/commit` with message:
 
@@ -417,7 +417,7 @@ feat: normalize immutable library analysis snapshots
 **Files:**
 - Modify: `docs/superpowers/plans/2026-08-10-library-foundation.md`
 
-- [ ] **Step 1: Run the plan integration suite**
+- [x] **Step 1: Run the plan integration suite**
 
 ```bash
 cargo test -p library-adapter-protocol
@@ -429,7 +429,7 @@ cargo test -p usecases --test library_analysis
 
 Expected: all commands exit 0.
 
-- [ ] **Step 2: Run repository-wide verification**
+- [x] **Step 2: Run repository-wide verification**
 
 ```bash
 cargo test --all
@@ -440,7 +440,7 @@ git diff --check origin/main...HEAD
 
 Expected: all commands exit 0; no CLI behavior changes.
 
-- [ ] **Step 3: Commit checked plan progress**
+- [x] **Step 3: Commit checked plan progress**
 
 Invoke `/commit` with message:
 
@@ -448,7 +448,7 @@ Invoke `/commit` with message:
 docs: record library foundation completion
 ```
 
-- [ ] **Step 4: Open and review the PR**
+- [x] **Step 4: Open and review the PR**
 
 Invoke `/pr --base main`, then `/pr-review` until Copilot reports no comments or no new
 comments. Merge only after CI succeeds. This PR unblocks plans 040 and 054.
