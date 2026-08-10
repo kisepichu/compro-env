@@ -2418,7 +2418,7 @@ pagination
 - card 内の symbol / source line sub-result は最大 5 件とし、detail の該当 anchor へ link する。
 - 5 件を超える場合は `ほか N 件` と detail page への link を表示する。
 - pagination は Previous、Next、現在 page を表示し、すべての link で `q` を維持する。
-- 不正、0、範囲外の `page` は query error にせず 1 へ canonicalize する。
+- missing、不正、0、範囲外の `page` は query error にせず 1 へ canonicalize する。
 - `<noscript>` は検索に JavaScript が必要な旨と Libraries / Solutions の browse link を持つ。
 - 検索 page 自身、parsed filter UI、status message、pagination を Pagefind index から除外する。
 

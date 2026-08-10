@@ -343,8 +343,11 @@ main
 Search URL:
 
 ```text
-/search/?q={query}&page={positive-integer}
+/search/?q={query}[&page={positive-integer}]
 ```
+
+`page` は任意で、省略時は 1 とする。global search form は `q` だけを送り、pagination link は
+`q` を保持して `page` を明示する。
 
 状態:
 
@@ -370,7 +373,7 @@ Search URL:
 - sub-result は symbol location または `L*` へ直接 link。
 - 5 件を超える場合は `ほか N 件` と detail page への link を表示する。
 - Previous / Next は `q` を維持する。
-- 不正または範囲外 page は 1 へ canonicalize する。
+- missing、不正、0、範囲外 page は 1 へ canonicalize する。
 - 検索 page 自体と検索 UI は Pagefind index から除外する。
 
 ## 11. Static 404
