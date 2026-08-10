@@ -3,12 +3,15 @@ pub mod commands;
 use anyhow::Result;
 use clap::Parser;
 use commands::{
-    Cli, InitCommand, LoginCommand, LogoutCommand, SubmitCommand, TestCommand, WhoamiCommand,
+    CheckCommand, Cli, InitCommand, LoginCommand, LogoutCommand, SubmitCommand, TestCommand,
+    WhoamiCommand,
 };
 use domain::entity::OJKind;
+use domain::library::LanguageId;
 
 use crate::{
     config_impl::ConfigImpl,
+    library_project::config::ProjectLibraryConfigLoader,
     online_judge_impl::registry::OnlineJudgeRegistryImpl,
     repository_impl::{
         contest_repository_impl::ContestRepositoryImpl,
@@ -17,6 +20,8 @@ use crate::{
     },
 };
 use interfaces::controller::Controller;
+use interfaces::controller::input::CheckInput;
+use usecases::check::{CheckSelection, LanguageCheckStatus};
 use usecases::config::Config as _;
 use usecases::online_judge::{CredentialKind, Credentials, SubmitOutcome};
 use usecases::service::Service;
@@ -246,6 +251,56 @@ pub fn run() -> Result<()> {
                 }
             }
         }
+        commands::Commands::Check { language } => {
+            let root = match find_project_root() {
+                Ok(root) => root,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            let config = match ProjectLibraryConfigLoader::load(&root) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("{e:#}");
+                    std::process::exit(1);
+                }
+            };
+            let input = CheckCommand { language };
+            let selection = match input.language() {
+                Some(id) => match LanguageId::parse(&id) {
+                    Ok(parsed) => CheckSelection::Language(parsed),
+                    Err(e) => {
+                        eprintln!("invalid --language value: {e}");
+                        std::process::exit(1);
+                    }
+                },
+                None => CheckSelection::All,
+            };
+            let controller = build_controller()?;
+            let summary = match controller.check(&config, &selection, &root) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("{e:#}");
+                    std::process::exit(1);
+                }
+            };
+            let failed = !summary.aggregate_success();
+            for result in &summary.results {
+                match &result.status {
+                    LanguageCheckStatus::Passed => println!("[{}] passed", result.language),
+                    LanguageCheckStatus::Failed { exit_code } => {
+                        println!("[{}] failed (exit {exit_code})", result.language)
+                    }
+                    LanguageCheckStatus::TimedOut => println!("[{}] timed out", result.language),
+                    LanguageCheckStatus::Skipped => println!("[{}] skipped", result.language),
+                }
+            }
+            if failed {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
     }
 }
 
@@ -258,6 +313,7 @@ fn build_controller_no_root() -> Result<Controller> {
         Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SessionRepositoryImpl),
         Box::new(ConfigImpl),
+        Box::new(crate::command_runner_impl::UnixCommandRunner),
     );
     Ok(Controller::new(service))
 }
@@ -624,6 +680,7 @@ fn build_controller() -> Result<Controller> {
         Box::new(SolutionRepositoryImpl::new(root.clone())),
         Box::new(SessionRepositoryImpl),
         Box::new(ConfigImpl),
+        Box::new(crate::command_runner_impl::UnixCommandRunner),
     );
 
     Ok(Controller::new(service))

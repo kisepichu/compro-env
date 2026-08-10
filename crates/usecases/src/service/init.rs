@@ -225,6 +225,7 @@ mod tests {
             solution_repository::SolutionRepository,
         },
         service::Service,
+        test_support::SpawningCommandRunner,
     };
 
     // ── Stub helpers ──────────────────────────────────────────────────────────
@@ -434,6 +435,7 @@ mod tests {
             Box::new(solution_repo),
             Box::new(StubSessionRepo { session }),
             Box::new(StubConfig),
+            Box::new(SpawningCommandRunner),
         )
     }
 
@@ -538,6 +540,7 @@ mod tests {
                 session: Some(session),
             }),
             Box::new(StubConfig),
+            Box::new(SpawningCommandRunner),
         );
 
         let _ = service.init(
@@ -612,6 +615,7 @@ mod tests {
             }),
             Box::new(StubSessionRepo { session: None }),
             Box::new(StubConfig),
+            Box::new(SpawningCommandRunner),
         );
 
         let result = service

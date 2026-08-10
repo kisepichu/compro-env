@@ -69,6 +69,7 @@ mod tests {
             solution_repository::SolutionRepository,
         },
         service::Service,
+        test_support::SpawningCommandRunner,
     };
     use anyhow::Result;
     use domain::entity::{Contest, Language, OJKind, Problem, Sample, Session, Solution};
@@ -234,6 +235,7 @@ mod tests {
             Box::new(StubSolutionRepo { solution_exists }),
             Box::new(StubSession),
             Box::new(StubConfig),
+            Box::new(SpawningCommandRunner),
         )
     }
 

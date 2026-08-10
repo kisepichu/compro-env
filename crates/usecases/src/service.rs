@@ -2,6 +2,8 @@ use anyhow::Result;
 use domain::entity::OJKind;
 
 use crate::{
+    check::{CheckSelection, CheckSummary, run_checks},
+    command_runner::CommandRunner,
     config::Config,
     online_judge::{OnlineJudge, OnlineJudgeRegistry},
     repository::{
@@ -24,6 +26,7 @@ pub struct Service {
     pub(crate) solution_repo: Box<dyn SolutionRepository>,
     pub(crate) session_repo: Box<dyn SessionRepository>,
     pub(crate) config: Box<dyn Config>,
+    pub(crate) command_runner: Box<dyn CommandRunner>,
 }
 
 impl Service {
@@ -33,6 +36,7 @@ impl Service {
         solution_repo: Box<dyn SolutionRepository>,
         session_repo: Box<dyn SessionRepository>,
         config: Box<dyn Config>,
+        command_runner: Box<dyn CommandRunner>,
     ) -> Self {
         Self {
             oj_registry,
@@ -40,7 +44,24 @@ impl Service {
             solution_repo,
             session_repo,
             config,
+            command_runner,
         }
+    }
+
+    /// Runs project-local library checks (`ce check`). Delegates to
+    /// [`crate::check::run_checks`] using the injected command runner.
+    pub fn check(
+        &self,
+        config: &domain::library::LibraryProjectConfig,
+        selection: &CheckSelection,
+        repository_root: &std::path::Path,
+    ) -> Result<CheckSummary> {
+        run_checks(
+            config,
+            selection,
+            self.command_runner.as_ref(),
+            repository_root,
+        )
     }
 
     /// Resolves the `OnlineJudge` implementation for `oj` via the registry.

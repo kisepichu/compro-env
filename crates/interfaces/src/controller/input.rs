@@ -38,3 +38,9 @@ pub trait SubmitInput {
     fn problem_code(&self) -> String;
     fn solution_name(&self) -> String;
 }
+
+pub trait CheckInput {
+    /// `--language <id>` argument if the user narrowed the run; `None` means
+    /// "check every configured language".
+    fn language(&self) -> Option<String>;
+}
