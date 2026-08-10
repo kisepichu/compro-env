@@ -348,8 +348,9 @@ Read each `solutions/<contest>/<problem>/<solution>/ce.toml` and the contest `.c
 - [ ] **Step 4: Validate verify references and orphan results structurally**
 
 Require non-empty unique `[verify].libraries`, explicit or project-mapped OJ language ID, and public
-direct targets. Define the path expected under `verification/results/<solution-id>.json`; actual result
-parsing belongs to plan 055.
+direct targets. Because a solution ID is `{contest_id}/{problem_code}/{solution_name}`, its result path is
+`verification/results/{contest_id}/{problem_code}/{solution_name}.json`; actual result parsing belongs to
+plan 055.
 
 Run: `cargo test -p infrastructure --test solution_discovery`
 
