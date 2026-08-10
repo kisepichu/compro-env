@@ -88,5 +88,5 @@ pub struct ProcessLibraryAdapterRunner;
 - [x] Run `cargo test -p domain -p usecases -p infrastructure adapter`.
 - [x] Run the repository-wide verification commands from the rollout plan and `git diff --check`.
 - [x] Invoke `/commit` with `docs: record adapter process completion` after checking this plan's boxes.
-- [ ] Invoke `/pr --base main`; link plan 040 and state that it unblocks plan 041.
+- [x] Invoke `/pr --base main`; link plan 040 and state that it unblocks plan 041.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
