@@ -3,5 +3,7 @@
 //! Everything here is I/O heavy on purpose so the domain and use-case layers
 //! can stay platform-agnostic.
 
+pub mod archive;
 pub mod inputs;
+pub mod prepared;
 pub mod process;
