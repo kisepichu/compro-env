@@ -2309,7 +2309,10 @@ dependencies = [
  "anyhow",
  "chrono",
  "domain",
+ "library-adapter-protocol",
  "mockall",
+ "serde_json",
+ "sha2",
  "tempfile",
  "toml",
 ]

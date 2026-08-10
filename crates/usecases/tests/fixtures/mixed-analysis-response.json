@@ -1,0 +1,124 @@
+{
+  "rust": {
+    "schema_version": 1,
+    "adapter": {
+      "name": "example-rust-analyzer",
+      "version": "1.0.0",
+      "toolchains": [
+        { "name": "rustc", "version": "1.92.0", "target": "x86_64-unknown-linux-gnu" },
+        { "name": "cargo", "version": "1.92.0" }
+      ]
+    },
+    "libraries": [
+      {
+        "path": "libraries/rust/a.rs",
+        "dependency_analysis": {
+          "state": "complete",
+          "dependencies": [
+            { "kind": "internal", "path": "libraries/rust/b.rs" },
+            { "kind": "internal", "path": "libraries/rust/b.rs" },
+            { "kind": "external", "name": "std::ops::Add" }
+          ]
+        },
+        "symbol_analysis": {
+          "state": "partial",
+          "symbols": [
+            {
+              "name": "A",
+              "kind": "struct",
+              "qualified_name": "a::A",
+              "search_names": ["A"],
+              "location": {
+                "path": "libraries/rust/a.rs",
+                "start": { "line": 1, "column": 1 }
+              }
+            }
+          ]
+        },
+        "diagnostics": []
+      },
+      {
+        "path": "libraries/rust/b.rs",
+        "dependency_analysis": {
+          "state": "complete",
+          "dependencies": [
+            { "kind": "internal", "path": "libraries/rust/a.rs" }
+          ]
+        },
+        "symbol_analysis": {
+          "state": "complete",
+          "symbols": []
+        },
+        "diagnostics": []
+      }
+    ],
+    "solutions": [
+      {
+        "id": "librarychecker-aplusb/aplusb/main",
+        "dependency_analysis": {
+          "state": "complete",
+          "dependencies": [
+            { "kind": "internal", "path": "libraries/rust/a.rs" }
+          ]
+        },
+        "diagnostics": []
+      }
+    ]
+  },
+  "cpp": {
+    "schema_version": 1,
+    "adapter": {
+      "name": "example-cpp-analyzer",
+      "version": "1.0.0",
+      "toolchains": [
+        { "name": "clang", "version": "22.1.0" }
+      ]
+    },
+    "libraries": [
+      {
+        "path": "libraries/cpp/monoid.hpp",
+        "dependency_analysis": {
+          "state": "complete",
+          "dependencies": []
+        },
+        "symbol_analysis": {
+          "state": "complete",
+          "symbols": []
+        },
+        "diagnostics": []
+      }
+    ],
+    "solutions": []
+  },
+  "lean": {
+    "schema_version": 1,
+    "adapter": {
+      "name": "example-lean-analyzer",
+      "version": "1.0.0",
+      "toolchains": [
+        { "name": "lean", "version": "4.30.0" }
+      ]
+    },
+    "libraries": [
+      {
+        "path": "libraries/lean/Monoid.lean",
+        "dependency_analysis": {
+          "state": "failed",
+          "dependencies": []
+        },
+        "symbol_analysis": {
+          "state": "complete",
+          "symbols": []
+        },
+        "diagnostics": [
+          {
+            "severity": "warning",
+            "code": "lean_header_incomplete",
+            "message": "header parse recovered but some imports missing"
+          }
+        ]
+      }
+    ],
+    "solutions": []
+  }
+}
