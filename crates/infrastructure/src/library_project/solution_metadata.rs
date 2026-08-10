@@ -222,12 +222,6 @@ fn validate_verify(raw: RawVerifyBlock, source: &Path) -> anyhow::Result<VerifyB
     let language_id = language_id
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    if language_id.as_deref() == Some("") {
-        bail!(
-            "{}: `[verify].language_id` must not be empty when present",
-            source.display()
-        );
-    }
     Ok(VerifyBlock {
         libraries,
         language_id,
@@ -248,7 +242,7 @@ pub fn resolve_oj_language_id(
     }
     let mapping = library_config.online_judges.get(oj).ok_or_else(|| {
         anyhow!(
-            "no `[verify].language_id` and no `[library.languages.{}].online_judges.{}]`",
+            "no `[verify].language_id` and no `[library.languages.{}.online_judges.{}]`",
             library_config.id,
             oj
         )

@@ -73,6 +73,7 @@ impl LibraryDiscovery {
                 root: language.root.clone(),
                 display_name: language.effective_display_name().to_string(),
                 description_path: index_md_path(&language.root, &root),
+                analyzer_command: language.analyzer.command.clone(),
             };
             languages.insert(language_id.clone(), discovered_language);
 
@@ -323,11 +324,7 @@ fn build_published_solution(
         }
     };
 
-    let entry = ce_toml
-        .verify
-        .as_ref()
-        .map(|_| language_cfg.entry_file.clone())
-        .unwrap_or_else(|| language_cfg.entry_file.clone());
+    let entry = language_cfg.entry_file.clone();
 
     let root = repo_relative_dir(repository_root, solution_dir)?;
 

@@ -35,6 +35,10 @@ pub struct DiscoveredLanguage {
     pub root: String,
     pub display_name: String,
     pub description_path: Option<String>,
+    /// argv the pipeline runs to invoke this language's analyzer adapter
+    /// (spec §6.1, §6.4). Recorded on every `AnalysisSnapshot` so consumers
+    /// can detect that the invocation itself changed between runs.
+    pub analyzer_command: Vec<String>,
 }
 
 /// Non-fatal issues raised during discovery (per pre-decided default #3).
@@ -155,6 +159,10 @@ pub struct NormalizedLanguageAnalysis {
     pub adapter_name: String,
     pub adapter_version: String,
     pub observed_toolchains: Vec<ExpectedToolchain>,
+    /// argv the pipeline used to invoke the analyzer adapter for this
+    /// language, mirrored from `DiscoveredLanguage.analyzer_command` and
+    /// factored into `snapshot_hash` per spec §6.4.
+    pub analyzer_command: Vec<String>,
     pub libraries: BTreeMap<LibraryId, NormalizedLibraryAnalysis>,
     pub solutions: BTreeMap<crate::library::SolutionId, NormalizedSolutionAnalysis>,
 }
@@ -279,6 +287,7 @@ mod tests {
             adapter_name: "test".into(),
             adapter_version: "0".into(),
             observed_toolchains: vec![],
+            analyzer_command: vec!["test-analyzer".into()],
             libraries,
             solutions: BTreeMap::new(),
         };

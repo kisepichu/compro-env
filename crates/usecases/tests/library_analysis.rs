@@ -24,6 +24,7 @@ fn build_manifest() -> DiscoveryManifest {
             root: "libraries/rust".into(),
             display_name: "Rust".into(),
             description_path: None,
+            analyzer_command: vec!["tools/library-analyzers/rust".into()],
         },
     );
     languages.insert(
@@ -33,6 +34,7 @@ fn build_manifest() -> DiscoveryManifest {
             root: "libraries/cpp".into(),
             display_name: "C++".into(),
             description_path: None,
+            analyzer_command: vec!["tools/library-analyzers/cpp".into()],
         },
     );
     languages.insert(
@@ -42,6 +44,7 @@ fn build_manifest() -> DiscoveryManifest {
             root: "libraries/lean".into(),
             display_name: "Lean".into(),
             description_path: None,
+            analyzer_command: vec!["tools/library-analyzers/lean".into()],
         },
     );
 
@@ -100,6 +103,10 @@ fn build_source_bytes() -> BTreeMap<String, Vec<u8>> {
     m.insert("libraries/rust/b.rs".to_string(), b"b".to_vec());
     m.insert("libraries/cpp/monoid.hpp".to_string(), b"monoid".to_vec());
     m.insert("libraries/lean/Monoid.lean".to_string(), b"lean".to_vec());
+    m.insert(
+        "solutions/librarychecker-aplusb/aplusb/main/src/main.rs".to_string(),
+        b"fn main() {}".to_vec(),
+    );
     m
 }
 

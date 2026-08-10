@@ -43,6 +43,7 @@ pub fn normalize_analysis(
     source_bytes: &BTreeMap<String, Vec<u8>>,
 ) -> anyhow::Result<AnalysisSnapshot> {
     validate_response_shape(manifest, &responses)?;
+    validate_source_bytes_coverage(manifest, source_bytes)?;
 
     let mut languages: BTreeMap<LanguageId, NormalizedLanguageAnalysis> = BTreeMap::new();
     for (language_id, response) in responses {
@@ -72,10 +73,43 @@ pub fn normalize_analysis(
 }
 
 fn created_at_utc() -> DateTime<FixedOffset> {
-    // Deterministic timestamp anchor. The plan intentionally keeps
-    // `created_at` an audit field only; it does not participate in
-    // `snapshot_hash` (§6.4).
+    // Wall-clock audit timestamp only. Deliberately excluded from
+    // `snapshot_hash` (§6.4) so two runs over identical inputs still match
+    // by hash even though this field differs.
     Utc::now().fixed_offset()
+}
+
+/// Verify every managed library source and published solution entry path is
+/// present in `source_bytes`. Missing entries would produce an incomplete
+/// `source_hashes` map and an unreliable `snapshot_hash`, so we reject them
+/// up front per spec §6.4 (consumers verify candidate-file hashes).
+fn validate_source_bytes_coverage(
+    manifest: &DiscoveryManifest,
+    source_bytes: &BTreeMap<String, Vec<u8>>,
+) -> anyhow::Result<()> {
+    let mut required: BTreeSet<String> = BTreeSet::new();
+    for lib in &manifest.libraries {
+        required.insert(lib.source_path.clone());
+    }
+    for sol in &manifest.solutions {
+        let mut entry = sol.root.clone();
+        if !entry.ends_with('/') {
+            entry.push('/');
+        }
+        entry.push_str(&sol.entry);
+        required.insert(entry);
+    }
+    let missing: Vec<String> = required
+        .into_iter()
+        .filter(|path| !source_bytes.contains_key(path))
+        .collect();
+    if !missing.is_empty() {
+        bail!(
+            "source_bytes is missing entries required by the manifest: {:?}",
+            missing
+        );
+    }
+    Ok(())
 }
 
 // ─── Response shape validation ──────────────────────────────────────────────
@@ -242,11 +276,18 @@ fn normalize_language(
         .map(convert_toolchain)
         .collect();
 
+    let analyzer_command = manifest
+        .languages
+        .get(language_id)
+        .map(|lang| lang.analyzer_command.clone())
+        .ok_or_else(|| anyhow!("manifest has no entry for language `{language_id}`"))?;
+
     Ok(NormalizedLanguageAnalysis {
         language: language_id.clone(),
         adapter_name: response.adapter.name,
         adapter_version: response.adapter.version,
         observed_toolchains,
+        analyzer_command,
         libraries: libraries_out,
         solutions: solutions_out,
     })
@@ -447,6 +488,7 @@ fn compute_discovery_hash(manifest: &DiscoveryManifest) -> String {
                 "root": lang.root,
                 "display_name": lang.display_name,
                 "description_path": lang.description_path,
+                "analyzer_command": lang.analyzer_command,
             }))
             .collect::<Vec<_>>(),
         "libraries": manifest
@@ -471,6 +513,8 @@ fn compute_discovery_hash(manifest: &DiscoveryManifest) -> String {
                 "entry": s.entry,
                 "root": s.root,
                 "solved_at": s.solved_at.to_rfc3339(),
+                "test_command": s.test_command,
+                "test_timeout_seconds": s.test_timeout_seconds,
                 "verify": s.verify.as_ref().map(|v| serde_json::json!({
                     "libraries": v.libraries.iter().map(|l| l.as_str()).collect::<Vec<_>>(),
                     "oj_language_id": v.oj_language_id,
@@ -504,8 +548,11 @@ fn compute_snapshot_hash(
 /// Returns the projection of a language analysis that participates in
 /// `snapshot_hash`. Adapter and toolchain identity are deliberately excluded
 /// so a mere identity bump does not invalidate downstream verify state.
+/// `analyzer_command` IS included: spec §6.4 requires the invocation itself
+/// to be part of the snapshot so consumers can detect it changing.
 fn language_hashable_projection(lang: &NormalizedLanguageAnalysis) -> serde_json::Value {
     serde_json::json!({
+        "analyzer_command": lang.analyzer_command,
         "libraries": lang
             .libraries
             .iter()
