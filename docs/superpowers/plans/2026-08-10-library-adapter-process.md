@@ -43,12 +43,12 @@ pub fn validate_build_manifest(
 ) -> Result<(), BuildManifestError>;
 ```
 
-- [ ] Write tests for byte-order stability, uncommitted changes, missing paths, overlapping directories,
+- [x] Write tests for byte-order stability, uncommitted changes, missing paths, overlapping directories,
       duplicate files, symlinks, and repository escapes.
-- [ ] Run `cargo test -p infrastructure --test adapter_inputs`; observe missing APIs.
-- [ ] Implement strict TOML parsing and SHA-256 framing that hashes relative path plus raw contents.
-- [ ] Re-run the focused test; expect all cases to pass.
-- [ ] Invoke `/commit` with `feat: define deterministic adapter build inputs`.
+- [x] Run `cargo test -p infrastructure --test adapter_inputs`; observe missing APIs.
+- [x] Implement strict TOML parsing and SHA-256 framing that hashes relative path plus raw contents.
+- [x] Re-run the focused test; expect all cases to pass.
+- [x] Invoke `/commit` with `feat: define deterministic adapter build inputs`.
 
 ### Task 2: Run protocol processes through a reusable port
 

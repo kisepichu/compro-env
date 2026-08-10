@@ -1,3 +1,4 @@
+pub mod adapter_build;
 pub mod analysis;
 pub mod entity;
 pub mod error;
