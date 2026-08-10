@@ -11,6 +11,7 @@ use infrastructure::library_adapter::process::{
     DEFAULT_STDERR_TAIL_BYTES, ProcessLibraryAdapterRunner,
 };
 use library_adapter_protocol::{AnalysisRequest, SCHEMA_VERSION};
+use serial_test::serial;
 use tempfile::TempDir;
 use usecases::library_adapter::{AdapterRunError, LibraryAdapterRunner};
 
@@ -57,6 +58,7 @@ fn minimal_env() -> BTreeMap<String, String> {
 // ─── happy path ──────────────────────────────────────────────────────────────
 
 #[test]
+#[serial]
 fn returns_parsed_response_on_success() {
     let r = runner(minimal_env());
     let response = r
@@ -73,6 +75,7 @@ fn returns_parsed_response_on_success() {
 }
 
 #[test]
+#[serial]
 fn stdin_is_closed_so_adapter_can_finish() {
     // valid.sh reads stdin to EOF via `cat >/dev/null`. If the runner did not
     // close stdin, cat would block forever and the runner would time out.
@@ -88,6 +91,7 @@ fn stdin_is_closed_so_adapter_can_finish() {
 }
 
 #[test]
+#[serial]
 fn only_one_json_document_is_parsed() {
     // Adapter emits a valid document followed by trailing junk on the same
     // line — serde_json::from_str must reject it because it does not consume
@@ -111,6 +115,7 @@ printf '{"schema_version":1,"adapter":{"name":"a","version":"1","toolchains":[]}
 // ─── failure modes ───────────────────────────────────────────────────────────
 
 #[test]
+#[serial]
 fn errors_on_invalid_json_output() {
     let r = runner(minimal_env());
     let err = r
@@ -124,6 +129,7 @@ fn errors_on_invalid_json_output() {
 }
 
 #[test]
+#[serial]
 fn errors_on_nonzero_exit() {
     let dir = TempDir::new().unwrap();
     let script = write_script(
@@ -148,6 +154,7 @@ exit 3
 }
 
 #[test]
+#[serial]
 fn nonzero_exit_takes_priority_over_valid_stdout() {
     // Even if the adapter prints a valid response, a nonzero exit must reject
     // the stdout entirely (spec §6.3).
@@ -171,6 +178,7 @@ exit 1
 }
 
 #[test]
+#[serial]
 fn times_out_when_adapter_does_not_return() {
     let r = runner(minimal_env());
     let err = r
@@ -184,6 +192,7 @@ fn times_out_when_adapter_does_not_return() {
 }
 
 #[test]
+#[serial]
 fn enforces_stdout_limit() {
     // Runner is configured with a tiny stdout limit, and the adapter writes
     // more than that before finishing.
@@ -206,6 +215,7 @@ head -c 10240 /dev/urandom | base64
 }
 
 #[test]
+#[serial]
 fn stderr_tail_is_bounded() {
     // Adapter writes far more than the tail limit — we should still get a
     // NonZeroExit and the captured stderr should be at most the limit.
@@ -239,6 +249,7 @@ exit 1
 }
 
 #[test]
+#[serial]
 fn rejects_response_with_wrong_schema_version() {
     let dir = TempDir::new().unwrap();
     let script = write_script(
@@ -259,6 +270,7 @@ JSON
 }
 
 #[test]
+#[serial]
 fn rejects_non_utf8_stdout() {
     let dir = TempDir::new().unwrap();
     let script = write_script(
@@ -280,6 +292,7 @@ printf '\377\376\372'
 // ─── environment isolation ───────────────────────────────────────────────────
 
 #[test]
+#[serial]
 fn environment_is_isolated_from_parent() {
     // Spawn the runner with only allowlisted variables. Cargo always sets
     // CARGO_MANIFEST_DIR in the parent when running tests, so if `env_clear`
@@ -340,6 +353,7 @@ JSON
 // ─── argv correctness ────────────────────────────────────────────────────────
 
 #[test]
+#[serial]
 fn passes_extra_args_to_executable() {
     let dir = TempDir::new().unwrap();
     let marker = dir.path().join("argv.txt");
@@ -369,6 +383,7 @@ JSON
 // ─── defaults ────────────────────────────────────────────────────────────────
 
 #[test]
+#[serial]
 fn stderr_tail_default_is_finite() {
     assert!(DEFAULT_STDERR_TAIL_BYTES <= 64 * 1024);
 }
