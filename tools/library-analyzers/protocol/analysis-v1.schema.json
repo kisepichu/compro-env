@@ -1,0 +1,477 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Library adapter protocol v1",
+  "description": "Combined JSON Schema for AnalysisRequest and AnalysisResponse.",
+  "type": "object",
+  "properties": {
+    "request": {
+      "$ref": "#/$defs/AnalysisRequest"
+    },
+    "response": {
+      "$ref": "#/$defs/AnalysisResponse"
+    }
+  },
+  "$defs": {
+    "AdapterIdentity": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "toolchains": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolchainIdentity"
+          }
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "toolchains"
+      ]
+    },
+    "AnalysisRequest": {
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": "string"
+        },
+        "libraries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LibraryTarget"
+          }
+        },
+        "repository_root": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "solutions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SolutionTarget"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "repository_root",
+        "language",
+        "libraries",
+        "solutions"
+      ]
+    },
+    "AnalysisResponse": {
+      "type": "object",
+      "properties": {
+        "adapter": {
+          "$ref": "#/$defs/AdapterIdentity"
+        },
+        "libraries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LibraryAnalysis"
+          }
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "solutions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SolutionAnalysis"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "adapter",
+        "libraries",
+        "solutions"
+      ]
+    },
+    "AnalysisState": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "failed"
+      ]
+    },
+    "Dependency": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "internal"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Location"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "external"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Location"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "display": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "unresolved"
+            },
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Location"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "key",
+            "display"
+          ]
+        }
+      ]
+    },
+    "DependencyAnalysis": {
+      "type": "object",
+      "properties": {
+        "dependencies": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Dependency"
+          }
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisState"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ]
+    },
+    "Diagnostic": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Location"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "code",
+        "message"
+      ]
+    },
+    "LibraryAnalysis": {
+      "type": "object",
+      "properties": {
+        "dependency_analysis": {
+          "$ref": "#/$defs/DependencyAnalysis"
+        },
+        "diagnostics": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          }
+        },
+        "path": {
+          "type": "string"
+        },
+        "symbol_analysis": {
+          "$ref": "#/$defs/SymbolAnalysis"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "dependency_analysis",
+        "symbol_analysis"
+      ]
+    },
+    "LibraryTarget": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    },
+    "Location": {
+      "type": "object",
+      "properties": {
+        "end": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Position"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "start": {
+          "$ref": "#/$defs/Position"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "start"
+      ]
+    },
+    "Position": {
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "line": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "line"
+      ]
+    },
+    "Severity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ]
+    },
+    "SolutionAnalysis": {
+      "type": "object",
+      "properties": {
+        "dependency_analysis": {
+          "$ref": "#/$defs/DependencyAnalysis"
+        },
+        "diagnostics": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          }
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "dependency_analysis"
+      ]
+    },
+    "SolutionTarget": {
+      "type": "object",
+      "properties": {
+        "entry": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "root",
+        "entry"
+      ]
+    },
+    "Symbol": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Adapter-defined kind token (see spec §6.3).",
+          "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Location"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "qualified_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "search_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "signature": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind"
+      ]
+    },
+    "SymbolAnalysis": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/AnalysisState"
+        },
+        "symbols": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Symbol"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "state"
+      ]
+    },
+    "ToolchainIdentity": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ]
+    }
+  }
+}

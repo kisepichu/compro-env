@@ -1,0 +1,10 @@
+{
+  "schema_version": 2,
+  "adapter": {
+    "name": "empty-adapter",
+    "version": "0.0.0",
+    "toolchains": []
+  },
+  "libraries": [],
+  "solutions": []
+}
