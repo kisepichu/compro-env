@@ -595,4 +595,4 @@ Filter / metadata:
 - query、metadata、status、diagnostic は text として描画する。
 - search result link は生成済み detail route と fragment だけ。
 - external link は同じ tab が既定。新規 tab なら `noopener noreferrer` を付ける。
-- CSP の都合で外部assetが必要に見える場合は、暗黙に追加せず別提案にする。
+- CSP の都合で外部 asset が必要に見える場合は、暗黙に追加せず別提案にする。
