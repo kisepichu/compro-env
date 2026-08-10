@@ -112,6 +112,13 @@ pub enum PrepareError {
     },
     #[error("prepared artifact path escapes the prepared root: {relative:?}")]
     ArtifactPathEscape { relative: String },
+    #[error("prepared manifest lists an unknown artifact kind: {value:?}")]
+    InvalidArtifactKind { value: String },
+    #[error("prepared directory contains an untracked entry {relative:?} ({reason})")]
+    UntrackedPreparedEntry {
+        relative: String,
+        reason: &'static str,
+    },
 }
 
 // ─── TOML DTOs ──────────────────────────────────────────────────────────────
@@ -543,7 +550,12 @@ pub fn validate_prepared_set(
     validate_prepared_manifest(expected, &manifest)
         .map_err(|source| PrepareError::PreparedManifestMismatch { source })?;
 
-    // Byte-verify every artifact in a stable order.
+    let root_canonical = path.canonicalize().map_err(|source| PrepareError::Io {
+        path: display_path(path),
+        source,
+    })?;
+
+    // Byte-verify every artifact in a stable order by streaming.
     for artifact in &manifest.artifacts {
         validate_relative_path(&artifact.relative_path)?;
         let absolute = path.join(&artifact.relative_path);
@@ -558,10 +570,6 @@ pub fn validate_prepared_set(
                     source: e,
                 }
             }
-        })?;
-        let root_canonical = path.canonicalize().map_err(|source| PrepareError::Io {
-            path: display_path(path),
-            source,
         })?;
         if !canonical.starts_with(&root_canonical) {
             return Err(PrepareError::ArtifactPathEscape {
@@ -584,14 +592,10 @@ pub fn validate_prepared_set(
                 actual: describe_type(meta.file_type()),
             });
         }
-        let bytes = fs::read(&absolute).map_err(|source| PrepareError::Io {
+        let actual = stream_sha256(&absolute).map_err(|source| PrepareError::Io {
             path: display_path(&absolute),
             source,
         })?;
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let out: [u8; 32] = hasher.finalize().into();
-        let actual = ContentDigest::from_sha256_bytes(out);
         if actual != artifact.sha256 {
             return Err(PrepareError::ArtifactHashMismatch {
                 relative: artifact.relative_path.clone(),
@@ -601,11 +605,125 @@ pub fn validate_prepared_set(
         }
     }
 
+    // Reject anything else on disk: an attacker or a botched extraction may
+    // have dropped a symlink, device file, or unlisted regular file into
+    // <prepared>/<id>/. `manifest.json`, each artifact's byte-hashed source,
+    // and each artifact's install subtree are the only paths spec §6.9 lets
+    // appear.
+    let mut allowed_files: std::collections::BTreeSet<PathBuf> = Default::default();
+    let mut allowed_prefixes: Vec<PathBuf> = Vec::new();
+    allowed_files.insert(PathBuf::from(PREPARED_MANIFEST_FILE));
+    for artifact in &manifest.artifacts {
+        let rel = PathBuf::from(&artifact.relative_path);
+        allowed_files.insert(rel);
+        if let Some(install) = &artifact.install_relative_path {
+            validate_relative_path(install)?;
+            allowed_prefixes.push(PathBuf::from(install));
+        }
+    }
+    for dirent in WalkDir::new(path)
+        .min_depth(1)
+        .follow_links(false)
+        .sort_by_file_name()
+    {
+        let dirent = dirent.map_err(|e| {
+            let err_path = e
+                .path()
+                .map(display_path)
+                .unwrap_or_else(|| display_path(path));
+            let source = e
+                .into_io_error()
+                .unwrap_or_else(|| std::io::Error::other("walkdir failure"));
+            PrepareError::Io {
+                path: err_path,
+                source,
+            }
+        })?;
+        let file_type = dirent.file_type();
+        let relative = dirent
+            .path()
+            .strip_prefix(path)
+            .expect("walked path stays under prepared root")
+            .to_path_buf();
+        let relative_str = relative
+            .to_str()
+            .ok_or_else(|| PrepareError::InvalidPath {
+                path: display_path(&relative),
+            })?
+            .replace('\\', "/");
+        if file_type.is_symlink() {
+            return Err(PrepareError::UntrackedPreparedEntry {
+                relative: relative_str,
+                reason: "symlinks are not permitted in a prepared set",
+            });
+        }
+        if !file_type.is_file() && !file_type.is_dir() {
+            return Err(PrepareError::UntrackedPreparedEntry {
+                relative: relative_str,
+                reason: "only regular files and directories are permitted",
+            });
+        }
+        if is_ancestor_of_allowed(&relative, &allowed_files, &allowed_prefixes) {
+            continue;
+        }
+        if allowed_files.contains(&relative) {
+            continue;
+        }
+        if allowed_prefixes
+            .iter()
+            .any(|prefix| relative.starts_with(prefix))
+        {
+            continue;
+        }
+        return Err(PrepareError::UntrackedPreparedEntry {
+            relative: relative_str,
+            reason: "not listed in manifest.json",
+        });
+    }
+
     Ok(PreparedSet {
         id: manifest.id.clone(),
         root: path.to_path_buf(),
         manifest,
     })
+}
+
+/// Return true when `relative` is a directory that any allowed file or
+/// install prefix lives inside — the walker only enumerates files but must
+/// still allow their parent directories to exist.
+fn is_ancestor_of_allowed(
+    relative: &Path,
+    allowed_files: &std::collections::BTreeSet<PathBuf>,
+    allowed_prefixes: &[PathBuf],
+) -> bool {
+    for file in allowed_files {
+        if file.starts_with(relative) {
+            return true;
+        }
+    }
+    for prefix in allowed_prefixes {
+        if prefix.starts_with(relative) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Stream-hash the contents of `path` with SHA-256.
+fn stream_sha256(path: &Path) -> Result<ContentDigest, std::io::Error> {
+    use std::io::Read;
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    let out: [u8; 32] = hasher.finalize().into();
+    Ok(ContentDigest::from_sha256_bytes(out))
 }
 
 // ─── JSON DTO ───────────────────────────────────────────────────────────────
@@ -632,6 +750,8 @@ struct PreparedArtifactDto {
     kind: String,
     relative_path: String,
     sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    install_relative_path: Option<String>,
 }
 
 impl PreparedManifestDto {
@@ -650,6 +770,7 @@ impl PreparedManifestDto {
                     kind: a.kind.to_string(),
                     relative_path: a.relative_path.clone(),
                     sha256: a.sha256.to_string(),
+                    install_relative_path: a.install_relative_path.clone(),
                 })
                 .collect(),
         }
@@ -675,7 +796,7 @@ impl PreparedManifestDto {
                 "local" => PreparedArtifactKind::Local,
                 "toolchain" => PreparedArtifactKind::Toolchain,
                 _ => {
-                    return Err(PrepareError::InvalidArchiveFormat { value: a.kind });
+                    return Err(PrepareError::InvalidArtifactKind { value: a.kind });
                 }
             };
             artifacts.push(PreparedArtifact {
@@ -683,6 +804,7 @@ impl PreparedManifestDto {
                 kind,
                 relative_path: a.relative_path,
                 sha256,
+                install_relative_path: a.install_relative_path,
             });
         }
         Ok(PreparedManifest {

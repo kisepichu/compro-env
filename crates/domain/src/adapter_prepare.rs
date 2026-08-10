@@ -131,10 +131,16 @@ pub struct PreparedArtifact {
     pub name: String,
     pub kind: PreparedArtifactKind,
     /// Location relative to the prepared set root (`cargo-home/…`, etc.).
+    /// This is the byte-hashed source: a downloaded tarball, commit archive,
+    /// or copied local file.
     pub relative_path: String,
-    /// SHA-256 of the archive, git tarball, or local content that produced
-    /// this artifact.
+    /// SHA-256 of the file at `relative_path`.
     pub sha256: ContentDigest,
+    /// Optional installation subtree relative to the prepared set root.
+    /// Set when the artifact is unpacked (archives). Its contents are trusted
+    /// because they are derived deterministically from `relative_path`, whose
+    /// hash is verified byte-for-byte.
+    pub install_relative_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,6 +245,18 @@ mod tests {
             target_platform: platform(),
             artifacts: vec![],
         }
+    }
+
+    #[test]
+    fn prepared_artifact_defaults_install_path_to_none() {
+        let a = PreparedArtifact {
+            name: "x".into(),
+            kind: PreparedArtifactKind::Local,
+            relative_path: "cargo-home/x".into(),
+            sha256: digest(0),
+            install_relative_path: None,
+        };
+        assert!(a.install_relative_path.is_none());
     }
 
     fn expected(id_seed: u8) -> ExpectedPreparedSet {

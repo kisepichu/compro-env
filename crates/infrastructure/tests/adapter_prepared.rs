@@ -466,6 +466,7 @@ fn manifest_with_missing_artifact(
             kind: PreparedArtifactKind::Archive,
             relative_path: "cargo-home/sample".into(),
             sha256: ContentDigest::from_hex(VALID_SHA).unwrap(),
+            install_relative_path: None,
         }],
     }
 }
@@ -575,6 +576,7 @@ fn validate_prepared_set_accepts_matching_artifact_content() {
             kind: PreparedArtifactKind::Archive,
             relative_path: "cargo-home/sample.bin".into(),
             sha256: ContentDigest::from_hex(hex).unwrap(),
+            install_relative_path: None,
         }],
     };
     write_prepared(dir.path(), &manifest);
@@ -585,6 +587,43 @@ fn validate_prepared_set_accepts_matching_artifact_content() {
     };
     let set = validate_prepared_set(dir.path(), &expected).unwrap();
     assert_eq!(set.manifest.artifacts[0].name, "sample");
+}
+
+#[cfg(unix)]
+#[test]
+fn validate_prepared_set_rejects_untracked_symlink() {
+    use std::os::unix::fs::symlink;
+    let dir = TempDir::new().unwrap();
+    let id = DependencyId::new(ContentDigest::from_sha256_bytes([1; 32]));
+    write_prepared(dir.path(), &manifest_with(&id, &linux()));
+    fs::write(dir.path().join("target.txt"), b"real").unwrap();
+    symlink(dir.path().join("target.txt"), dir.path().join("evil-link")).unwrap();
+    let expected = ExpectedPreparedSet {
+        id,
+        target_platform: linux(),
+    };
+    let err = validate_prepared_set(dir.path(), &expected).unwrap_err();
+    assert!(
+        matches!(err, PrepareError::UntrackedPreparedEntry { .. }),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn validate_prepared_set_rejects_untracked_file() {
+    let dir = TempDir::new().unwrap();
+    let id = DependencyId::new(ContentDigest::from_sha256_bytes([1; 32]));
+    write_prepared(dir.path(), &manifest_with(&id, &linux()));
+    fs::write(dir.path().join("stray.txt"), b"not listed").unwrap();
+    let expected = ExpectedPreparedSet {
+        id,
+        target_platform: linux(),
+    };
+    let err = validate_prepared_set(dir.path(), &expected).unwrap_err();
+    assert!(
+        matches!(err, PrepareError::UntrackedPreparedEntry { .. }),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -599,6 +638,7 @@ fn validate_prepared_set_rejects_hash_mismatch() {
             kind: PreparedArtifactKind::Archive,
             relative_path: "cargo-home/sample.bin".into(),
             sha256: ContentDigest::from_hex(VALID_SHA).unwrap(),
+            install_relative_path: None,
         }],
     };
     write_prepared(dir.path(), &manifest);

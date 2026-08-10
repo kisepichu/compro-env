@@ -104,12 +104,22 @@ pub fn prepare_dependencies(
     let final_dir = prepared_dir.join(id.as_str());
     if final_dir.exists() {
         // Already prepared — re-validate byte-for-byte and return.
+        // Spec §6.9: an incomplete or manifest-less directory is NOT a cache
+        // hit. We hold the prepare lock at this point, so it is safe to
+        // discard the existing directory and rebuild from staging.
         let expected = ExpectedPreparedSet {
             id: id.clone(),
             target_platform: request.target_platform.clone(),
         };
-        let set = validate_prepared_set(&final_dir, &expected)?;
-        return Ok(set);
+        match validate_prepared_set(&final_dir, &expected) {
+            Ok(set) => return Ok(set),
+            Err(_) => {
+                fs::remove_dir_all(&final_dir).map_err(|source| PrepareRunError::Cleanup {
+                    path: final_dir.display().to_string(),
+                    source,
+                })?;
+            }
+        }
     }
 
     // Fresh staging directory for this run.
@@ -189,6 +199,7 @@ fn prepare_archive(
         kind: PreparedArtifactKind::Archive,
         relative_path: format!("downloads/{}.{}", archive.name, archive.format.as_str()),
         sha256: archive.sha256.clone(),
+        install_relative_path: Some(format!("archives/{}", archive.name)),
     })
 }
 
@@ -209,6 +220,7 @@ fn prepare_git(
         kind: PreparedArtifactKind::Git,
         relative_path: format!("downloads/{}-{}.archive", git.name, git.commit),
         sha256: git.archive_sha256.clone(),
+        install_relative_path: None,
     })
 }
 

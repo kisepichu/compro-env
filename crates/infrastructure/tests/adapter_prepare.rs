@@ -401,6 +401,40 @@ fn prepare_dependencies_rejects_scheme_changing_redirect() {
 // ─── Concurrent lock fails fast ─────────────────────────────────────────────
 
 #[test]
+fn prepare_dependencies_repairs_corrupt_existing_prepared_dir() {
+    let archive_bytes = build_tar_gz(&[TarEntry::File {
+        name: "hello.txt",
+        contents: b"hello world\n",
+    }]);
+    let sha = sha256_hex(&archive_bytes);
+    let server_bytes = archive_bytes.clone();
+    let server = FixtureServer::start(move |request| {
+        let _ = request.respond(Response::from_data(server_bytes.clone()));
+    });
+
+    let repo = TempDir::new().unwrap();
+    let prepared_root = TempDir::new().unwrap();
+    let manifest = DependencyManifest {
+        archives: vec![ArchiveDependency {
+            name: "sample".into(),
+            url: server.url("/sample.tar.gz"),
+            sha256: ContentDigest::from_hex(sha).unwrap(),
+            format: ArchiveFormat::TarGz,
+        }],
+        ..empty_manifest()
+    };
+    let request = make_request(repo.path(), prepared_root.path(), http_policy());
+    let set = prepare_dependencies(&request, &manifest).expect("first prepare");
+    let id_dir = prepared_dir(prepared_root.path(), &set.id);
+
+    // Corrupt the cache: replace manifest.json with garbage.
+    fs::write(id_dir.join("manifest.json"), b"not-json").unwrap();
+    let set_after = prepare_dependencies(&request, &manifest).expect("second prepare repairs");
+    assert!(id_dir.join("manifest.json").is_file());
+    assert_eq!(set_after.id, set.id);
+}
+
+#[test]
 fn prepare_lock_is_exclusive() {
     let prepared_root = TempDir::new().unwrap();
     fs::create_dir_all(prepared_root.path()).unwrap();
