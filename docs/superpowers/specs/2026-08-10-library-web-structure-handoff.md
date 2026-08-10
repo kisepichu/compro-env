@@ -69,13 +69,13 @@ browser 上に描画する。
 body
 |- a.skip-link[href="#main-content"]
 |- header.site-header
-|  |- a.site-title[href="Home"]
+|  |- a.site-title[href="{home-url}"]
 |  |- nav.primary-navigation[aria-label="Primary"]
 |  |  `- ul
 |  |     |- li > a Libraries
 |  |     |- li > a Solutions
 |  |     `- li > a Search
-|  `- form.global-search[role="search"][method="get"]
+|  `- form.global-search[role="search"][method="get"][action="{search-url}"]
 |     |- label[for="global-search-query"]
 |     |- input#global-search-query[name="q"][type="search"]
 |     `- button[type="submit"]
@@ -93,6 +93,7 @@ body
 
 共通規則:
 
+- `{home-url}` は base-aware な Home URL、`{search-url}` は base-aware な `/search/` URL とする。
 - page ごとの `h1` は 1 件だけ。
 - primary navigation と breadcrumb は `ul` / `ol` を使う。
 - 現在位置に `aria-current` を付ける。
