@@ -1,12 +1,14 @@
 [package]
-name = "domain"
+name = "library-adapter-protocol"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-chrono = { workspace = true }
+anyhow = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+schemars = "1"
 
 [dev-dependencies]
-serde_json = { workspace = true }
+tempfile = "3"

@@ -1,0 +1,7 @@
+online_judge = "librarychecker"
+contest_id = "librarychecker-aplusb"
+
+[[problems]]
+id = "aplusb"
+code = "aplusb"
+title = "A + B"

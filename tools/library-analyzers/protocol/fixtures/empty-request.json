@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "repository_root": ".",
+  "language": "rust",
+  "libraries": [],
+  "solutions": []
+}

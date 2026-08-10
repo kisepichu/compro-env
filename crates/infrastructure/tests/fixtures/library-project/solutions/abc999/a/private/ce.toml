@@ -1,0 +1,4 @@
+language = "rust"
+test_command = "./test.sh"
+# publish defaults to false, so this solution is not part of the discovery
+# manifest passed to adapters.

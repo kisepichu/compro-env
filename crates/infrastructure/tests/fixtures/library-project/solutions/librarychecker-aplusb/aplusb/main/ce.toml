@@ -1,0 +1,11 @@
+language = "rust"
+test_command = "./test.sh"
+publish = true
+solved_at = "2026-08-02T14:30:00+09:00"
+test_timeout_seconds = 600
+
+[verify]
+libraries = [
+  "libraries/rust/public.rs",
+]
+language_id = "rust"
