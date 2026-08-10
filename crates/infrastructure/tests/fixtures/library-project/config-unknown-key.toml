@@ -1,0 +1,13 @@
+[library.site]
+title = "compro-env"
+description = "Competitive programming libraries and solutions"
+language = "en"
+repository_url = "https://github.com/owner/compro-env"
+
+[library.languages.rust]
+root = "libraries/rust"
+include = ["**/*.rs"]
+unknown_key = "should fail"
+
+[library.languages.rust.analyzer]
+command = ["./bin/rust"]

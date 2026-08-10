@@ -1,0 +1,49 @@
+[library.site]
+title = "compro-env"
+description = "Competitive programming libraries and solutions"
+language = "en"
+repository_url = "https://github.com/owner/compro-env"
+
+[library.languages.rust]
+display_name = "Rust"
+root = "libraries/rust"
+include = ["**/*.rs"]
+exclude = ["**/generated/**", "**/target/**"]
+check_command = "cargo test"
+check_timeout_seconds = 600
+syntax_highlight = "rust"
+expected_toolchains = [
+  { name = "rustc", version = "1.92.0" },
+  { name = "cargo", version = "1.92.0" },
+]
+
+[library.languages.rust.analyzer]
+command = ["./target/library-analyzers/bin/rust-analyzer"]
+timeout_seconds = 600
+
+[library.languages.rust.online_judges.librarychecker]
+language_id = "rust"
+
+[library.languages.cpp]
+display_name = "C++"
+root = "libraries/cpp"
+include = ["**/*.hpp", "**/*.cpp"]
+syntax_highlight = "cpp"
+expected_toolchains = [
+  { name = "clang", version = "22.1.0" },
+]
+
+[library.languages.cpp.analyzer]
+command = ["./target/library-analyzers/bin/cpp-analyzer"]
+
+[library.languages.lean]
+display_name = "Lean"
+root = "libraries/lean"
+include = ["**/*.lean"]
+check_command = "lake build"
+expected_toolchains = [
+  { name = "lean", version = "4.30.0" },
+]
+
+[library.languages.lean.analyzer]
+command = ["./target/library-analyzers/bin/lean-analyzer"]
