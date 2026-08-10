@@ -1,0 +1,19 @@
+# Deterministic build inputs for language adapters (spec §6.9).
+#
+# The core hashes each `directories` entry recursively and each `files` entry
+# individually, framed by the target platform, to derive the `build-id` under
+# `target/library-analyzers/builds/`. Adapter source directories are added by
+# later plans (043–050) alongside their `prepare` / `build` scripts and
+# toolchain pins.
+
+directories = [
+    "crates/library-adapter-protocol",
+    "tools/library-analyzers/protocol",
+]
+
+files = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "tools/library-analyzers/build-inputs.toml",
+]
