@@ -36,11 +36,11 @@ browser 上に描画する。
 ```text
 /                                      Home
 /search/                               Search
-/libraries/                            Languages
+/libraries/                            Libraries
 /libraries/{lang}/                     Language
 /libraries/{lang}/{directory...}/      Library directory
 /libraries/{lang}/{source-path...}/    Library detail
-/solutions/                            Contests
+/solutions/                            Solutions
 /solutions/{contest}/                  Contest
 /solutions/{contest}/{problem}/        Problem
 /solutions/{contest}/{problem}/{name}/ Solution detail
@@ -227,8 +227,8 @@ article.library-detail
 - stale: verification section に公開可能な理由を表示。
 - location 付き diagnostic: source line anchor へ link。
 - private dependency を指す location: target 情報を出さず共通 reason だけを表示。
-- library の代表statusは全direct verifierがacceptedの場合だけverified。
-- detailのverification evidenceはdirect verifierごとの状態をすべて表示。
+- library の代表 status は、全 direct verifier が accepted の場合だけ verified とする。
+- detail の verification evidence は、direct verifier ごとの状態をすべて表示する。
 
 ## 8. Solution browse
 
