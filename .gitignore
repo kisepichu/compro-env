@@ -2,3 +2,4 @@
 target/
 tmp/
 .claude/settings.local.json
+.worktrees/
