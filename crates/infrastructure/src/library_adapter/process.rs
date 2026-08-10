@@ -104,10 +104,7 @@ impl LibraryAdapterRunner for ProcessLibraryAdapterRunner {
             }
         }
 
-        let mut child = cmd.spawn().map_err(|source| AdapterRunError::Spawn {
-            command: command_display.clone(),
-            source,
-        })?;
+        let mut child = spawn_with_etxtbsy_retry(&mut cmd, &command_display)?;
 
         let pid = child.id();
         let mut stdin = child.stdin.take().expect("stdin piped");
@@ -310,6 +307,37 @@ fn format_exit_status(status: &std::process::ExitStatus) -> String {
             }
         }
         "unknown".to_string()
+    }
+}
+
+/// Spawn the child, retrying on Linux `ETXTBSY` (`ExecutableFileBusy`).
+///
+/// `pre_exec` forces `Command::spawn` down the fork+exec path (posix_spawn
+/// cannot run arbitrary pre-exec code), which exposes the ETXTBSY race
+/// described in rust-lang/rust#114554: a concurrent fork in another thread
+/// can inherit a write fd on the executable file, so the exec sees the file
+/// as still-open-for-writing and fails with EBUSY (errno 26). The window is
+/// tiny; a few short retries clear it without letting a genuine bug hang.
+fn spawn_with_etxtbsy_retry(
+    cmd: &mut Command,
+    command_display: &str,
+) -> Result<std::process::Child, AdapterRunError> {
+    let mut attempt: u32 = 0;
+    loop {
+        match cmd.spawn() {
+            Ok(child) => return Ok(child),
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 4 => {
+                std::thread::sleep(Duration::from_millis(20 * u64::from(attempt + 1)));
+                attempt += 1;
+                continue;
+            }
+            Err(source) => {
+                return Err(AdapterRunError::Spawn {
+                    command: command_display.to_string(),
+                    source,
+                });
+            }
+        }
     }
 }
 
