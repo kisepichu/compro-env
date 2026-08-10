@@ -76,12 +76,12 @@ pub trait LibraryAdapterRunner {
 pub struct ProcessLibraryAdapterRunner;
 ```
 
-- [ ] Write failing tests for exact argv execution, stdin closure, one JSON document, stdout limit,
+- [x] Write failing tests for exact argv execution, stdin closure, one JSON document, stdout limit,
       stderr tail limit, timeout, nonzero exit, schema mismatch, and secret-free environment.
-- [ ] Implement direct `Command` execution with piped stdin/stdout/stderr and process-group termination.
-- [ ] Validate protocol version and response shape before returning; never accept stdout after nonzero exit.
-- [ ] Run `cargo test -p infrastructure --test adapter_process`; expect all cases to pass.
-- [ ] Invoke `/commit` with `feat: run library adapters through strict protocol`.
+- [x] Implement direct `Command` execution with piped stdin/stdout/stderr and process-group termination.
+- [x] Validate protocol version and response shape before returning; never accept stdout after nonzero exit.
+- [x] Run `cargo test -p infrastructure --test adapter_process`; expect all cases to pass.
+- [x] Invoke `/commit` with `feat: run library adapters through strict protocol`.
 
 ### Task 3: Deliver the process boundary
 

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod input_format;
+pub mod library_adapter;
 pub mod library_analysis;
 pub mod online_judge;
 pub mod repository;

@@ -7,20 +7,25 @@ edition = "2024"
 domain = { workspace = true }
 usecases = { workspace = true }
 interfaces = { workspace = true }
+library-adapter-protocol = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", features = ["blocking", "cookies", "json"] }
 toml = "0.8"
 tera = "1"
 walkdir = "2"
 globset = "0.4"
-serde_json = "1"
 base64 = "0.22"
 rpassword = "7"
 sha2 = "0.10"
+wait-timeout = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
