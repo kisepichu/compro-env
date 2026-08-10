@@ -1,11 +1,21 @@
 use anyhow::{Context, Result};
-use std::process::Command;
+use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::time::Duration;
 
 use super::Service;
+use crate::command_runner::CommandRequest;
 
 impl Service {
     /// Runs the test command defined in `ce.toml` in the solution directory.
     /// Returns the exit code of the test command (0 = success).
+    ///
+    /// The command is dispatched through the injected [`CommandRunner`], so a
+    /// timeout is enforced (default 600 s; override via `test_timeout_seconds`
+    /// in `ce.toml`, positive integers only). A timeout maps to exit code 124
+    /// with a `test_command timed out after Ns` line written to stderr.
+    ///
+    /// [`CommandRunner`]: crate::command_runner::CommandRunner
     pub fn test(&self, contest_id: &str, problem_code: &str, solution_name: &str) -> Result<i32> {
         let solution_dir = self
             .solution_repo
@@ -35,24 +45,74 @@ impl Service {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("`test_command` key not found in {ce_toml_path:?}"))?;
 
-        let testcases_dir = self.contest_repo.testcases_dir(contest_id, problem_code);
+        let timeout_seconds = read_test_timeout_seconds(&table, &ce_toml_path)?;
 
         #[cfg(not(unix))]
-        anyhow::bail!(
-            "test_command execution requires a Unix-like shell (`sh`), which is unsupported on this platform"
-        );
+        {
+            let _ = (test_command, timeout_seconds);
+            anyhow::bail!(
+                "test_command execution requires a Unix-like shell (`sh`), which is unsupported on this platform"
+            );
+        }
 
         #[cfg(unix)]
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg(test_command)
-            .current_dir(&solution_dir)
-            .env("CE_TESTCASES_DIR", &testcases_dir)
-            .status()
-            .with_context(|| "failed to launch sh")?;
+        {
+            let testcases_dir = self.contest_repo.testcases_dir(contest_id, problem_code);
 
-        #[cfg(unix)]
-        Ok(status.code().unwrap_or(1))
+            let mut environment: BTreeMap<OsString, OsString> = BTreeMap::new();
+            // Forward the shell essentials. `PATH` must be present or `sh`
+            // cannot resolve external utilities; `HOME` and `TERM` are opt-in.
+            for key in ["PATH", "HOME", "TERM"] {
+                if let Some(value) = std::env::var_os(key) {
+                    environment.insert(OsString::from(key), value);
+                }
+            }
+            environment.insert(
+                OsString::from("CE_TESTCASES_DIR"),
+                OsString::from(testcases_dir.as_os_str()),
+            );
+
+            let request = CommandRequest {
+                program: OsString::from("sh"),
+                arguments: vec![OsString::from("-c"), OsString::from(test_command)],
+                current_dir: solution_dir,
+                environment,
+                timeout: Duration::from_secs(timeout_seconds),
+            };
+            let outcome = self.command_runner.run_streaming(&request)?;
+            if outcome.timed_out {
+                eprintln!("test_command timed out after {timeout_seconds}s");
+                // 124 matches the exit code coreutils' `timeout(1)` uses when
+                // the wrapped command overruns; downstream tooling can rely on
+                // it as a stable timeout signal.
+                Ok(124)
+            } else {
+                // A killed-by-signal child has no exit code. Report 1 so the
+                // caller (e.g. `ce submit`'s pre-submit gate) still fails.
+                Ok(outcome.exit_code.unwrap_or(1))
+            }
+        }
+    }
+}
+
+/// Reads `test_timeout_seconds` from `ce.toml`. Positive integers only; a
+/// missing key returns the 600-second default from spec §7.1.
+fn read_test_timeout_seconds(table: &toml::Table, ce_toml_path: &std::path::Path) -> Result<u64> {
+    match table.get("test_timeout_seconds") {
+        None => Ok(600),
+        Some(value) => {
+            let n = value.as_integer().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "`test_timeout_seconds` must be a positive integer in {ce_toml_path:?}"
+                )
+            })?;
+            if n <= 0 {
+                anyhow::bail!(
+                    "`test_timeout_seconds` must be a positive integer in {ce_toml_path:?}, got {n}"
+                );
+            }
+            Ok(n as u64)
+        }
     }
 }
 
@@ -68,6 +128,7 @@ mod tests {
             solution_repository::SolutionRepository,
         },
         service::Service,
+        test_support::SpawningCommandRunner,
     };
     use anyhow::Result;
     use domain::entity::{Contest, Language, OJKind, Problem, Sample, Session, Solution};
@@ -205,6 +266,7 @@ mod tests {
             Box::new(StubSolutionRepo { solution_dir }),
             Box::new(StubSession),
             Box::new(StubConfig),
+            Box::new(SpawningCommandRunner),
         )
     }
 
@@ -275,6 +337,40 @@ mod tests {
             service.test("abc001", "a", "main").unwrap(),
             0,
             "CE_TESTCASES_DIR was not set to {expected}"
+        );
+    }
+
+    /// `test_timeout_seconds = 0` is rejected before invoking the command runner.
+    #[test]
+    fn test_rejects_zero_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            "test_command = \"exit 0\"\ntest_timeout_seconds = 0\n",
+        )
+        .unwrap();
+        let service = make_service(dir.path().to_path_buf(), PathBuf::from("/tmp/testcases"));
+        let err = service.test("abc001", "a", "main").unwrap_err();
+        assert!(
+            err.to_string().contains("test_timeout_seconds"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// A negative `test_timeout_seconds` is rejected before invoking the command runner.
+    #[test]
+    fn test_rejects_negative_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            "test_command = \"exit 0\"\ntest_timeout_seconds = -5\n",
+        )
+        .unwrap();
+        let service = make_service(dir.path().to_path_buf(), PathBuf::from("/tmp/testcases"));
+        let err = service.test("abc001", "a", "main").unwrap_err();
+        assert!(
+            err.to_string().contains("test_timeout_seconds"),
+            "unexpected error: {err}"
         );
     }
 }

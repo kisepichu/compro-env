@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use domain::entity::{Language, OJKind};
 use interfaces::controller::input::{
-    InitInput, LoginInput, LogoutInput, NewInput, SubmitInput, TestInput, WhoamiInput,
+    CheckInput, InitInput, LoginInput, LogoutInput, NewInput, SubmitInput, TestInput, WhoamiInput,
 };
 use usecases::online_judge::Credentials;
 
@@ -66,6 +66,12 @@ pub enum Commands {
         /// Prepare the source (incl. preprocess) and print it without submitting
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Run project-local library checks configured under `[library.languages]`.
+    Check {
+        /// Limit the run to a single language id (default: all languages).
+        #[arg(long)]
+        language: Option<String>,
     },
 }
 
@@ -186,5 +192,14 @@ impl SubmitInput for SubmitCommand {
     }
     fn solution_name(&self) -> String {
         self.solution_name.clone()
+    }
+}
+
+pub struct CheckCommand {
+    pub language: Option<String>,
+}
+impl CheckInput for CheckCommand {
+    fn language(&self) -> Option<String> {
+        self.language.clone()
     }
 }
