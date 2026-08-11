@@ -18,6 +18,8 @@ import type {
   SymbolAnalysisPublic,
   VerificationEvidence,
 } from "../site-data-types.ts";
+import { renderDocumentation } from "../markdown.ts";
+import { renderSource } from "../source.ts";
 import {
   homePath,
   librariesRootPath,
@@ -590,17 +592,18 @@ function libraryBreadcrumb(
   return items;
 }
 
-function renderLibraryDetailArticleInner(
+async function renderLibraryDetailArticleInner(
   config: UrlConfig,
+  siteData: SiteData,
   lib: LibraryPageData,
   dependencyAnalysis: DependencyAnalysisPublic,
-): string {
+): Promise<string> {
   const hasDocumentation =
     lib.description !== null &&
     lib.description !== undefined &&
     lib.description.trim().length > 0;
   const documentationBlock = hasDocumentation
-    ? `<div id="documentation" class="documentation">${escapeHtml(lib.description!)}</div>`
+    ? renderDocumentation(lib.description!)
     : "";
   const inPageNavItems: { id: string; label: string }[] = [];
   if (hasDocumentation) {
@@ -629,6 +632,15 @@ function renderLibraryDetailArticleInner(
     ? `<p class="private-dependencies-note">This library also depends on private targets.</p>`
     : "";
   const relativePath = escapeHtml(lib.source_path);
+  const sourceResult = await renderSource({
+    source: lib.source,
+    syntaxHighlight: lib.syntax_highlight,
+    sourcePath: lib.source_path,
+    repositoryUrl: siteData.site.repository_url ?? null,
+    commitSha: siteData.build.source_commit_short_sha,
+    mode: "preview",
+  });
+  const sourceSection = sourceResult.html;
   return (
     `<header class="page-header">` +
       `<h1>${escapeHtml(lib.title)}</h1>` +
@@ -647,10 +659,7 @@ function renderLibraryDetailArticleInner(
       `<h2 id="symbols-heading">Symbols</h2>` +
       renderSymbolsSection(lib.symbol_analysis) +
     `</section>` +
-    `<section id="source" aria-labelledby="source-heading">` +
-      `<h2 id="source-heading">Source</h2>` +
-      `<p class="pending">Source rendering pending (Task 3).</p>` +
-    `</section>` +
+    sourceSection +
     `<section id="dependencies" aria-labelledby="dependencies-heading">` +
       `<h2 id="dependencies-heading">Dependencies</h2>` +
       `<h3>Depends on</h3>` +
@@ -674,24 +683,30 @@ function renderLibraryDetailArticleInner(
   );
 }
 
-export function renderLibraryDetailMainInner(
+export async function renderLibraryDetailMainInner(
   config: UrlConfig,
   siteData: SiteData,
   lib: LibraryPageData,
-): string {
+): Promise<string> {
   const pageIdAttr = escapeAttribute(`page-${lib.page_id}`);
+  const inner = await renderLibraryDetailArticleInner(
+    config,
+    siteData,
+    lib,
+    lib.dependency_analysis,
+  );
   return (
     `<article class="library-detail" id="${pageIdAttr}" data-pagefind-body>` +
-      renderLibraryDetailArticleInner(config, lib, lib.dependency_analysis) +
+      inner +
     `</article>`
   );
 }
 
-export function renderLibraryDetailPage(
+export async function renderLibraryDetailPage(
   config: UrlConfig,
   siteData: SiteData,
   lib: LibraryPageData,
-): string {
+): Promise<string> {
   const canonicalSegments = [
     "libraries",
     lib.language,
@@ -701,6 +716,7 @@ export function renderLibraryDetailPage(
     lib.description && lib.description.trim().length > 0
       ? lib.description
       : `${lib.title} — ${lib.language} library in ${siteData.site.title}.`;
+  const mainInnerHtml = await renderLibraryDetailMainInner(config, siteData, lib);
   return renderDocument({
     config,
     siteData,
@@ -709,7 +725,7 @@ export function renderLibraryDetailPage(
     description,
     currentNav: "libraries",
     breadcrumb: libraryBreadcrumb(config, siteData, lib),
-    mainInnerHtml: renderLibraryDetailMainInner(config, siteData, lib),
+    mainInnerHtml,
     mainIgnoreForPagefind: false,
     robots: "index,follow",
   });

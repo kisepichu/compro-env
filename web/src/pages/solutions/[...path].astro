@@ -39,7 +39,7 @@ if (route.kind === "contest") {
 } else if (route.kind === "problem") {
   html = renderProblemPage(config, siteData, route.contestId!, route.problemCode!);
 } else {
-  html = renderSolutionDetailPage(config, siteData, route.solution!);
+  html = await renderSolutionDetailPage(config, siteData, route.solution!);
 }
 ---
 <Fragment set:html={html} />

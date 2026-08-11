@@ -1,0 +1,14 @@
+---
+/**
+ * Library documentation block (spec §12.5, §12.13). Thin wrapper around
+ * the pure Markdown renderer — errors surface as build failures.
+ */
+import { renderDocumentation } from "@/lib/markdown.ts";
+
+interface Props {
+  description: string;
+}
+
+const html = renderDocumentation(Astro.props.description);
+---
+<Fragment set:html={html} />

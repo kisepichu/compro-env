@@ -38,7 +38,7 @@ export async function getStaticPaths() {
 const { route, config, siteData } = Astro.props as RouteProps;
 let html: string;
 if (route.kind === "detail") {
-  html = renderLibraryDetailPage(config, siteData, route.library!);
+  html = await renderLibraryDetailPage(config, siteData, route.library!);
 } else {
   html = renderLibraryDirectoryPage(
     config,

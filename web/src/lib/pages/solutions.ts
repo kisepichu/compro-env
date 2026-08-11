@@ -13,6 +13,7 @@ import type {
   SiteData,
   SolutionPageData,
 } from "../site-data-types.ts";
+import { renderSource } from "../source.ts";
 import {
   libraryPath,
   solutionsRootPath,
@@ -364,10 +365,11 @@ function renderLibraryLinkList(
   return `<ul class="${escapeAttribute(className)}">${items}</ul>`;
 }
 
-function renderSolutionDetailArticleInner(
+async function renderSolutionDetailArticleInner(
   config: UrlConfig,
+  siteData: SiteData,
   sol: SolutionPageData,
-): string {
+): Promise<string> {
   const status = sol.verification.status;
   const contestLink = toInternalPath(config, ["solutions", sol.contest_id]);
   const problemLink = toInternalPath(config, [
@@ -396,6 +398,16 @@ function renderSolutionDetailArticleInner(
   const preprocessNote = sol.has_preprocess
     ? `<p class="preprocess-note">Displayed source is the repository entry file; the actual submission is preprocessed.</p>`
     : "";
+  const sourceResult = await renderSource({
+    source: sol.source,
+    syntaxHighlight: sol.syntax_highlight,
+    sourcePath: sol.source_path,
+    repositoryUrl: siteData.site.repository_url ?? null,
+    commitSha: siteData.build.source_commit_short_sha,
+    mode: "preview",
+    notesHtml: preprocessNote,
+  });
+  const sourceSection = sourceResult.html;
   const privateDepNote = sol.has_private_dependencies
     ? `<p class="private-dependencies-note">This solution also depends on private libraries.</p>`
     : "";
@@ -434,11 +446,7 @@ function renderSolutionDetailArticleInner(
       renderStatus("solution-verification", status) +
     `</header>` +
     inPageNav +
-    `<section id="source" aria-labelledby="source-heading">` +
-      `<h2 id="source-heading">Source</h2>` +
-      preprocessNote +
-      `<p class="pending">Source rendering pending (Task 3).</p>` +
-    `</section>` +
+    sourceSection +
     `<section id="libraries" aria-labelledby="libraries-heading">` +
       `<h2 id="libraries-heading">Libraries</h2>` +
       `<h3>Verifies</h3>` +
@@ -545,23 +553,25 @@ function renderSolutionVerificationSection(sol: SolutionPageData): string {
   );
 }
 
-export function renderSolutionDetailMainInner(
+export async function renderSolutionDetailMainInner(
   config: UrlConfig,
+  siteData: SiteData,
   sol: SolutionPageData,
-): string {
+): Promise<string> {
   const pageIdAttr = escapeAttribute(`page-${sol.page_id}`);
+  const inner = await renderSolutionDetailArticleInner(config, siteData, sol);
   return (
     `<article class="solution-detail" id="${pageIdAttr}" data-pagefind-body>` +
-      renderSolutionDetailArticleInner(config, sol) +
+      inner +
     `</article>`
   );
 }
 
-export function renderSolutionDetailPage(
+export async function renderSolutionDetailPage(
   config: UrlConfig,
   siteData: SiteData,
   sol: SolutionPageData,
-): string {
+): Promise<string> {
   const canonicalSegments = [
     "solutions",
     sol.contest_id,
@@ -596,7 +606,7 @@ export function renderSolutionDetailPage(
       },
       { label: sol.solution_name },
     ],
-    mainInnerHtml: renderSolutionDetailMainInner(config, sol),
+    mainInnerHtml: await renderSolutionDetailMainInner(config, siteData, sol),
     mainIgnoreForPagefind: false,
     robots: "index,follow",
   });

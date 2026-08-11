@@ -7,7 +7,7 @@
  */
 
 import { JSDOM } from "jsdom";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { LibraryPageData, SolutionPageData } from "@/lib/site-data-types.ts";
 import type { UrlConfig } from "@/lib/url.ts";
@@ -326,7 +326,11 @@ describe("Library directory pages", () => {
 describe("Library detail (/libraries/{lang}/{source-path}/)", () => {
   const siteData = buildFixtureSiteData();
   const lib = siteData.libraries[0];
-  const html = renderLibraryDetailPage(rootConfig, siteData, lib);
+  let html: string;
+
+  beforeAll(async () => {
+    html = await renderLibraryDetailPage(rootConfig, siteData, lib);
+  });
 
   it("emits <article data-pagefind-body id=page-library:...> with fixed section IDs", () => {
     const doc = assertShell(html, {
@@ -364,8 +368,9 @@ describe("Library detail (/libraries/{lang}/{source-path}/)", () => {
     );
   });
 
-  it("omits documentation section when description is null", () => {
-    const doc = parse(renderLibraryDetailPage(rootConfig, siteData, siteData.libraries[1]));
+  it("omits documentation section when description is null", async () => {
+    const html2 = await renderLibraryDetailPage(rootConfig, siteData, siteData.libraries[1]);
+    const doc = parse(html2);
     expect(doc.getElementById("documentation")).toBeNull();
   });
 });
@@ -409,9 +414,9 @@ describe("Solution browse and detail", () => {
     expect(crumbs).toEqual(["Home", "Solutions", "abc300", "a"]);
   });
 
-  it("solution detail: article has data-pagefind-body and canonical page id", () => {
+  it("solution detail: article has data-pagefind-body and canonical page id", async () => {
     const sol: SolutionPageData = siteData.solutions[0];
-    const html = renderSolutionDetailPage(rootConfig, siteData, sol);
+    const html = await renderSolutionDetailPage(rootConfig, siteData, sol);
     const doc = assertShell(html, {
       config: rootConfig,
       expectH1: sol.solution_name,
@@ -429,17 +434,17 @@ describe("Solution browse and detail", () => {
     expect(detailStatus.getAttribute("data-status")).toBe("verified");
   });
 
-  it("solution detail with 'never' status keeps verification section as empty state", () => {
+  it("solution detail with 'never' status keeps verification section as empty state", async () => {
     const sol = siteData.solutions[1]; // 'never'
-    const doc = parse(renderSolutionDetailPage(rootConfig, siteData, sol));
+    const doc = parse(await renderSolutionDetailPage(rootConfig, siteData, sol));
     const section = doc.getElementById("verification")!;
     expect(section).toBeTruthy();
     expect(section.textContent).toMatch(/never been submitted/i);
   });
 
-  it("solution detail with 'not_configured' omits the verification section", () => {
+  it("solution detail with 'not_configured' omits the verification section", async () => {
     const sol = siteData.solutions[2]; // not_configured
-    const doc = parse(renderSolutionDetailPage(rootConfig, siteData, sol));
+    const doc = parse(await renderSolutionDetailPage(rootConfig, siteData, sol));
     expect(doc.getElementById("verification")).toBeNull();
     const status = doc.querySelector("article header .status-badge")!;
     expect(status.getAttribute("data-status")).toBe("not_configured");

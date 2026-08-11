@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "build": {
+    "schema_version": 1,
+    "generated_at": "2026-08-11T00:00:00Z",
+    "mode": "production",
+    "source_commit_sha": "0abcdef1234567890abcdef1234567890abcdef1",
+    "source_commit_short_sha": "0abcdef",
+    "source_committed_at": "2026-08-10T23:00:00Z",
+    "uncommitted_changes": false,
+    "observed_toolchains": [
+      {
+        "name": "rustc",
+        "version": "1.90.0",
+        "target": "x86_64-unknown-linux-gnu"
+      }
+    ],
+    "adapters": [
+      {
+        "language": "rust",
+        "name": "rust-adapter",
+        "version": "0.1.0"
+      }
+    ]
+  },
+  "site": {
+    "title": "compro-env fixture",
+    "description": "Fixture site used for content-rendering tests.",
+    "language": "en",
+    "repository_url": "https://github.com/kisepichu/compro-env"
+  },
+  "languages": [
+    {
+      "id": "rust",
+      "display_name": "Rust",
+      "syntax_highlight": "rust",
+      "library_count": 2,
+      "verification_summary": {
+        "verified": 2,
+        "rejected": 0,
+        "unavailable": 0,
+        "stale": 0,
+        "never": 0
+      }
+    }
+  ],
+  "libraries": [
+    {
+      "page_id": "library:rust/graph/dijkstra.rs",
+      "library_id": "rust/graph/dijkstra.rs",
+      "language": "rust",
+      "title": "Dijkstra",
+      "source_path": "graph/dijkstra.rs",
+      "source": "// Dijkstra on a weighted graph.\npub fn dijkstra(n: usize) -> Vec<u64> {\n    vec![0; n]\n}\n",
+      "syntax_highlight": "rust",
+      "updated_at": "2026-08-10T12:00:00Z",
+      "updated_by_commit": "0abcdef",
+      "description": "## Overview\n\nComputes shortest paths on a **weighted, non-negative** graph.\n\n## Complexity\n\n| Structure  | Time complexity |\n| ---------- | --------------- |\n| Binary heap | `O((V+E) log V)` |\n| Dense adj  | `O(V^2)`        |\n\nSee the [reference](https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm) for the full algorithm.\n",
+      "symbol_analysis": {
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "function",
+            "name": "dijkstra",
+            "qualified_name": "graph::dijkstra",
+            "search_names": ["dijkstra"],
+            "signature": "pub fn dijkstra(n: usize) -> Vec<u64>"
+          }
+        ]
+      },
+      "dependency_analysis": {
+        "state": "complete",
+        "direct": [],
+        "transitive": [],
+        "has_private_dependencies": false
+      },
+      "reverse_dependencies": [],
+      "relations": [],
+      "verification": {
+        "aggregate_status": "verified",
+        "evidence": [
+          {
+            "solution_id": "abc300/a/main",
+            "solution_page_id": "solution:abc300/a/main",
+            "online_judge": "atcoder",
+            "status": "verified",
+            "verdict": "AC",
+            "judged_at": "2026-08-10T13:00:00Z",
+            "oj_submission_url": "https://atcoder.jp/contests/abc300/submissions/1",
+            "stale_reason": null
+          }
+        ]
+      },
+      "diagnostics": []
+    },
+    {
+      "page_id": "library:rust/math/gcd.rs",
+      "library_id": "rust/math/gcd.rs",
+      "language": "rust",
+      "title": "gcd",
+      "source_path": "math/gcd.rs",
+      "source": "pub fn gcd(a: u64, b: u64) -> u64 {\n    if b == 0 { a } else { gcd(b, a % b) }\n}\n",
+      "syntax_highlight": "rust",
+      "updated_at": "2026-08-05T10:00:00Z",
+      "updated_by_commit": "0abcdef",
+      "description": "Greatest common divisor via the Euclidean algorithm.\n",
+      "symbol_analysis": {
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "function",
+            "name": "gcd",
+            "qualified_name": "math::gcd",
+            "search_names": ["gcd"],
+            "signature": "pub fn gcd(a: u64, b: u64) -> u64"
+          }
+        ]
+      },
+      "dependency_analysis": {
+        "state": "complete",
+        "direct": [],
+        "transitive": [],
+        "has_private_dependencies": false
+      },
+      "reverse_dependencies": [],
+      "relations": [],
+      "verification": {
+        "aggregate_status": "verified",
+        "evidence": [
+          {
+            "solution_id": "abc300/a/main",
+            "solution_page_id": "solution:abc300/a/main",
+            "online_judge": "atcoder",
+            "status": "verified",
+            "verdict": "AC",
+            "judged_at": "2026-08-10T13:00:00Z",
+            "oj_submission_url": "https://atcoder.jp/contests/abc300/submissions/1",
+            "stale_reason": null
+          }
+        ]
+      },
+      "diagnostics": []
+    }
+  ],
+  "solutions": [
+    {
+      "page_id": "solution:abc300/a/main",
+      "solution_id": "abc300/a/main",
+      "contest_id": "abc300",
+      "problem_code": "a",
+      "solution_name": "main",
+      "online_judge": "atcoder",
+      "language": "rust",
+      "solved_at": "2026-08-10T13:00:00Z",
+      "source_path": "solutions/abc300/a/main/main.rs",
+      "source": "use gcd::gcd;\n\nfn main() {\n    println!(\"{}\", gcd(12, 18));\n}\n",
+      "syntax_highlight": "rust",
+      "has_preprocess": false,
+      "verifies": [
+        {
+          "library_id": "rust/math/gcd.rs",
+          "language": "rust",
+          "title": "gcd",
+          "source_path": "math/gcd.rs",
+          "manual": false
+        }
+      ],
+      "direct_dependencies": [
+        {
+          "library_id": "rust/math/gcd.rs",
+          "language": "rust",
+          "title": "gcd",
+          "source_path": "math/gcd.rs",
+          "manual": false
+        }
+      ],
+      "has_private_dependencies": false,
+      "verification": {
+        "status": "verified",
+        "result": {
+          "attempt_id": "att-1",
+          "verdict": "AC",
+          "judged_at": "2026-08-10T13:00:00Z",
+          "oj_submission_url": "https://atcoder.jp/contests/abc300/submissions/1",
+          "execution_time_ms": 12,
+          "memory_kib": 512,
+          "submitted_source_hash": "hash1",
+          "verify_fingerprint": "fp1",
+          "stale_reason": null,
+          "testcases": [
+            {
+              "name": "sample_00.txt",
+              "verdict": "AC",
+              "execution_time_ms": 8,
+              "memory_kib": 256
+            }
+          ]
+        }
+      },
+      "dependency_analysis_state": "complete",
+      "diagnostics": []
+    }
+  ]
+}
