@@ -7,6 +7,7 @@
  * footer with repository link plus short build SHA.
  */
 
+import { sanitizeExternalUrl } from "../safe-url.ts";
 import type { SiteData } from "../site-data-types.ts";
 import {
   homePath,
@@ -126,11 +127,11 @@ export interface FooterOptions {
 }
 
 export function renderFooter(opts: FooterOptions): string {
-  const repoUrl = opts.siteData.site.repository_url;
+  const safeRepoUrl = sanitizeExternalUrl(opts.siteData.site.repository_url);
   const shortSha = opts.siteData.build.source_commit_short_sha;
   const repoLink =
-    repoUrl !== null && repoUrl !== undefined && repoUrl.length > 0
-      ? `<a class="repository-link" href="${escapeAttribute(repoUrl)}" rel="noopener noreferrer">Repository</a>`
+    safeRepoUrl !== null
+      ? `<a class="repository-link" href="${escapeAttribute(safeRepoUrl)}" rel="noopener noreferrer">Repository</a>`
       : `<span class="repository-link">Repository</span>`;
   return (
     `<footer class="site-footer" data-pagefind-ignore>` +

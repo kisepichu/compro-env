@@ -19,6 +19,7 @@ import type {
   VerificationEvidence,
 } from "../site-data-types.ts";
 import { renderDocumentation } from "../markdown.ts";
+import { sanitizeExternalUrl } from "../safe-url.ts";
 import { renderSource } from "../source.ts";
 import {
   homePath,
@@ -500,9 +501,10 @@ function renderVerificationEvidenceList(
         ev.judged_at !== null && ev.judged_at !== undefined
           ? `<time datetime="${escapeAttribute(ev.judged_at)}">${escapeHtml(ev.judged_at)}</time>`
           : `<span class="empty-time">not judged yet</span>`;
+      const safeOjUrl = sanitizeExternalUrl(ev.oj_submission_url);
       const ojLink =
-        ev.oj_submission_url !== null && ev.oj_submission_url !== undefined
-          ? ` <a href="${escapeAttribute(ev.oj_submission_url)}" rel="noopener noreferrer">OJ submission</a>`
+        safeOjUrl !== null
+          ? ` <a href="${escapeAttribute(safeOjUrl)}" rel="noopener noreferrer">OJ submission</a>`
           : "";
       const stale =
         ev.status === "stale" && ev.stale_reason

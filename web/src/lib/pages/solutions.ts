@@ -13,6 +13,7 @@ import type {
   SiteData,
   SolutionPageData,
 } from "../site-data-types.ts";
+import { sanitizeExternalUrl } from "../safe-url.ts";
 import { renderSource } from "../source.ts";
 import {
   libraryPath,
@@ -509,9 +510,10 @@ function renderSolutionVerificationSection(sol: SolutionPageData): string {
     result.memory_kib !== null && result.memory_kib !== undefined
       ? `<dt>Memory</dt><dd>${result.memory_kib} KiB</dd>`
       : "";
+  const safeOjUrl = sanitizeExternalUrl(result.oj_submission_url);
   const oj =
-    result.oj_submission_url !== null && result.oj_submission_url !== undefined
-      ? `<dt>OJ submission</dt><dd><a href="${escapeAttribute(result.oj_submission_url)}" rel="noopener noreferrer">Open</a></dd>`
+    safeOjUrl !== null
+      ? `<dt>OJ submission</dt><dd><a href="${escapeAttribute(safeOjUrl)}" rel="noopener noreferrer">Open</a></dd>`
       : "";
   const stale =
     result.stale_reason !== null && result.stale_reason !== undefined
