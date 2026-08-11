@@ -117,8 +117,9 @@ promoted to numbered plans because they are not agent-driven.
 
 Trigger: plan 053 merged. Deadline: before plan 061 merges.
 
-The user runs the fixture Astro build produced by plans 052/053 (`ce site-data` on the fixture data those
-plans ship, then `npm run site:build`) and hands the resulting site together with
+The user runs the fixture Astro build produced by plans 052/053 (`npm ci` then `npm run site:build`, per
+spec §12.14 — this is the sole full-build entrypoint and it internally invokes `ce check`,
+`ce site-data generate --mode production`, Astro, and Pagefind) and hands the resulting site together with
 `docs/superpowers/specs/2026-08-10-library-web-structure-handoff.md` to an external design tool (e.g.
 Claude Design). The tool returns visual design plus Astro component and CSS proposals.
 
