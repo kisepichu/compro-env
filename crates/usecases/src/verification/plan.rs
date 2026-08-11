@@ -56,6 +56,133 @@ pub struct SubmissionPlanBody {
 }
 
 impl SubmissionPlan {
+    /// Serialize the frozen plan body to its canonical JSON representation.
+    ///
+    /// The exact bytes hashed by `plan_hash` are returned so consumers can
+    /// round-trip the plan through disk (used by the hidden
+    /// `internal verify-prepare` / `verify-start` CI boundary).
+    pub fn to_canonical_json_bytes(&self) -> Vec<u8> {
+        canonical_plan_bytes(&self.body)
+    }
+
+    /// Reconstruct a plan from canonical JSON bytes produced by
+    /// [`Self::to_canonical_json_bytes`]. Recomputes the plan hash from the
+    /// reconstructed body so `start_prepared_plan` can validate integrity.
+    pub fn from_canonical_json_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        use anyhow::{Context, anyhow};
+        use chrono::DateTime;
+        use domain::library::{LanguageId, LibraryId};
+        use serde_json::Value;
+
+        let v: Value = serde_json::from_slice(bytes).context("plan JSON parse failed")?;
+        let schema_version = v["schema_version"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("plan missing schema_version"))?
+            as u32;
+        if schema_version != PLAN_SCHEMA_VERSION {
+            return Err(anyhow!(
+                "plan schema_version {schema_version} != {PLAN_SCHEMA_VERSION}"
+            ));
+        }
+        let solution_id = SolutionId::parse(
+            v["solution_id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("plan missing solution_id"))?,
+        )
+        .map_err(|e| anyhow!("plan solution_id invalid: {e}"))?;
+        let attempt_id = AttemptId::parse(
+            v["attempt_id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("plan missing attempt_id"))?,
+        )
+        .map_err(|e| anyhow!("plan attempt_id invalid: {e}"))?;
+        let replaces_attempt_id = v["replaces_attempt_id"]
+            .as_str()
+            .map(|s| AttemptId::parse(s).map_err(|e| anyhow!("plan replaces_attempt_id: {e}")))
+            .transpose()?;
+        let oj = v["oj"]
+            .as_str()
+            .ok_or_else(|| anyhow!("plan missing oj"))?
+            .to_string();
+        let contest_id = v["contest_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("plan missing contest_id"))?
+            .to_string();
+        let problem_code = v["problem_code"]
+            .as_str()
+            .ok_or_else(|| anyhow!("plan missing problem_code"))?
+            .to_string();
+        let language = LanguageBinding {
+            language_id: LanguageId::parse(
+                v["language"]["language_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("plan missing language.language_id"))?,
+            )
+            .map_err(|e| anyhow!("plan language_id invalid: {e}"))?,
+            oj_language_id: v["language"]["oj_language_id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("plan missing language.oj_language_id"))?
+                .to_string(),
+        };
+        let submitted_source_path = v["submitted_source"]["path"]
+            .as_str()
+            .ok_or_else(|| anyhow!("plan missing submitted_source.path"))?
+            .to_string();
+        let bytes_b64 = v["submitted_source"]["bytes_b64"]
+            .as_str()
+            .ok_or_else(|| anyhow!("plan missing submitted_source.bytes_b64"))?;
+        let submitted_source_bytes = base64_decode(bytes_b64)?;
+        let submitted_source_hash = ContentHash::parse(
+            v["submitted_source"]["hash"]
+                .as_str()
+                .ok_or_else(|| anyhow!("plan missing submitted_source.hash"))?,
+        )
+        .map_err(|e| anyhow!("plan submitted_source.hash invalid: {e}"))?;
+        let fingerprint = VerifyFingerprint::parse(
+            v["fingerprint"]
+                .as_str()
+                .ok_or_else(|| anyhow!("plan missing fingerprint"))?,
+        )
+        .map_err(|e| anyhow!("plan fingerprint invalid: {e}"))?;
+        let verifies_arr = v["verifies"]
+            .as_array()
+            .ok_or_else(|| anyhow!("plan missing verifies"))?;
+        let mut verifies = Vec::with_capacity(verifies_arr.len());
+        for item in verifies_arr {
+            let s = item
+                .as_str()
+                .ok_or_else(|| anyhow!("plan verifies entry not a string"))?;
+            verifies.push(
+                LibraryId::parse(s).map_err(|e| anyhow!("plan verifies entry invalid: {e}"))?,
+            );
+        }
+        let started_at = DateTime::parse_from_rfc3339(
+            v["started_at"]
+                .as_str()
+                .ok_or_else(|| anyhow!("plan missing started_at"))?,
+        )
+        .map_err(|e| anyhow!("plan started_at invalid: {e}"))?;
+
+        let body = SubmissionPlanBody {
+            schema_version,
+            solution_id,
+            attempt_id,
+            replaces_attempt_id,
+            oj,
+            contest_id,
+            problem_code,
+            language,
+            submitted_source_path,
+            submitted_source_bytes,
+            submitted_source_hash,
+            fingerprint,
+            verifies,
+            started_at,
+        };
+        let plan_hash = compute_plan_hash(&body);
+        Ok(SubmissionPlan { body, plan_hash })
+    }
+
     /// Build the [`StartingState`] that must be persisted before any OJ
     /// contact (spec §8.2).
     pub fn starting_state(&self) -> StartingState {
@@ -256,6 +383,53 @@ fn base64_encode(bytes: &[u8]) -> String {
         _ => unreachable!(),
     }
     out
+}
+
+/// Companion to [`base64_encode`]: decode a standard-alphabet padded base64
+/// string back to bytes. Kept dependency-free like the encoder above.
+fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
+    use anyhow::anyhow;
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut lookup = [255u8; 256];
+    for (i, b) in ALPHABET.iter().enumerate() {
+        lookup[*b as usize] = i as u8;
+    }
+    let bytes = input.as_bytes();
+    if !bytes.len().is_multiple_of(4) {
+        return Err(anyhow!("base64 payload not a multiple of 4"));
+    }
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    let mut i = 0;
+    while i < bytes.len() {
+        let (c0, c1, c2, c3) = (bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]);
+        let b0 = lookup[c0 as usize];
+        let b1 = lookup[c1 as usize];
+        if b0 == 255 || b1 == 255 {
+            return Err(anyhow!("invalid base64 character"));
+        }
+        out.push((b0 << 2) | (b1 >> 4));
+        if c2 == b'=' {
+            if c3 != b'=' {
+                return Err(anyhow!("misplaced base64 padding"));
+            }
+            break;
+        }
+        let b2 = lookup[c2 as usize];
+        if b2 == 255 {
+            return Err(anyhow!("invalid base64 character"));
+        }
+        out.push(((b1 & 0x0f) << 4) | (b2 >> 2));
+        if c3 == b'=' {
+            break;
+        }
+        let b3 = lookup[c3 as usize];
+        if b3 == 255 {
+            return Err(anyhow!("invalid base64 character"));
+        }
+        out.push(((b2 & 0x03) << 6) | b3);
+        i += 4;
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

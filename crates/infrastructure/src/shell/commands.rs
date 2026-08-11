@@ -1,8 +1,9 @@
 use clap::{Parser, Subcommand};
 use domain::entity::{Language, OJKind};
 use interfaces::controller::input::{
-    CheckInput, InitInput, LoginInput, LogoutInput, NewInput, SiteDataBuildMode,
-    SiteDataGenerateInput, SubmitInput, TestInput, WhoamiInput,
+    CheckInput, InitInput, InternalVerifyPollInput, InternalVerifyPrepareInput,
+    InternalVerifyStartInput, LoginInput, LogoutInput, NewInput, SiteDataBuildMode,
+    SiteDataGenerateInput, SubmitInput, TestInput, VerifyInput, WhoamiInput,
 };
 use usecases::online_judge::Credentials;
 
@@ -78,6 +79,42 @@ pub enum Commands {
     SiteData {
         #[command(subcommand)]
         subcommand: SiteDataSubcommand,
+    },
+    /// Resumably verify library solutions against their configured OJ.
+    Verify {
+        /// Optional solution id (e.g. `librarychecker-aplusb/aplusb/main`).
+        /// Defaults to walking the entire discovery manifest.
+        solution: Option<String>,
+    },
+    /// Hidden CI-boundary helpers for the verify pipeline (spec §8.1).
+    #[command(hide = true)]
+    Internal {
+        #[command(subcommand)]
+        subcommand: InternalSubcommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum InternalSubcommand {
+    /// Freeze a submission plan and persist the `Starting` record.
+    #[command(hide = true)]
+    VerifyPrepare {
+        #[arg(long)]
+        solution: String,
+        #[arg(long = "plan-out")]
+        plan_out: String,
+    },
+    /// Dispatch a previously-prepared plan via the OJ starter.
+    #[command(hide = true)]
+    VerifyStart {
+        #[arg(long = "plan-in")]
+        plan_in: String,
+    },
+    /// Drive the stored record for a solution forward one poll tick.
+    #[command(hide = true)]
+    VerifyPoll {
+        #[arg(long)]
+        solution: String,
     },
 }
 
@@ -234,5 +271,45 @@ impl SiteDataGenerateInput for SiteDataGenerateCommand {
     }
     fn mode(&self) -> SiteDataBuildMode {
         self.mode
+    }
+}
+
+pub struct VerifyCommand {
+    pub solution: Option<String>,
+}
+impl VerifyInput for VerifyCommand {
+    fn solution(&self) -> Option<String> {
+        self.solution.clone()
+    }
+}
+
+pub struct InternalVerifyPrepareCommand {
+    pub solution: String,
+    pub plan_out: String,
+}
+impl InternalVerifyPrepareInput for InternalVerifyPrepareCommand {
+    fn solution(&self) -> String {
+        self.solution.clone()
+    }
+    fn plan_out(&self) -> String {
+        self.plan_out.clone()
+    }
+}
+
+pub struct InternalVerifyStartCommand {
+    pub plan_in: String,
+}
+impl InternalVerifyStartInput for InternalVerifyStartCommand {
+    fn plan_in(&self) -> String {
+        self.plan_in.clone()
+    }
+}
+
+pub struct InternalVerifyPollCommand {
+    pub solution: String,
+}
+impl InternalVerifyPollInput for InternalVerifyPollCommand {
+    fn solution(&self) -> String {
+        self.solution.clone()
     }
 }

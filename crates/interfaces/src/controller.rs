@@ -18,9 +18,20 @@ use usecases::site_data_generator::{
 
 pub mod input;
 use input::{
-    InitInput, LoginInput, LogoutInput, NewInput, SiteDataBuildMode, SiteDataGenerateInput,
-    SubmitInput, TestInput, WhoamiInput,
+    InitInput, InternalVerifyPollInput, InternalVerifyPrepareInput, InternalVerifyStartInput,
+    LoginInput, LogoutInput, NewInput, SiteDataBuildMode, SiteDataGenerateInput, SubmitInput,
+    TestInput, VerifyInput, WhoamiInput,
 };
+use usecases::clock::Clock;
+use usecases::id_generator::AttemptIdGenerator;
+use usecases::service::verify::{
+    VerifyInputs, VerifyOutcome, VerifyPorts, VerifySelection, poll_current, prepare_solution,
+    run_verify, start_prepared_plan,
+};
+use usecases::submission_lifecycle::{
+    PollEvent, PollingPolicy, RetryAfterHint, Sleeper, StartEvent,
+};
+use usecases::verification::plan::SubmissionPlan;
 
 pub struct Controller {
     service: Service,
@@ -151,5 +162,168 @@ impl Controller {
         let data = generate_site_data(&spec)?;
         write_site_data(site_data_repository, &output, &data)?;
         Ok(output)
+    }
+
+    /// Runs `ce verify [solution-id]`. Callers provide the discovery manifest
+    /// and the pre-normalized [`domain::analysis::AnalysisSnapshot`] so this
+    /// layer stays free of infrastructure concerns.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify(
+        &self,
+        args: &dyn VerifyInput,
+        repository_root: &Path,
+        library_config: &LibraryProjectConfig,
+        manifest: &DiscoveryManifest,
+        snapshot: &domain::analysis::AnalysisSnapshot,
+        clock: &dyn Clock,
+        ids: &dyn AttemptIdGenerator,
+        sleeper: &dyn Sleeper,
+        retry_hint: &dyn RetryAfterHint,
+        policy: PollingPolicy,
+    ) -> Result<VerifyOutcome> {
+        let selection = parse_verify_selection(args)?;
+        let ports = self.verify_ports(clock, ids, sleeper, retry_hint, policy)?;
+        let inputs = VerifyInputs {
+            repository_root,
+            library_config,
+            manifest,
+            snapshot,
+            selection,
+            submit_preprocess: self.service.config().submit_preprocess(),
+        };
+        run_verify(inputs, ports)
+    }
+
+    /// Hidden `internal verify-prepare`: freeze a submission plan, persist the
+    /// `Starting` record, and write the plan JSON to `--plan-out`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn internal_verify_prepare(
+        &self,
+        args: &dyn InternalVerifyPrepareInput,
+        repository_root: &Path,
+        library_config: &LibraryProjectConfig,
+        manifest: &DiscoveryManifest,
+        snapshot: &domain::analysis::AnalysisSnapshot,
+        clock: &dyn Clock,
+        ids: &dyn AttemptIdGenerator,
+        sleeper: &dyn Sleeper,
+        retry_hint: &dyn RetryAfterHint,
+        policy: PollingPolicy,
+    ) -> Result<std::path::PathBuf> {
+        let solution_id = SolutionId::parse(&args.solution())
+            .map_err(|e| anyhow::anyhow!("invalid --solution: {e}"))?;
+        let ports = self.verify_ports(clock, ids, sleeper, retry_hint, policy)?;
+        let inputs = VerifyInputs {
+            repository_root,
+            library_config,
+            manifest,
+            snapshot,
+            selection: VerifySelection::Single(solution_id.clone()),
+            submit_preprocess: self.service.config().submit_preprocess(),
+        };
+        let plan = prepare_solution(&inputs, &ports, &solution_id)?;
+        let out_path = std::path::PathBuf::from(args.plan_out());
+        std::fs::write(&out_path, plan.to_canonical_json_bytes())
+            .map_err(|e| anyhow::anyhow!("failed to write plan to {}: {e}", out_path.display()))?;
+        Ok(out_path)
+    }
+
+    /// Hidden `internal verify-start`: read a prepared plan JSON and dispatch
+    /// it through the starter.
+    #[allow(clippy::too_many_arguments)]
+    pub fn internal_verify_start(
+        &self,
+        args: &dyn InternalVerifyStartInput,
+        repository_root: &Path,
+        library_config: &LibraryProjectConfig,
+        manifest: &DiscoveryManifest,
+        snapshot: &domain::analysis::AnalysisSnapshot,
+        clock: &dyn Clock,
+        ids: &dyn AttemptIdGenerator,
+        sleeper: &dyn Sleeper,
+        retry_hint: &dyn RetryAfterHint,
+        policy: PollingPolicy,
+    ) -> Result<StartEvent> {
+        let bytes = std::fs::read(args.plan_in())?;
+        let plan = SubmissionPlan::from_canonical_json_bytes(&bytes)?;
+        let ports = self.verify_ports(clock, ids, sleeper, retry_hint, policy)?;
+        let inputs = VerifyInputs {
+            repository_root,
+            library_config,
+            manifest,
+            snapshot,
+            selection: VerifySelection::Single(plan.body.solution_id.clone()),
+            submit_preprocess: self.service.config().submit_preprocess(),
+        };
+        start_prepared_plan(&plan, &inputs, &ports)
+    }
+
+    /// Hidden `internal verify-poll`: drive the stored record forward.
+    #[allow(clippy::too_many_arguments)]
+    pub fn internal_verify_poll(
+        &self,
+        args: &dyn InternalVerifyPollInput,
+        repository_root: &Path,
+        library_config: &LibraryProjectConfig,
+        manifest: &DiscoveryManifest,
+        snapshot: &domain::analysis::AnalysisSnapshot,
+        clock: &dyn Clock,
+        ids: &dyn AttemptIdGenerator,
+        sleeper: &dyn Sleeper,
+        retry_hint: &dyn RetryAfterHint,
+        policy: PollingPolicy,
+    ) -> Result<PollEvent> {
+        let solution_id = SolutionId::parse(&args.solution())
+            .map_err(|e| anyhow::anyhow!("invalid --solution: {e}"))?;
+        let ports = self.verify_ports(clock, ids, sleeper, retry_hint, policy)?;
+        let inputs = VerifyInputs {
+            repository_root,
+            library_config,
+            manifest,
+            snapshot,
+            selection: VerifySelection::Single(solution_id.clone()),
+            submit_preprocess: self.service.config().submit_preprocess(),
+        };
+        poll_current(&solution_id, &inputs, &ports)
+    }
+
+    /// Assemble a [`VerifyPorts`] view over the service's owned registries.
+    /// Fails when the service was constructed without the verification bundle
+    /// (i.e. it holds `verification: None`).
+    fn verify_ports<'a>(
+        &'a self,
+        clock: &'a dyn Clock,
+        ids: &'a dyn AttemptIdGenerator,
+        sleeper: &'a dyn Sleeper,
+        retry_hint: &'a dyn RetryAfterHint,
+        policy: PollingPolicy,
+    ) -> Result<VerifyPorts<'a>> {
+        let verification = self.service.verification_services().ok_or_else(|| {
+            anyhow::anyhow!("verify pipeline is not wired on this Service instance")
+        })?;
+        Ok(VerifyPorts {
+            verifications: verification.verifications.as_ref(),
+            runner: self.service.command_runner(),
+            starters: self.service.starter_registry(),
+            pollers: &verification.pollers,
+            recovery: &verification.recovery,
+            sessions: self.service.session_repository(),
+            clock,
+            ids,
+            sleeper,
+            retry_hint,
+            policy,
+        })
+    }
+}
+
+fn parse_verify_selection(args: &dyn VerifyInput) -> Result<VerifySelection> {
+    match args.solution() {
+        Some(s) => {
+            let id = SolutionId::parse(&s)
+                .map_err(|e| anyhow::anyhow!("invalid solution id `{s}`: {e}"))?;
+            Ok(VerifySelection::Single(id))
+        }
+        None => Ok(VerifySelection::All),
     }
 }

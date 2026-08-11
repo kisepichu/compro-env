@@ -45,6 +45,25 @@ pub trait CheckInput {
     fn language(&self) -> Option<String>;
 }
 
+pub trait VerifyInput {
+    /// Optional positional `[solution-id]` argument. `None` means "walk the
+    /// entire discovery manifest".
+    fn solution(&self) -> Option<String>;
+}
+
+pub trait InternalVerifyPrepareInput {
+    fn solution(&self) -> String;
+    fn plan_out(&self) -> String;
+}
+
+pub trait InternalVerifyStartInput {
+    fn plan_in(&self) -> String;
+}
+
+pub trait InternalVerifyPollInput {
+    fn solution(&self) -> String;
+}
+
 pub trait SiteDataGenerateInput {
     /// `--output <dir>` argument. `None` means the default under
     /// `target/ce-site-data`.
