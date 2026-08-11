@@ -63,8 +63,8 @@ pub fn analyze_dependencies(
 
 ### Task 3: Deliver Rust dependencies
 
-- [ ] Run the Rust fixture through the generic process runner and normalized snapshot tests.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record Rust dependency adapter completion`.
+- [x] Run the Rust fixture through the generic process runner and normalized snapshot tests.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record Rust dependency adapter completion`.
 - [ ] Invoke `/pr --base main`; link plan 043 and state that it unblocks plan 044.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
