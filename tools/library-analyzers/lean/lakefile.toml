@@ -1,0 +1,29 @@
+# Lake package for the ce-lean adapter (spec §§6.8, 6.9; plan 048).
+#
+# The adapter builds inside `lake env` with the pinned `lean-toolchain`. No
+# external Lake packages are declared: the handshake path relies only on
+# Lean's built-in `Lean.Data.Json` module. Repository-local `packagesDir` and
+# `buildDir` keep every generated artifact inside the analyzer staging area
+# so downloaded source and build output can never wander into
+# `tools/library-analyzers/**` and change this directory's input digest.
+
+name = "ce-lean-analyzer"
+defaultTargets = ["ce-lean"]
+packagesDir = ".lake/packages"
+buildDir = ".lake/build"
+
+[[lean_lib]]
+name = "Analyzer"
+
+[[lean_lib]]
+name = "Tests"
+
+[[lean_exe]]
+name = "ce-lean"
+root = "Analyzer.Main"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "ce-lean-handshake-test"
+root = "Tests.Handshake"
+supportInterpreter = true

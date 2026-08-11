@@ -14,6 +14,7 @@ pub mod download;
 pub mod inputs;
 #[cfg(unix)]
 pub mod language_plans;
+pub mod lean_toolchain;
 pub mod prepare;
 pub mod prepared;
 pub mod process;

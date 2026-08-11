@@ -53,6 +53,7 @@ pub struct ArchiveDependency {
 pub enum ArchiveFormat {
     TarGz,
     TarXz,
+    TarZst,
     Zip,
 }
 
@@ -61,6 +62,7 @@ impl ArchiveFormat {
         match self {
             ArchiveFormat::TarGz => "tar.gz",
             ArchiveFormat::TarXz => "tar.xz",
+            ArchiveFormat::TarZst => "tar.zst",
             ArchiveFormat::Zip => "zip",
         }
     }
@@ -319,6 +321,7 @@ mod tests {
     fn archive_format_display_round_trips() {
         assert_eq!(ArchiveFormat::TarGz.to_string(), "tar.gz");
         assert_eq!(ArchiveFormat::TarXz.to_string(), "tar.xz");
+        assert_eq!(ArchiveFormat::TarZst.to_string(), "tar.zst");
         assert_eq!(ArchiveFormat::Zip.to_string(), "zip");
     }
 

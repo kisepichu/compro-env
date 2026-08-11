@@ -16,6 +16,7 @@ use tar::{Archive, EntryType};
 use thiserror::Error;
 use xz2::read::XzDecoder;
 use zip::ZipArchive;
+use zstd::stream::read::Decoder as ZstdDecoder;
 
 #[derive(Debug, Error)]
 pub enum ArchiveError {
@@ -70,6 +71,7 @@ pub fn extract_archive(
     match format {
         ArchiveFormat::TarGz => extract_tar_gz(archive_path, destination),
         ArchiveFormat::TarXz => extract_tar_xz(archive_path, destination),
+        ArchiveFormat::TarZst => extract_tar_zst(archive_path, destination),
         ArchiveFormat::Zip => extract_zip(archive_path, destination),
     }?;
     Ok(destination.to_path_buf())
@@ -94,6 +96,18 @@ fn extract_tar_xz(archive_path: &Path, destination: &Path) -> Result<(), Archive
         source,
     })?;
     let archive = Archive::new(XzDecoder::new(file));
+    extract_tar_entries(archive, destination)
+}
+
+// ─── tar.zst ────────────────────────────────────────────────────────────────
+
+fn extract_tar_zst(archive_path: &Path, destination: &Path) -> Result<(), ArchiveError> {
+    let file = File::open(archive_path).map_err(|source| ArchiveError::Open {
+        path: archive_path.display().to_string(),
+        source,
+    })?;
+    let decoder = ZstdDecoder::new(file).map_err(|source| ArchiveError::Invalid { source })?;
+    let archive = Archive::new(decoder);
     extract_tar_entries(archive, destination)
 }
 
@@ -436,6 +450,36 @@ mod tests {
         extract_archive(&archive_path, ArchiveFormat::TarXz, dest.path()).unwrap();
         let extracted = fs::read(dest.path().join("greeting.txt")).unwrap();
         assert_eq!(extracted, b"hello xz\n");
+    }
+
+    fn build_tar_zst(name: &str, contents: &[u8]) -> Vec<u8> {
+        use zstd::stream::write::Encoder as ZstdEncoder;
+        let mut zst = ZstdEncoder::new(Vec::new(), 3).expect("start zstd encoder");
+        {
+            let mut builder = tar::Builder::new(&mut zst);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o644);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, name, contents)
+                .expect("append tar file");
+            builder.finish().expect("finish tar");
+        }
+        zst.finish().expect("finish zst")
+    }
+
+    #[test]
+    fn extract_tar_zst_round_trips_regular_file() {
+        let bytes = build_tar_zst("greeting.txt", b"hello zst\n");
+        let archive_dir = TempDir::new().unwrap();
+        let archive_path = archive_dir.path().join("sample.tar.zst");
+        fs::write(&archive_path, &bytes).unwrap();
+        let dest = TempDir::new().unwrap();
+        extract_archive(&archive_path, ArchiveFormat::TarZst, dest.path()).unwrap();
+        let extracted = fs::read(dest.path().join("greeting.txt")).unwrap();
+        assert_eq!(extracted, b"hello zst\n");
     }
 
     fn build_tar_gz_with_symlink(

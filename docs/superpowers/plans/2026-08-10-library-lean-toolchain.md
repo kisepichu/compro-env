@@ -33,12 +33,12 @@
 - Modify: `tools/library-analyzers/build-inputs.toml`
 - Create: `crates/infrastructure/tests/lean_toolchain.rs`
 
-- [ ] Write failing selection tests for the three supported triples, unsupported triples, wrong digest,
+- [x] Write failing selection tests for the three supported triples, unsupported triples, wrong digest,
       exact `lean --version`, exact `lake --version`, and missing locked package content.
-- [ ] Add official HTTPS artifacts/digests and validate extracted executable/package layout.
-- [ ] Configure Lake `packagesDir` and `buildDir` under the prepared/build staging directories.
-- [ ] Run `cargo test -p infrastructure --test lean_toolchain`.
-- [ ] Invoke `/commit` with `build: pin Lean 4.30.0 for library analysis`.
+- [x] Add official HTTPS artifacts/digests and validate extracted executable/package layout.
+- [x] Configure Lake `packagesDir` and `buildDir` under the prepared/build staging directories.
+- [x] Run `cargo test -p infrastructure --test lean_toolchain`.
+- [x] Invoke `/commit` with `build: pin Lean 4.30.0 for library analysis`.
 
 ### Task 2: Build a handshaking Lean adapter
 
@@ -48,17 +48,17 @@
 - Create: `tools/library-analyzers/lean/Analyzer/Diagnostics.lean`
 - Create: `tools/library-analyzers/lean/Tests/Handshake.lean`
 
-- [ ] Write a failing empty-request test expecting adapter `ce-lean`, protocol v1, toolchain
+- [x] Write a failing empty-request test expecting adapter `ce-lean`, protocol v1, toolchain
       `lean=4.30.0`, and empty target arrays.
-- [ ] Implement one UTF-8 JSON document from stdin to stdout with strict version/field validation.
-- [ ] Compile only through prepared `lake build --no-build`/offline resolution as encoded by the build driver.
-- [ ] Run `tools/library-analyzers/prepare && tools/library-analyzers/build`; expect all handshakes to pass.
-- [ ] Invoke `/commit` with `feat: add Lean analyzer protocol executable`.
+- [x] Implement one UTF-8 JSON document from stdin to stdout with strict version/field validation.
+- [x] Compile only through prepared `lake build --no-build`/offline resolution as encoded by the build driver.
+- [x] Run `tools/library-analyzers/prepare && tools/library-analyzers/build`; expect all handshakes to pass.
+- [x] Invoke `/commit` with `feat: add Lean analyzer protocol executable`.
 
 ### Task 3: Deliver the Lean toolchain boundary
 
-- [ ] Run Lean handshake tests and the generic adapter build/process suites.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record Lean toolchain completion`.
+- [x] Run Lean handshake tests and the generic adapter build/process suites.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record Lean toolchain completion`.
 - [ ] Invoke `/pr --base main`; link plan 048 and state that it unblocks plan 049.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.

@@ -18,8 +18,9 @@ use infrastructure::library_adapter::build_state::{BuildStateError, inspect_buil
 use infrastructure::library_adapter::cpp_toolchain::{CppToolchainError, select_cpp_toolchain};
 use infrastructure::library_adapter::inputs::{calculate_input_digest, load_build_inputs};
 use infrastructure::library_adapter::language_plans::{
-    cpp_build_plan, rust_build_plan, sanitized_language_env,
+    cpp_build_plan, lean_build_plan, rust_build_plan, sanitized_language_env,
 };
+use infrastructure::library_adapter::lean_toolchain::{LeanToolchainError, select_lean_toolchain};
 use infrastructure::library_adapter::prepare::{PREPARED_SUBDIR, prepared_dir};
 use infrastructure::library_adapter::prepared::{
     expected_dependency_id, load_dependency_manifest, validate_prepared_set,
@@ -182,6 +183,26 @@ fn run(args: Args) -> anyhow::Result<()> {
                     "library-adapter-build: skipping C++ adapter: prepared LLVM \
                      install {archive_name:?} not on disk at {path}. Run \
                      `tools/library-analyzers/prepare` first to build ce-cpp."
+                );
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+
+    // Plan 048 Task 2 wiring for the Lean adapter. Same skip semantics as the
+    // C++ block above: unsupported target platform quietly drops the plan
+    // (spec §6.8 pins Lean 4.30.0 to linux/x86_64, linux/aarch64,
+    // macos/aarch64 only), a missing prepared install warns and skips, and
+    // any other error propagates so a corrupt prepared set never masquerades
+    // as usable.
+    if select_lean_toolchain(&target_platform).is_ok() {
+        match lean_build_plan(&repository_root, &target_platform, &prepared_set) {
+            Ok(plan) => language_plans.push(plan),
+            Err(LeanToolchainError::PreparedInstallMissing { archive_name, path }) => {
+                eprintln!(
+                    "library-adapter-build: skipping Lean adapter: prepared Lean \
+                     install {archive_name:?} not on disk at {path}. Run \
+                     `tools/library-analyzers/prepare` first to build ce-lean."
                 );
             }
             Err(err) => return Err(err.into()),

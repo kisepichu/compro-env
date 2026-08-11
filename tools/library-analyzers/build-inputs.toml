@@ -17,6 +17,7 @@ directories = [
     "tools/library-analyzers/protocol",
     "tools/library-analyzers/rust",
     "tools/library-analyzers/cpp",
+    "tools/library-analyzers/lean",
 ]
 
 files = [
