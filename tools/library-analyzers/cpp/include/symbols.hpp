@@ -15,10 +15,11 @@
 //   * have unusable source ranges (invalid or reversed).
 //
 // Filtered-but-still-parsed declarations degrade the returned
-// `AnalysisState` to `Partial`. A hard AST failure (impossible under the
-// caller's driver, which is a `SyntaxOnlyAction` we control) yields `Failed`
-// with an empty symbol list — callers can distinguish that from partial via
-// the state.
+// `AnalysisState` to `Partial`. A hard driver failure — the frontend refused
+// to build an AST at all — yields `Failed` with an empty symbol list;
+// callers distinguish that from partial via the state. Driver-reported
+// errors that still left some declarations parsed also degrade to `Partial`
+// so recovery output stays visible.
 
 #ifndef CE_CPP_SYMBOLS_HPP
 #define CE_CPP_SYMBOLS_HPP
@@ -54,11 +55,11 @@ SymbolOutcome analyzeSymbols(clang::ASTContext& context,
                              const std::string& target_path);
 
 /// Convenience end-to-end driver: parse `source_file` under `profile` with
-/// Clang's syntax-only action and run `analyzeSymbols` on the resulting AST.
+/// an `ASTFrontendAction` and run the collector on the resulting AST.
 /// Returns `Failed` with an empty list if the frontend refused to build an
-/// AST for the file at all (missing file, cataclysmic driver error). Recovery
-/// from partial parses stays at `Complete` for the symbols we could still
-/// pin, and the caller degrades the state elsewhere if needed.
+/// AST for the file at all (missing file, cataclysmic driver error).
+/// Driver errors that still yielded some declarations downgrade to
+/// `Partial` so partial-catalog output stays visible.
 SymbolOutcome analyzeSymbolsForTarget(const CompileProfile& profile,
                                       const std::filesystem::path& source_file,
                                       const std::string& target_path);

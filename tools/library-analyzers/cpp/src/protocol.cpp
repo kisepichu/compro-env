@@ -477,7 +477,11 @@ Symbol parse_symbol(const JsonValue& v) {
     }
     if (const JsonValue* sn = find(obj, "search_names"); sn != nullptr) {
         for (const auto& e : as_array(*sn, "symbol.search_names")) {
-            s.search_names.push_back(as_string(*e, "symbol.search_names[]"));
+            std::string alias = as_string(*e, "symbol.search_names[]");
+            if (alias.empty()) {
+                throw ProtocolError("symbol.search_names[] must be non-empty");
+            }
+            s.search_names.push_back(std::move(alias));
         }
     }
     if (const JsonValue* sig = find(obj, "signature"); sig != nullptr) {
@@ -486,6 +490,26 @@ Symbol parse_symbol(const JsonValue& v) {
         }
     }
     s.location = parse_optional_location(obj, "location", "symbol");
+
+    // spec §6.3: when `search_names` is present, it must contain `name`
+    // (and `qualified_name` when the symbol has one). We reject inputs
+    // that omit them so an out-of-date adapter can't slip past validation
+    // and land a symbol the core cannot exact-match.
+    if (!s.search_names.empty()) {
+        auto contains = [&](const std::string& v) {
+            for (const auto& a : s.search_names) {
+                if (a == v) return true;
+            }
+            return false;
+        };
+        if (!contains(s.name)) {
+            throw ProtocolError("symbol.search_names must include symbol.name");
+        }
+        if (s.qualified_name.has_value() && !contains(*s.qualified_name)) {
+            throw ProtocolError(
+                "symbol.search_names must include symbol.qualified_name when set");
+        }
+    }
     return s;
 }
 

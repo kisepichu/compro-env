@@ -1,9 +1,12 @@
 // AST-driven symbol projection for the ce-cpp adapter (spec §§6.7, 12.5,
 // 13.1; plan 047).
 //
-// The visitor walks the AST built by Clang's `SyntaxOnlyAction` under the
+// The visitor walks the AST built by an `ASTFrontendAction` under the
 // caller's compile profile and emits one `Symbol` per declaration whose
-// spelling location resolves into the requested managed source file.
+// spelling location resolves into the requested managed source file. The
+// action is `SymbolAction` (defined below) — it wires an `ASTConsumer` into
+// the frontend so we get a fully-parsed `ASTContext`, not just a
+// preprocessed token stream.
 //
 // Design notes
 // ------------
