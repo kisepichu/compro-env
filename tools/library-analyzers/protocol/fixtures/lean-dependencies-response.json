@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "adapter": {
+    "name": "ce-lean",
+    "version": "0.1.0",
+    "toolchains": [
+      { "name": "lean", "version": "4.30.0" }
+    ]
+  },
+  "libraries": [
+    {
+      "path": "libraries/lean/A.lean",
+      "dependency_analysis": {
+        "state": "partial",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "path": "libraries/lean/A/B.lean",
+            "location": {
+              "path": "libraries/lean/A.lean",
+              "start": { "line": 1, "column": 1 },
+              "end": { "line": 1, "column": 11 }
+            }
+          },
+          {
+            "kind": "unresolved",
+            "key": "missing:A.NotHere",
+            "display": "import A.NotHere",
+            "location": {
+              "path": "libraries/lean/A.lean",
+              "start": { "line": 2, "column": 1 },
+              "end": { "line": 2, "column": 17 }
+            }
+          },
+          {
+            "kind": "external",
+            "name": "Std.Data.HashMap",
+            "location": {
+              "path": "libraries/lean/A.lean",
+              "start": { "line": 3, "column": 1 },
+              "end": { "line": 3, "column": 24 }
+            }
+          }
+        ]
+      },
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": []
+      },
+      "diagnostics": [
+        {
+          "severity": "info",
+          "code": "lean.symbols.deferred",
+          "message": "Lean symbol extraction is deferred to plan 050."
+        }
+      ]
+    },
+    {
+      "path": "libraries/lean/A/B.lean",
+      "dependency_analysis": {
+        "state": "complete",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "path": "libraries/lean/A.lean",
+            "location": {
+              "path": "libraries/lean/A/B.lean",
+              "start": { "line": 2, "column": 8 },
+              "end": { "line": 2, "column": 16 }
+            }
+          }
+        ]
+      },
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": []
+      },
+      "diagnostics": [
+        {
+          "severity": "info",
+          "code": "lean.symbols.deferred",
+          "message": "Lean symbol extraction is deferred to plan 050."
+        }
+      ]
+    },
+    {
+      "path": "libraries/lean/Standalone.lean",
+      "dependency_analysis": {
+        "state": "failed",
+        "dependencies": []
+      },
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": []
+      },
+      "diagnostics": [
+        {
+          "severity": "error",
+          "code": "lean.dependencies.header_parse",
+          "message": "header parse produced errors; header may be malformed",
+          "location": {
+            "path": "libraries/lean/Standalone.lean",
+            "start": { "line": 1, "column": 1 }
+          }
+        },
+        {
+          "severity": "info",
+          "code": "lean.symbols.deferred",
+          "message": "Lean symbol extraction is deferred to plan 050."
+        }
+      ]
+    }
+  ],
+  "solutions": [
+    {
+      "id": "abc/A/main",
+      "dependency_analysis": {
+        "state": "complete",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "path": "libraries/lean/A.lean",
+            "location": {
+              "path": "solutions/abc/A/main/Main.lean",
+              "start": { "line": 1, "column": 1 },
+              "end": { "line": 1, "column": 9 }
+            }
+          },
+          {
+            "kind": "internal",
+            "path": "libraries/lean/A/B.lean",
+            "location": {
+              "path": "solutions/abc/A/main/Main.lean",
+              "start": { "line": 2, "column": 1 },
+              "end": { "line": 2, "column": 11 }
+            }
+          }
+        ]
+      },
+      "diagnostics": []
+    }
+  ]
+}

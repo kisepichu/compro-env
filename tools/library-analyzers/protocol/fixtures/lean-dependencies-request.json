@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "repository_root": "<REPOSITORY_ROOT>",
+  "language": "lean",
+  "libraries": [
+    { "path": "libraries/lean/A.lean" },
+    { "path": "libraries/lean/A/B.lean" },
+    { "path": "libraries/lean/Standalone.lean" }
+  ],
+  "solutions": [
+    {
+      "id": "abc/A/main",
+      "root": "solutions/abc/A/main",
+      "entry": "Main.lean"
+    }
+  ]
+}
