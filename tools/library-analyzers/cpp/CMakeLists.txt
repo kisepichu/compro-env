@@ -79,12 +79,26 @@ target_link_libraries(ce_cpp_dependencies
     PUBLIC ce_cpp_protocol ce_cpp_compile_profile
     PRIVATE ${CE_CLANG_CPP_LIBRARY})
 
+# Symbol analyzer (plan 047). Uses Clang's full parse (`ASTFrontendAction`)
+# rather than the preprocess-only path in `ce_cpp_dependencies`, but links
+# through the same `libclang-cpp.so` and shares the RTTI-off contract that
+# Clang's shipped shared library was built with.
+add_library(ce_cpp_symbols STATIC src/symbols.cpp)
+target_include_directories(ce_cpp_symbols
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_options(ce_cpp_symbols PRIVATE -fno-rtti)
+target_link_libraries(ce_cpp_symbols
+    PUBLIC ce_cpp_protocol ce_cpp_compile_profile
+    PRIVATE ${CE_CLANG_CPP_LIBRARY})
+
 add_executable(cpp-analyzer src/main.cpp)
 target_include_directories(cpp-analyzer PRIVATE ${LLVM_INCLUDE_DIRS})
 target_link_libraries(cpp-analyzer PRIVATE
     ce_cpp_protocol
     ce_cpp_compile_profile
-    ce_cpp_dependencies)
+    ce_cpp_dependencies
+    ce_cpp_symbols)
 # `libclang-cpp.so` transitively depends on `libz.so.1` and `libstdc++.so.6`,
 # which the pinned LLVM tarball assumes the host provides. `--allow-shlib-
 # undefined` lets the analyzer link on hosts (e.g., Nix builders) that lack
@@ -121,3 +135,16 @@ target_compile_definitions(dependencies_test PRIVATE
     CE_CPP_PROTOCOL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../protocol/fixtures")
 
 add_test(NAME dependencies COMMAND dependencies_test)
+
+add_executable(symbols_test tests/symbols.cpp)
+target_link_libraries(symbols_test PRIVATE
+    ce_cpp_protocol
+    ce_cpp_compile_profile
+    ce_cpp_symbols)
+target_link_options(symbols_test PRIVATE
+    "LINKER:--allow-shlib-undefined")
+target_compile_definitions(symbols_test PRIVATE
+    CE_CPP_TREE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/tree"
+    CE_CPP_PROTOCOL_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../protocol/fixtures")
+
+add_test(NAME symbols COMMAND symbols_test)

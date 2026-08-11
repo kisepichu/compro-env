@@ -1,0 +1,5 @@
+# Preserve CRLF exactly in the fixture that verifies the C++ symbol
+# analyzer's line-terminator handling. Without this, git normalizes the
+# file to LF on Windows checkouts and `git diff --check` treats the CR
+# bytes as trailing whitespace.
+tools/library-analyzers/cpp/tests/fixtures/tree/libraries/cpp/symbols/crlf.hpp -text -whitespace

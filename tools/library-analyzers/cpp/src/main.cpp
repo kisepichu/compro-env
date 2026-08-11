@@ -23,6 +23,7 @@
 #include "compile_profile.hpp"
 #include "dependencies.hpp"
 #include "protocol.hpp"
+#include "symbols.hpp"
 
 namespace fs = std::filesystem;
 
@@ -86,12 +87,13 @@ ce_cpp::AnalysisResponse build_response(const ce_cpp::AnalysisRequest& request) 
         fs::path source = fs::path(request.repository_root) / lib.path;
         auto outcome =
             ce_cpp::analyze_target(profile, source, lib.path, manifest);
+        auto symbols =
+            ce_cpp::analyzeSymbolsForTarget(profile, source, lib.path);
         ce_cpp::LibraryAnalysis la;
         la.path = lib.path;
         la.dependency_analysis.dependencies = std::move(outcome.dependencies);
         la.dependency_analysis.state = outcome.state;
-        // Symbol analysis lands in plan 047; return an empty partial set.
-        la.symbol_analysis.state = ce_cpp::AnalysisState::Partial;
+        la.symbol_analysis = std::move(symbols.analysis);
         la.diagnostics = std::move(outcome.diagnostics);
         resp.libraries.push_back(std::move(la));
     }
