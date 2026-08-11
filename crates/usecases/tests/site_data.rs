@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use domain::analysis::{
     AnalysisSnapshot, AnalysisState, DiagnosticSeverity, DiscoveredLanguage, DiscoveryManifest,
     LibraryFile, NormalizedDiagnostic, NormalizedLanguageAnalysis, NormalizedLibraryAnalysis,
@@ -1065,6 +1065,3 @@ fn evidence_uses_public_status_variants_only() {
         .collect();
     assert!(evidence_statuses.contains(&EvidenceStatus::Rejected));
 }
-
-// Convince the compiler `Utc` import is used.
-fn _touch_utc(_t: &chrono::DateTime<Utc>) {}

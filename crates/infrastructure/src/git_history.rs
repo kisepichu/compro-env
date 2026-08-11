@@ -78,10 +78,12 @@ impl GitHistory for GitHistoryImpl {
                 .output()
                 .with_context(|| format!("failed to spawn git log for {path}"))?;
             if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                 return Err(anyhow!(
-                    "git log for {} failed with {}",
+                    "git log for {} failed with {}: {}",
                     path,
-                    output.status
+                    output.status,
+                    stderr
                 ));
             }
             let line = String::from_utf8_lossy(&output.stdout).trim().to_string();

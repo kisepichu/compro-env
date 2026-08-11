@@ -195,7 +195,12 @@ fn write_site_data(target: &Path, data: &SiteData) -> Result<()> {
         .with_context(|| format!("failed to create {}", file_path.display()))?;
     file.write_all(&json)
         .with_context(|| format!("failed to write {}", file_path.display()))?;
-    file.write_all(b"\n").ok();
+    file.write_all(b"\n").with_context(|| {
+        format!(
+            "failed to append trailing newline to {}",
+            file_path.display()
+        )
+    })?;
     file.sync_all()
         .with_context(|| format!("failed to fsync {}", file_path.display()))?;
     fsync_dir(target)?;

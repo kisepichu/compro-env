@@ -1,9 +1,17 @@
 # `ce site-data`
 
 Generates the immutable public site-data JSON that the static library site
-consumes. The output is written **atomically** to a caller-supplied directory:
-readers (web CI, preview servers) see either the previous version or the new
-version and never a partially-written tree.
+consumes. The output is written to a caller-supplied directory in a way
+that keeps partial trees out of the target path.
+
+**Atomicity guarantee:** on Linux ≥ 3.15 with a filesystem that supports
+`renameat2(RENAME_EXCHANGE)` (ext4 / xfs / btrfs with default mount
+options), readers always observe either the old or the new tree — the
+swap is a single kernel call. On non-Linux hosts, or on filesystems that
+reject `RENAME_EXCHANGE` (some FUSE mounts, older ext4), the write falls
+back to a rename-aside-then-rename-into sequence, which leaves a brief
+window where the target directory is missing. See the module docstring
+on `SiteDataRepositoryImpl` for details.
 
 ## Subcommands
 

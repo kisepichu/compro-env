@@ -21,7 +21,7 @@ use domain::analysis::{
     AnalysisSnapshot, AnalysisState, DiscoveryManifest, LibraryFile, NormalizedDiagnostic,
     NormalizedLibraryAnalysis, NormalizedSolutionAnalysis, NormalizedSymbol,
 };
-use domain::library::{LanguageConfig, LanguageId, LibraryId, LibraryProjectConfig, SolutionId};
+use domain::library::{LanguageId, LibraryId, LibraryProjectConfig, SolutionId};
 use domain::solution::PublishedSolution;
 use domain::verification::{VerdictKind, VerificationRecord, VerificationState, VerifyFingerprint};
 use site_schema::{
@@ -811,7 +811,6 @@ fn project_solution(
         },
         None => default_oj(input, &solution.id),
     };
-    let _ = language_config;
     Ok(SolutionPageData {
         page_id: format!("solution:{}", solution.id.as_str()),
         solution_id: solution.id.as_str().to_string(),
@@ -1167,6 +1166,3 @@ fn default_title(source_path: &str) -> String {
 fn rfc3339(ts: &DateTime<FixedOffset>) -> String {
     ts.to_rfc3339()
 }
-
-// Unused reference silencer for language_config in library projection.
-fn _touch_language_config(_c: &LanguageConfig) {}
