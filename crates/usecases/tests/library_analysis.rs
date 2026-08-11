@@ -288,6 +288,52 @@ fn rejects_language_set_mismatch() {
 }
 
 #[test]
+fn symbol_only_failure_leaves_dependency_analysis_complete() {
+    // plan 044 Task 2: A library whose symbol analysis fails must not knock
+    // down its dependency analysis or block the snapshot / fingerprint that
+    // downstream verification relies on.
+    let manifest = build_manifest();
+    let mut responses = build_responses();
+    let rust = LanguageId::parse("rust").unwrap();
+    // `libraries/rust/a.rs` in the fixture already has dependency_state =
+    // complete; flip only its symbol side to failed.
+    let a = responses
+        .get_mut(&rust)
+        .unwrap()
+        .libraries
+        .iter_mut()
+        .find(|l| l.path == "libraries/rust/a.rs")
+        .expect("rust/a in fixture");
+    a.symbol_analysis.state = library_adapter_protocol::AnalysisState::Failed;
+    a.symbol_analysis.symbols.clear();
+
+    let snapshot = normalize_analysis(
+        &manifest,
+        responses,
+        "rev-symbol-fail",
+        &build_source_bytes(),
+    )
+    .unwrap();
+
+    let rust_a = LibraryId::parse("libraries/rust/a.rs").unwrap();
+    let analysis = &snapshot.languages[&rust].libraries[&rust_a];
+    assert_eq!(
+        analysis.state.dependency_state,
+        AnalysisState::Complete,
+        "symbol failure must not drag dependency state down",
+    );
+    assert_eq!(analysis.state.symbol_state, AnalysisState::Failed);
+
+    // Verification fingerprinting depends on the transitive closure / source
+    // hashes staying intact even when symbols failed.
+    let closure = snapshot.transitive_closure(&rust_a);
+    let rust_b = LibraryId::parse("libraries/rust/b.rs").unwrap();
+    assert!(closure.contains(&rust_a));
+    assert!(closure.contains(&rust_b));
+    assert!(!snapshot.snapshot_hash.is_empty());
+}
+
+#[test]
 fn rejects_duplicate_toolchain_name() {
     let manifest = build_manifest();
     let mut responses = build_responses();

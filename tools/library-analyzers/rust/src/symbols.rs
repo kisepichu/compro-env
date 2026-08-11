@@ -15,6 +15,14 @@
 //! Location fields follow the shared protocol: 1-based line/column in Unicode
 //! scalar values. `proc-macro2` with `span-locations` already reports
 //! `LineColumn` in USV units, so the walker forwards them verbatim (column +1).
+//!
+//! Location validation (plan 044 Task 2): spans with `line == 0` (macro
+//! call-site placeholders) or with `end < start` are rejected before
+//! serialization. The symbol is still emitted — search still benefits from
+//! the name — but the analysis state degrades to `partial` so callers can
+//! see the catalog is incomplete. Full parse failure produces `failed` with
+//! no symbols; item-level macro invocations produce `partial` with the items
+//! syn *could* see.
 
 use library_adapter_protocol::{AnalysisState, Location, Position, Symbol, SymbolAnalysis};
 use syn::{
@@ -191,7 +199,14 @@ impl SymbolCollector<'_> {
         {
             search_names.push(q.clone());
         }
-        let location = location_from(self.target_path, span);
+        let (location, dropped) = self.build_location(span);
+        if dropped {
+            // A syntactically valid item whose span is unusable (macro-generated
+            // token, reversed range, zero-line placeholder). Keep the symbol —
+            // its name/kind are still useful for search — but degrade to
+            // `partial` so callers know the location catalog is incomplete.
+            self.mark_partial();
+        }
         self.symbols.push(Symbol {
             name,
             kind: kind.into(),
@@ -200,6 +215,40 @@ impl SymbolCollector<'_> {
             signature: None,
             location,
         });
+    }
+
+    /// Convert a proc-macro2 span into a protocol `Location`, or `None` when
+    /// the span carries no usable coordinates. The boolean flag distinguishes
+    /// "the item has no span metadata at all" (no dropping — trailing items
+    /// never had one) from "we rejected a bogus span" (drop → mark partial).
+    fn build_location(&self, span: proc_macro2::Span) -> (Option<Location>, bool) {
+        let start = span.start();
+        let end = span.end();
+        // `proc-macro2` returns line = 0 for spans that carry no origin info
+        // (call-site placeholders, macro-generated tokens). That is not a
+        // representable location and must not be serialized.
+        if start.line == 0 || end.line == 0 {
+            return (None, true);
+        }
+        // Reversed `end < start` is a protocol error per spec §6.3 — drop it
+        // instead of shipping an out-of-order span.
+        if (end.line, end.column) < (start.line, start.column) {
+            return (None, true);
+        }
+        (
+            Some(Location {
+                path: self.target_path.to_string(),
+                start: Position {
+                    line: start.line as u32,
+                    column: Some((start.column as u32).saturating_add(1)),
+                },
+                end: Some(Position {
+                    line: end.line as u32,
+                    column: Some((end.column as u32).saturating_add(1)),
+                }),
+            }),
+            false,
+        )
     }
 }
 
@@ -231,26 +280,4 @@ fn impl_target_name(ty: &Type) -> Option<String> {
         return Some(last.ident.to_string());
     }
     None
-}
-
-fn location_from(path: &str, span: proc_macro2::Span) -> Option<Location> {
-    let start = span.start();
-    let end = span.end();
-    // `proc-macro2` returns line = 0 when a span carries no location info
-    // (macro-generated tokens, call-site placeholders). Drop those instead of
-    // emitting a bogus (0, …) address.
-    if start.line == 0 || end.line == 0 {
-        return None;
-    }
-    Some(Location {
-        path: path.to_string(),
-        start: Position {
-            line: start.line as u32,
-            column: Some((start.column as u32).saturating_add(1)),
-        },
-        end: Some(Position {
-            line: end.line as u32,
-            column: Some((end.column as u32).saturating_add(1)),
-        }),
-    })
 }

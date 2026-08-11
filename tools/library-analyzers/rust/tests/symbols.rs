@@ -204,3 +204,110 @@ fn unicode_columns_are_unicode_scalar_values() {
     assert_eq!(loc.start.line, 1);
     assert_eq!(loc.start.column, Some(1));
 }
+
+// ─── Task 2: validate locations and partial states ─────────────────────────
+
+#[test]
+fn line_and_column_are_one_based_at_top_of_file() {
+    let src = "pub struct Head;\npub fn body() {}\n";
+    let analysis = analyze_symbols(src, "t.rs", &[]);
+    let head = analysis
+        .symbols
+        .iter()
+        .find(|s| s.name == "Head")
+        .expect("struct Head");
+    let loc = head.location.as_ref().expect("has location");
+    assert_eq!(loc.start.line, 1, "first line is 1-based");
+    assert_eq!(loc.start.column, Some(1), "first column is 1-based");
+
+    let body = analysis
+        .symbols
+        .iter()
+        .find(|s| s.name == "body")
+        .expect("fn body");
+    let loc = body.location.as_ref().expect("has location");
+    assert_eq!(loc.start.line, 2);
+    assert_eq!(loc.start.column, Some(1));
+}
+
+#[test]
+fn crlf_line_endings_count_as_one_line_each() {
+    // CRLF between items — proc-macro2 treats "\r\n" as one line ending, so
+    // the second item should still show up on line 2, not line 3.
+    let src = "pub struct A;\r\npub struct B;\r\n";
+    let analysis = analyze_symbols(src, "t.rs", &[]);
+    let b = analysis
+        .symbols
+        .iter()
+        .find(|s| s.name == "B")
+        .expect("struct B");
+    assert_eq!(b.location.as_ref().unwrap().start.line, 2);
+}
+
+#[test]
+fn duplicate_names_are_kept_and_differentiated_by_qualified_name() {
+    let src = "mod a { pub struct X; } mod b { pub struct X; }";
+    let analysis = analyze_symbols(src, "t.rs", &[]);
+    let xs: Vec<&library_adapter_protocol::Symbol> =
+        analysis.symbols.iter().filter(|s| s.name == "X").collect();
+    assert_eq!(xs.len(), 2, "both X symbols preserved");
+    let qualifieds: Vec<&str> = xs
+        .iter()
+        .filter_map(|s| s.qualified_name.as_deref())
+        .collect();
+    assert!(qualifieds.contains(&"a::X"));
+    assert!(qualifieds.contains(&"b::X"));
+}
+
+#[test]
+fn malformed_source_yields_failed_and_no_symbols() {
+    // Missing closing brace — syn's parser cannot recover.
+    let src = "pub struct Broken {";
+    let analysis = analyze_symbols(src, "t.rs", &[]);
+    assert!(matches!(analysis.state, AnalysisState::Failed));
+    assert!(analysis.symbols.is_empty());
+}
+
+#[test]
+fn public_and_private_visibilities_are_both_extracted() {
+    // The adapter does not filter by visibility — the core layer decides
+    // what to publish. Verify both come through with kind + name intact.
+    let src = "pub struct P; struct Q; pub(crate) fn r() {} fn s() {}";
+    let analysis = analyze_symbols(src, "t.rs", &[]);
+    let names: Vec<&str> = analysis.symbols.iter().map(|s| s.name.as_str()).collect();
+    for expected in ["P", "Q", "r", "s"] {
+        assert!(names.contains(&expected), "missing {expected} in {names:?}");
+    }
+}
+
+#[test]
+fn file_backed_mod_declarations_do_not_leak_other_files_symbols() {
+    // `mod other;` without content — the analyzer must not open `other.rs`.
+    // Only the `mod` declaration itself is emitted; children stay silent.
+    let src = "mod other;\npub struct Local;\n";
+    let analysis = analyze_symbols(src, "t.rs", &[]);
+    let names: Vec<&str> = analysis.symbols.iter().map(|s| s.name.as_str()).collect();
+    assert!(names.contains(&"other"), "file-backed mod is emitted");
+    assert!(names.contains(&"Local"), "sibling items still appear");
+    // No off-file symbol from a hypothetical `other.rs` may appear.
+    assert_eq!(analysis.symbols.len(), 2);
+}
+
+#[test]
+fn locations_are_never_reversed() {
+    // Every emitted location must have end >= start.
+    let src = include_str!("fixtures/tree/libraries/rust/symbols/basic.rs");
+    let analysis = analyze_symbols(src, "basic.rs", &[]);
+    for symbol in &analysis.symbols {
+        let loc = symbol
+            .location
+            .as_ref()
+            .expect("all basic.rs symbols located");
+        let end = loc.end.as_ref().expect("basic.rs spans have end");
+        assert!(
+            (end.line, end.column) >= (loc.start.line, loc.start.column),
+            "reversed span for {:?}",
+            symbol.name
+        );
+    }
+}
