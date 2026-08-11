@@ -921,6 +921,62 @@ fn poll_handle_persists_completed_and_refuses_further_polls() {
     );
 }
 
+/// Regression: `CompletedState` must quote the plan's real
+/// `submitted_source_hash` (and `language`) via `PlanContext`, not the zero
+/// fallback (spec §11 "十分な証跡"). Without this the record would silently
+/// persist an all-zero content hash whenever we complete from
+/// Submitted/Queued/Judging (i.e. the normal happy path).
+#[test]
+fn poll_handle_completed_cites_plan_context_hash_and_language() {
+    let log = Arc::new(RecordingLog::default());
+    let clock = Arc::new(FakeClock::new(fixed_offset_time(0)));
+    let repo = FakeRepo::new(Arc::clone(&log));
+
+    // Seed a Submitted record whose only source of language / source-hash is
+    // the top-level `plan_context` — matching what `start_plan` writes after
+    // Starting → Submitted.
+    let plan_hash = hash(0xbb);
+    let plan_lang = binding();
+    let mut seeded = make_submitted(&lc_solution(), "attempt-1", "librarychecker", "42");
+    seeded.plan_context = Some(domain::verification::PlanContext {
+        language: plan_lang.clone(),
+        submitted_source_hash: plan_hash.clone(),
+    });
+    repo.seed(seeded);
+
+    let env = make_env(
+        Arc::clone(&log),
+        Arc::clone(&clock),
+        vec![],
+        vec![Ok(PollObservation::Completed(JudgeResult {
+            verdict: JudgeVerdict::Accepted,
+            testcases: vec![],
+        }))],
+        None,
+        usecases::submission::RecoveryMode::BestEffort,
+        PollingPolicy::verify_defaults(),
+    );
+    let repos_bundle = repos(&repo, &[lc_solution()]);
+    let record = repo.load(&lc_solution()).unwrap().unwrap();
+    let ev = poll_handle(&repos_bundle, &env.ports(), &record).unwrap();
+    match ev {
+        PollEvent::Completed { record } => match record.state {
+            VerificationState::Completed(c) => {
+                assert_eq!(
+                    c.submitted_source_hash, plan_hash,
+                    "CompletedState.submitted_source_hash must come from PlanContext"
+                );
+                assert_eq!(
+                    c.language, plan_lang,
+                    "CompletedState.language must come from PlanContext"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        },
+        other => panic!("expected PollEvent::Completed, got {other:?}"),
+    }
+}
+
 #[test]
 fn poll_handle_refuses_to_poll_a_terminal_unavailable_record() {
     let log = Arc::new(RecordingLog::default());

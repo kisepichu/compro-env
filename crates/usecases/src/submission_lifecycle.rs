@@ -1114,13 +1114,20 @@ fn build_completed_state(
         language,
         verified_at,
         capabilities,
-        submitted_source_hash: match &current.state {
-            VerificationState::Starting(s) => s.submitted_source_hash.clone(),
-            VerificationState::AcceptanceUnknown(s) => s.submitted_source_hash.clone(),
-            _ => domain::verification::ContentHash::parse(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            )
-            .expect("static hash"),
+        submitted_source_hash: if let Some(ctx) = &current.plan_context {
+            ctx.submitted_source_hash.clone()
+        } else {
+            // Same backward-compat fallback as `language` above: only
+            // pre-PlanContext records land here, and only their
+            // `Starting`/`AcceptanceUnknown` bodies still carry the hash.
+            match &current.state {
+                VerificationState::Starting(s) => s.submitted_source_hash.clone(),
+                VerificationState::AcceptanceUnknown(s) => s.submitted_source_hash.clone(),
+                _ => domain::verification::ContentHash::parse(
+                    "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                )
+                .expect("static hash"),
+            }
         },
         input_hashes: BTreeMap::new(),
         summary: domain::verification::SubmissionSummary {
