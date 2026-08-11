@@ -73,5 +73,5 @@ pub trait SubmissionRecovery {
 - [x] Prove `ce submit` output and global-config resolution remain unchanged with characterization tests.
 - [x] Run rollout repository verification and `git diff --check`.
 - [x] Invoke `/commit` with `docs: record submission port completion`.
-- [ ] Invoke `/pr --base main`; link plan 057 and state that it unblocks plan 058.
-- [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+- [x] Invoke `/pr --base main`; link plan 057 and state that it unblocks plan 058.
+- [x] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.

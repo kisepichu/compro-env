@@ -16,10 +16,10 @@ use usecases::submission::{
     SubmissionStart, SubmissionStarter,
 };
 
+use super::auth::{FIREBASE_API_KEY, firebase_tokens};
+
 const REST_BASE: &str = "https://v3.api.judge.yosupo.jp";
 const SUBMISSION_BASE: &str = "https://judge.yosupo.jp/submission";
-/// Public Firebase web API key (from the frontend's `.env.production`; not a secret).
-const FIREBASE_API_KEY: &str = "AIzaSyCmpkoMVbKRDm2H0MJHB0iZ43uQtSqiLV0";
 
 pub struct LibraryCheckerStarter {
     client: reqwest::blocking::Client,
@@ -207,18 +207,6 @@ fn build_locator(problem_id: &str, lang_id: &str, source: &str) -> String {
 
 fn sanitize(input: &str) -> String {
     usecases::submission::sanitize_summary(input)
-}
-
-/// Extracts the Firebase (id_token, refresh_token) pair from a session.
-fn firebase_tokens(session: &Session) -> Result<(&str, &str)> {
-    match session {
-        Session::Firebase {
-            id_token,
-            refresh_token,
-            ..
-        } => Ok((id_token, refresh_token)),
-        _ => anyhow::bail!("LibraryChecker requires a Firebase session"),
-    }
 }
 
 #[derive(Deserialize)]
