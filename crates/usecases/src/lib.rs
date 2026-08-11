@@ -15,6 +15,7 @@ pub mod service;
 pub mod site_data;
 pub mod site_data_generator;
 pub mod submission;
+pub mod submission_lifecycle;
 pub mod verification;
 
 #[cfg(test)]
