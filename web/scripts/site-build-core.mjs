@@ -57,7 +57,14 @@ export async function runPipeline(runners, config) {
   if (emitResult && typeof emitResult.status === "number" && emitResult.status !== 0) {
     return { status: emitResult.status, ran };
   }
-  const index = emitResult && "index" in emitResult ? emitResult.index : undefined;
+  const index =
+    emitResult && "index" in emitResult ? emitResult.index : undefined;
+  // A "success" that omits `index` would silently write `undefined` to
+  // exact-search-index.json downstream. Treat that as a pipeline failure
+  // so the invariant (successful emit ⇒ index present) is enforced here.
+  if (index === undefined) {
+    return { status: 1, ran };
+  }
 
   ran.push("astroBuild");
   const astroResult = await runners.astroBuild({

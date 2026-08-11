@@ -531,8 +531,13 @@ function buildPagefindFilters(parsed: ParsedQuery): PagefindFilters {
   setAny("path", parsed.filters.path);
   setAny("status", parsed.filters.status);
   setAny("type", parsed.filters.type);
-  if (parsed.filters.verified_true) out["verified"] = ["true"];
-  if (parsed.filters.verified_false) out["verified"] = ["false"];
+  // `verified:true verified:false` covers the whole domain — skip the
+  // filter entirely so both branches remain reachable. A single flag on
+  // its own still narrows the Pagefind result set.
+  const wantTrue = parsed.filters.verified_true;
+  const wantFalse = parsed.filters.verified_false;
+  if (wantTrue && !wantFalse) out["verified"] = ["true"];
+  else if (wantFalse && !wantTrue) out["verified"] = ["false"];
   return out;
 }
 

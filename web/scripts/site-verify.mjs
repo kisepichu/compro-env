@@ -43,7 +43,9 @@ const repoRoot = resolve(scriptDir, "..", "..");
 
 function parseArgs(argv) {
   const args = {
-    out: null,
+    // Default matches `web/scripts/site-build.mjs` so `npm run site:verify`
+    // just works after `npm run site:build`.
+    out: "web/dist",
     base: "/",
     fixture: "web/tests/fixtures/site-data.json",
     skipPagefind: false,
@@ -267,10 +269,6 @@ function printSizes(target, outDir) {
 
 function main() {
   const args = parseArgs(process.argv);
-  if (!args.out) {
-    console.error("site-verify: --out=<dir> is required");
-    process.exit(2);
-  }
   const outDir = resolve(process.cwd(), args.out);
   const base = normalizeBase(args.base);
   const fixturePath = resolve(repoRoot, args.fixture);

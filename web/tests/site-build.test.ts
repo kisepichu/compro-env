@@ -126,6 +126,19 @@ describe("runPipeline — order contract", () => {
     expect(runners.astroBuild).not.toHaveBeenCalled();
   });
 
+  it("fails when emit reports success but omits the index", async () => {
+    const runners = makeSpies({
+      // `status: 0` without `index` would otherwise pass `undefined` into
+      // writeExactIndex; the pipeline must short-circuit instead.
+      emitExactIndex: vi.fn().mockResolvedValue({ status: 0 }),
+    });
+    const result = await runPipeline(runners, baseConfig);
+    expect(result.status).not.toBe(0);
+    expect(result.ran).toEqual(["emitExactIndex"]);
+    expect(runners.astroBuild).not.toHaveBeenCalled();
+    expect(runners.writeExactIndex).not.toHaveBeenCalled();
+  });
+
   it("propagates a non-zero exit code from the pagefind stage", async () => {
     const runners = makeSpies({
       pagefind: vi.fn().mockResolvedValue({ status: 5 }),

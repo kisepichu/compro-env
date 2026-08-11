@@ -77,9 +77,22 @@ function normalizeBase(input) {
   return value;
 }
 
+const SUPPORTED_SCHEMA_VERSION = 1;
+
 function loadSiteDataJson(fixturePath) {
   const raw = readFileSync(fixturePath, "utf8");
-  return JSON.parse(raw);
+  const parsed = JSON.parse(raw);
+  // Guard against silently loading a mismatched fixture: writeExactIndex
+  // and Astro both assume the v1 shape. `web/src/lib/site-data.ts` runs a
+  // full JSON-Schema check inside Astro; this fast check catches obviously
+  // stale inputs before Astro spins up.
+  if (parsed?.schema_version !== SUPPORTED_SCHEMA_VERSION) {
+    throw new Error(
+      `site-build: unsupported schema_version at ${fixturePath}: ` +
+        `expected ${SUPPORTED_SCHEMA_VERSION}, got ${parsed?.schema_version}`,
+    );
+  }
+  return parsed;
 }
 
 // ---- Real runners (composed with runPipeline) ----

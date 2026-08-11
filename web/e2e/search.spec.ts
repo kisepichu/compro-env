@@ -62,9 +62,9 @@ test("reload and history navigation preserve q and page", async ({ page }) => {
 
 test("Pagefind WASM worker does not raise CSP violations", async ({ page }) => {
   await page.goto("/search/?q=monoid");
-  await expect(page.locator("#search-results li")).toHaveCount(
-    await page.locator("#search-results li").count(),
-  );
+  // Wait for the client to finish searching — the summary becomes visible
+  // once Pagefind + exact index have both resolved.
+  await expect(page.locator("#search-summary")).toBeVisible();
   const violations = (page as unknown as { __cspViolations: string[] })
     .__cspViolations;
   expect(violations).toEqual([]);
