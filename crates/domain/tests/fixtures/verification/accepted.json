@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "solution_id": "librarychecker-aplusb/aplusb/main",
+  "attempt_id": "01931aae-3a48-7fb4-9c62-1f89a0a5f001",
+  "replaces_attempt_id": null,
+  "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "state": {
+    "kind": "completed",
+    "data": {
+      "verdict": {
+        "kind": "accepted",
+        "raw": "AC"
+      },
+      "verified_libraries": [
+        "libraries/rust/algebra/monoid.rs"
+      ],
+      "language": {
+        "language_id": "rust",
+        "oj_language_id": "rust-1.75.0"
+      },
+      "verified_at": "2026-08-10T10:00:00+00:00",
+      "capabilities": {
+        "submission_mode": "unattended_trackable",
+        "result_detail": "testcase_details",
+        "recovery_mode": "best_effort"
+      },
+      "submitted_source_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "input_hashes": {
+        "libraries/rust/algebra/magma.rs": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "libraries/rust/algebra/monoid.rs": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "solutions/librarychecker-aplusb/aplusb/main/src/main.rs": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      },
+      "summary": {
+        "max_execution_time_ms": 20,
+        "max_memory_bytes": 2048
+      },
+      "test_cases": [
+        {
+          "name": "example_00",
+          "verdict": {
+            "kind": "accepted",
+            "raw": "AC"
+          },
+          "execution_time_ms": 10,
+          "memory_bytes": 1024
+        },
+        {
+          "name": "example_01",
+          "verdict": {
+            "kind": "accepted",
+            "raw": "AC"
+          },
+          "execution_time_ms": 20,
+          "memory_bytes": 2048
+        },
+        {
+          "name": "random_00",
+          "verdict": {
+            "kind": "accepted",
+            "raw": "AC"
+          },
+          "execution_time_ms": 15,
+          "memory_bytes": 1536
+        }
+      ],
+      "handle": {
+        "oj": "librarychecker",
+        "submission_id": "12345",
+        "submission_url": "https://judge.yosupo.jp/submission/12345",
+        "locator": null,
+        "submitted_at": "2026-08-10T09:59:00+00:00"
+      },
+      "extra": {
+        "compiler_message": {
+          "kind": "string",
+          "data": "compiled successfully"
+        }
+      }
+    }
+  }
+}
