@@ -38,11 +38,11 @@ pub fn validate_prepared_set(path: &Path, expected: &ExpectedPreparedSet)
     -> Result<PreparedSet, PrepareError>;
 ```
 
-- [ ] Write failing tests for URL policy, full Git SHA, digest syntax, stable dependency ID, local input
+- [x] Write failing tests for URL policy, full Git SHA, digest syntax, stable dependency ID, local input
       hashing, platform mismatch, incomplete directory, and manifest mismatch.
-- [ ] Run `cargo test -p infrastructure --test adapter_prepared`; observe missing APIs.
-- [ ] Implement strict parsing and content-addressed identity without performing network I/O.
-- [ ] Re-run the focused tests and invoke `/commit` with `feat: validate adapter preparation inputs`.
+- [x] Run `cargo test -p infrastructure --test adapter_prepared`; observe missing APIs.
+- [x] Implement strict parsing and content-addressed identity without performing network I/O.
+- [x] Re-run the focused tests and invoke `/commit` with `feat: validate adapter preparation inputs`.
 
 ### Task 2: Download and atomically publish prepared sets
 
@@ -58,18 +58,18 @@ pub fn validate_prepared_set(path: &Path, expected: &ExpectedPreparedSet)
 pub fn prepare_dependencies(request: &PrepareRequest) -> Result<PreparedSet, PrepareError>;
 ```
 
-- [ ] Start a local HTTP fixture server and write failing tests for checksum mismatch, truncated download,
+- [x] Start a local HTTP fixture server and write failing tests for checksum mismatch, truncated download,
       unsafe tar/zip members, redirect to non-HTTPS policy, concurrent lock failure, and atomic success.
-- [ ] Implement staging under `target/library-analyzers/prepared`, fail-fast `prepare.lock`, bounded download,
+- [x] Implement staging under `target/library-analyzers/prepared`, fail-fast `prepare.lock`, bounded download,
       digest verification, safe extraction, manifest fsync, and rename-on-success.
-- [ ] Permit only documented CA/proxy variables in the fetch environment and redact their values from errors.
-- [ ] Run `cargo test -p infrastructure --test adapter_prepare`; assert failure leaves no cache hit.
-- [ ] Invoke `/commit` with `feat: prepare pinned adapter dependencies`.
+- [x] Permit only documented CA/proxy variables in the fetch environment and redact their values from errors.
+- [x] Run `cargo test -p infrastructure --test adapter_prepare`; assert failure leaves no cache hit.
+- [x] Invoke `/commit` with `feat: prepare pinned adapter dependencies`.
 
 ### Task 3: Deliver preparation
 
-- [ ] Run `tools/library-analyzers/prepare --check` against checked-in inputs; expect validation success without mutation.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record adapter preparation completion` after checking plan progress.
+- [x] Run `tools/library-analyzers/prepare --check` against checked-in inputs; expect validation success without mutation.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record adapter preparation completion` after checking plan progress.
 - [ ] Invoke `/pr --base main`; link plan 041 and state that it unblocks plan 042.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.

@@ -43,12 +43,12 @@ pub fn validate_build_manifest(
 ) -> Result<(), BuildManifestError>;
 ```
 
-- [ ] Write tests for byte-order stability, uncommitted changes, missing paths, overlapping directories,
+- [x] Write tests for byte-order stability, uncommitted changes, missing paths, overlapping directories,
       duplicate files, symlinks, and repository escapes.
-- [ ] Run `cargo test -p infrastructure --test adapter_inputs`; observe missing APIs.
-- [ ] Implement strict TOML parsing and SHA-256 framing that hashes relative path plus raw contents.
-- [ ] Re-run the focused test; expect all cases to pass.
-- [ ] Invoke `/commit` with `feat: define deterministic adapter build inputs`.
+- [x] Run `cargo test -p infrastructure --test adapter_inputs`; observe missing APIs.
+- [x] Implement strict TOML parsing and SHA-256 framing that hashes relative path plus raw contents.
+- [x] Re-run the focused test; expect all cases to pass.
+- [x] Invoke `/commit` with `feat: define deterministic adapter build inputs`.
 
 ### Task 2: Run protocol processes through a reusable port
 
@@ -76,17 +76,17 @@ pub trait LibraryAdapterRunner {
 pub struct ProcessLibraryAdapterRunner;
 ```
 
-- [ ] Write failing tests for exact argv execution, stdin closure, one JSON document, stdout limit,
+- [x] Write failing tests for exact argv execution, stdin closure, one JSON document, stdout limit,
       stderr tail limit, timeout, nonzero exit, schema mismatch, and secret-free environment.
-- [ ] Implement direct `Command` execution with piped stdin/stdout/stderr and process-group termination.
-- [ ] Validate protocol version and response shape before returning; never accept stdout after nonzero exit.
-- [ ] Run `cargo test -p infrastructure --test adapter_process`; expect all cases to pass.
-- [ ] Invoke `/commit` with `feat: run library adapters through strict protocol`.
+- [x] Implement direct `Command` execution with piped stdin/stdout/stderr and process-group termination.
+- [x] Validate protocol version and response shape before returning; never accept stdout after nonzero exit.
+- [x] Run `cargo test -p infrastructure --test adapter_process`; expect all cases to pass.
+- [x] Invoke `/commit` with `feat: run library adapters through strict protocol`.
 
 ### Task 3: Deliver the process boundary
 
-- [ ] Run `cargo test -p domain -p usecases -p infrastructure adapter`.
-- [ ] Run the repository-wide verification commands from the rollout plan and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record adapter process completion` after checking this plan's boxes.
-- [ ] Invoke `/pr --base main`; link plan 040 and state that it unblocks plan 041.
-- [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+- [x] Run `cargo test -p domain -p usecases -p infrastructure adapter`.
+- [x] Run the repository-wide verification commands from the rollout plan and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record adapter process completion` after checking this plan's boxes.
+- [x] Invoke `/pr --base main`; link plan 040 and state that it unblocks plan 041.
+- [x] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.

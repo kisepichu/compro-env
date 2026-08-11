@@ -7,26 +7,39 @@ edition = "2024"
 domain = { workspace = true }
 usecases = { workspace = true }
 interfaces = { workspace = true }
+library-adapter-protocol = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", features = ["blocking", "cookies", "json"] }
 toml = "0.8"
 tera = "1"
 walkdir = "2"
 globset = "0.4"
-serde_json = "1"
 base64 = "0.22"
 rpassword = "7"
+sha2 = "0.10"
+wait-timeout = "0.2"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+flate2 = "1"
+fs2 = "0.4"
 tempfile = "3"
 
+[[bin]]
+name = "library-adapter-prepare"
+path = "src/bin/library-adapter-prepare.rs"
+
 [target.'cfg(unix)'.dependencies]
+libc = "0.2"
 nix = { version = "0.29", features = ["signal", "process"] }
 
 [dev-dependencies]
 serial_test = "3"
+tiny_http = "0.12"
 
 [target.'cfg(unix)'.dev-dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }
