@@ -1,15 +1,66 @@
 ---
 /**
- * Static search shell (spec §12.10, handoff §10). Client-side search UI
- * lands in plan 053; for now the page is a semantic stub so the header
- * `Search` link and global search form have a valid destination.
+ * Search page (`/search/`) — plan 053.
+ *
+ * The page is composed natively in Astro (rather than via
+ * `renderSearchPage` alone) so Astro can bundle the client `<script>`
+ * inside `<body>`. The pure `renderSearchPage` remains in
+ * `web/src/lib/pages/search.ts` for tests, and this page uses the same
+ * shared helpers (`renderHeader`, `renderBreadcrumb`, `renderFooter`,
+ * `renderSearchMainInner`) so the shell contract stays identical.
  */
-import { loadSiteData } from "@/lib/site-data.ts";
-import { renderSearchPage } from "@/lib/pages/search.ts";
 import { resolveUrlConfig } from "@/lib/pages/config.ts";
+import {
+  formatDocumentTitle,
+  homeCrumb,
+  renderBreadcrumb,
+  renderFooter,
+  renderHeader,
+} from "@/lib/pages/document.ts";
+import { renderSearchMainInner } from "@/lib/pages/search.ts";
+import { loadSiteData } from "@/lib/site-data.ts";
+import { toCanonicalUrl } from "@/lib/url.ts";
 
 const config = resolveUrlConfig();
 const siteData = loadSiteData();
-const html = renderSearchPage(config, siteData);
+const canonical = toCanonicalUrl(config, ["search"]);
+const documentTitle = formatDocumentTitle(siteData, "Search");
+const description = "Search libraries, solutions, and symbols on compro-env.";
+const htmlLang = siteData.site.language || "en";
+
+const headerHtml = renderHeader({ config, siteData, currentNav: "search" });
+const breadcrumbHtml = renderBreadcrumb([
+  homeCrumb(config),
+  { label: "Search" },
+]);
+const footerHtml = renderFooter({ siteData });
+const mainInnerHtml = renderSearchMainInner(config);
 ---
-<Fragment set:html={html} />
+<!DOCTYPE html>
+<html lang={htmlLang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{documentTitle}</title>
+    <meta name="description" content={description} />
+    <meta name="robots" content="noindex,nofollow" />
+    <link rel="canonical" href={canonical} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={siteData.site.title} />
+    <meta property="og:title" content={documentTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to main content</a>
+    <Fragment set:html={headerHtml} />
+    <main id="main-content" data-pagefind-ignore>
+      <Fragment set:html={breadcrumbHtml} />
+      <Fragment set:html={mainInnerHtml} />
+    </main>
+    <Fragment set:html={footerHtml} />
+    <script>
+      import "@/search/client.ts";
+    </script>
+  </body>
+</html>

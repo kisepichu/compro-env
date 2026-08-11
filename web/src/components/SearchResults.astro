@@ -1,0 +1,19 @@
+---
+/**
+ * Server-side skeleton hydrated by `web/src/search/client.ts`.
+ *
+ * The Astro component thin-wraps `renderSearchMainInner` so tests and
+ * the static build share a single source of truth for element IDs and
+ * ARIA attributes. See spec §13.2.
+ */
+import { renderSearchMainInner } from "@/lib/pages/search.ts";
+import type { UrlConfig } from "@/lib/url.ts";
+
+interface Props {
+  config: UrlConfig;
+}
+
+const { config } = Astro.props;
+const html = renderSearchMainInner(config);
+---
+<Fragment set:html={html} />

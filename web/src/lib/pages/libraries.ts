@@ -28,6 +28,7 @@ import {
   toInternalPath,
   type UrlConfig,
 } from "../url.ts";
+import { pathFilterValues } from "../../search/exact-index.ts";
 import { librariesForLanguage } from "./counts.ts";
 import {
   formatDocumentTitle,
@@ -544,7 +545,8 @@ function renderSymbolsSection(analysis: SymbolAnalysisPublic): string {
       return (
         `<li>` +
           `<span class="kind">${escapeHtml(sym.kind)}</span> ` +
-          `<code class="name">${escapeHtml(sym.name)}</code>` +
+          // Pagefind: symbol names are top-weight (spec §13) alongside titles.
+          `<code class="name" data-pagefind-weight="10">${escapeHtml(sym.name)}</code>` +
           qualified +
           sig +
         `</li>`
@@ -645,7 +647,9 @@ async function renderLibraryDetailArticleInner(
   const sourceSection = sourceResult.html;
   return (
     `<header class="page-header">` +
-      `<h1>${escapeHtml(lib.title)}</h1>` +
+      // Pagefind: title is top-weight (spec §13) — outranks descriptions
+      // and source-body matches on the same page.
+      `<h1 data-pagefind-weight="10">${escapeHtml(lib.title)}</h1>` +
       `<p class="library-meta">` +
         `<span class="language">${escapeHtml(lib.language)}</span> ` +
         `<code class="path">${relativePath}</code> ` +
@@ -697,8 +701,45 @@ export async function renderLibraryDetailMainInner(
     lib,
     lib.dependency_analysis,
   );
+  // Pagefind: meta / filter attributes match the exact-index record so the
+  // static search can reconcile Pagefind results with the JSON lookup.
+  const status = lib.verification.aggregate_status;
+  const verified = status === "verified" ? "true" : "false";
+  const detailUrl = libraryPath(config, lib.language, lib.source_path);
+  const metaAttr = escapeAttribute(
+    `title:${lib.title}, type:library, ` +
+      `language:${lib.language}, status:${status}, ` +
+      `page_id:${lib.page_id}, display_path:${lib.source_path}, ` +
+      `url:${detailUrl}`,
+  );
+  const filterAttr = escapeAttribute(
+    `lang:${lib.language.toLowerCase()}, type:library, ` +
+      `status:${status.toLowerCase()}, verified:${verified}`,
+  );
+  const kinds: string[] = [];
+  for (const s of lib.symbol_analysis.symbols) {
+    const k = s.kind.toLowerCase();
+    if (!kinds.includes(k)) kinds.push(k);
+  }
+  const paths = pathFilterValues(splitSourcePath(lib.source_path));
+  const hiddenFilterSpans =
+    kinds
+      .map(
+        (k) =>
+          `<span class="pagefind-hidden-filter" aria-hidden="true" data-pagefind-filter="kind:${escapeAttribute(k)}"></span>`,
+      )
+      .join("") +
+    paths
+      .map(
+        (p) =>
+          `<span class="pagefind-hidden-filter" aria-hidden="true" data-pagefind-filter="path:${escapeAttribute(p)}"></span>`,
+      )
+      .join("");
   return (
-    `<article class="library-detail" id="${pageIdAttr}" data-pagefind-body>` +
+    `<article class="library-detail" id="${pageIdAttr}" data-pagefind-body ` +
+      `data-pagefind-meta="${metaAttr}" ` +
+      `data-pagefind-filter="${filterAttr}">` +
+      hiddenFilterSpans +
       inner +
     `</article>`
   );

@@ -22,6 +22,7 @@ import {
   toInternalPath,
   type UrlConfig,
 } from "../url.ts";
+import { pathFilterValues } from "../../search/exact-index.ts";
 import {
   formatDocumentTitle,
   homeCrumb,
@@ -434,7 +435,8 @@ async function renderSolutionDetailArticleInner(
           .join("")}</ul>`;
   return (
     `<header class="page-header">` +
-      `<h1>${escapeHtml(sol.solution_name)}</h1>` +
+      // Pagefind: title (solution_name) is top-weight per spec §13.
+      `<h1 data-pagefind-weight="10">${escapeHtml(sol.solution_name)}</h1>` +
       `<p class="solution-meta">` +
         `<a href="${escapeAttribute(contestLink)}">${escapeHtml(sol.contest_id)}</a> / ` +
         `<a href="${escapeAttribute(problemLink)}">${escapeHtml(sol.problem_code)}</a> ` +
@@ -562,8 +564,38 @@ export async function renderSolutionDetailMainInner(
 ): Promise<string> {
   const pageIdAttr = escapeAttribute(`page-${sol.page_id}`);
   const inner = await renderSolutionDetailArticleInner(config, siteData, sol);
+  const status = sol.verification.status;
+  const verified = status === "verified" ? "true" : "false";
+  const detailUrl = solutionPath(
+    config,
+    sol.contest_id,
+    sol.problem_code,
+    sol.solution_name,
+  );
+  const metaAttr = escapeAttribute(
+    `title:${sol.solution_name}, type:solution, ` +
+      `language:${sol.language}, status:${status}, ` +
+      `page_id:${sol.page_id}, display_path:${sol.solution_id}, ` +
+      `url:${detailUrl}`,
+  );
+  const filterAttr = escapeAttribute(
+    `lang:${sol.language.toLowerCase()}, type:solution, ` +
+      `status:${status.toLowerCase()}, verified:${verified}`,
+  );
+  const paths = pathFilterValues(
+    sol.solution_id.split("/").filter((p) => p.length > 0),
+  );
+  const hiddenFilterSpans = paths
+    .map(
+      (p) =>
+        `<span class="pagefind-hidden-filter" aria-hidden="true" data-pagefind-filter="path:${escapeAttribute(p)}"></span>`,
+    )
+    .join("");
   return (
-    `<article class="solution-detail" id="${pageIdAttr}" data-pagefind-body>` +
+    `<article class="solution-detail" id="${pageIdAttr}" data-pagefind-body ` +
+      `data-pagefind-meta="${metaAttr}" ` +
+      `data-pagefind-filter="${filterAttr}">` +
+      hiddenFilterSpans +
       inner +
     `</article>`
   );

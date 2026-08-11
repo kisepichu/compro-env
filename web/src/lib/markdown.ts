@@ -212,5 +212,7 @@ export function renderMarkdown(
  */
 export function renderDocumentation(description: string): string {
   const { html } = renderMarkdown(description);
-  return `<div id="documentation" class="documentation">${html}</div>`;
+  // Pagefind: descriptions are mid-weight (spec §13) — above source, below
+  // titles / symbol names.
+  return `<div id="documentation" class="documentation" data-pagefind-weight="5">${html}</div>`;
 }
