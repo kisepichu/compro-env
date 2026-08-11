@@ -20,7 +20,7 @@ use crate::{
     },
 };
 use interfaces::controller::Controller;
-use interfaces::controller::input::CheckInput;
+use interfaces::controller::input::{CheckInput, SiteDataBuildMode};
 use usecases::check::{CheckSelection, LanguageCheckStatus};
 use usecases::command_runner::CommandRunner;
 use usecases::config::Config as _;
@@ -284,6 +284,93 @@ pub fn run() -> Result<()> {
                 }
             }
         }
+        commands::Commands::SiteData { subcommand } => match subcommand {
+            commands::SiteDataSubcommand::Generate { output, mode } => {
+                let root = match find_project_root() {
+                    Ok(root) => root,
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+                let config = match ProjectLibraryConfigLoader::load(&root) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("{e:#}");
+                        std::process::exit(1);
+                    }
+                };
+                let parsed_mode = match mode.as_str() {
+                    "production" => SiteDataBuildMode::Production,
+                    "preview" => SiteDataBuildMode::Preview,
+                    other => {
+                        eprintln!(
+                            "invalid --mode value: {other} (expected `production` or `preview`)"
+                        );
+                        std::process::exit(2);
+                    }
+                };
+                let manifest = match crate::library_project::discovery::LibraryDiscovery::discover(
+                    &root, &config,
+                ) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("{e:#}");
+                        std::process::exit(1);
+                    }
+                };
+                let runner = crate::library_adapter::process::ProcessLibraryAdapterRunner::new(
+                    root.clone(),
+                    std::collections::BTreeMap::new(),
+                );
+                let analyzer = crate::library_analyzer_impl::ProcessLibraryAnalyzer::new(
+                    runner,
+                    config.clone(),
+                );
+                let git = crate::git_history::GitHistoryImpl::new(root.clone());
+                let verifications =
+                    crate::repository_impl::verification_repository_impl::VerificationRepositoryImpl::new(
+                        root.clone(),
+                    );
+                let site_data_repo =
+                    crate::repository_impl::site_data_repository_impl::SiteDataRepositoryImpl::new(
+                    );
+                let controller = build_controller()?;
+                let input = commands::SiteDataGenerateCommand {
+                    output,
+                    mode: parsed_mode,
+                };
+                let empty_oj = std::collections::BTreeMap::new();
+                let empty_rel = std::collections::BTreeMap::new();
+                let empty_manual = std::collections::BTreeMap::new();
+                let empty_preprocess = std::collections::BTreeMap::new();
+                let empty_desc = std::collections::BTreeMap::new();
+                match controller.site_data_generate(
+                    &input,
+                    &root,
+                    &config,
+                    &manifest,
+                    &analyzer,
+                    &verifications,
+                    &git,
+                    &site_data_repo,
+                    &empty_oj,
+                    &empty_rel,
+                    &empty_manual,
+                    &empty_preprocess,
+                    &empty_desc,
+                ) {
+                    Ok(dir) => {
+                        println!("wrote {}", dir.display());
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("{e:#}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        },
         commands::Commands::Check { language } => {
             let root = match find_project_root() {
                 Ok(root) => root,

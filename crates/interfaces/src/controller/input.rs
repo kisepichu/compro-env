@@ -44,3 +44,17 @@ pub trait CheckInput {
     /// "check every configured language".
     fn language(&self) -> Option<String>;
 }
+
+pub trait SiteDataGenerateInput {
+    /// `--output <dir>` argument. `None` means the default under
+    /// `target/ce-site-data`.
+    fn output(&self) -> Option<String>;
+    /// `--mode production|preview`; `production` is strict.
+    fn mode(&self) -> SiteDataBuildMode;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiteDataBuildMode {
+    Production,
+    Preview,
+}

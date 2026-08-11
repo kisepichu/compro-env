@@ -40,7 +40,12 @@ invoked. Downstream tools consume the JSON directly.
 
 ## Status
 
-Atomic-write repository and the pure projection are implemented and tested.
-The end-to-end CLI wiring — analyzer dispatch, verification-record load, and
-git-history probes — depends on plan 052 components; until those land, the
-`ce site-data generate` subcommand is scaffolded but not connected.
+End-to-end wiring is in place: `ce site-data generate` invokes discovery,
+runs the per-language analyzer via [`LibraryAdapterRunner`], loads
+verification records from the on-disk repository, queries `git log` for
+per-file `updated_at`, projects into [`SiteData`], and writes atomically.
+
+Current fingerprint recomputation for `stale` detection is intentionally
+deferred to plan 052 — the classifier treats a missing fingerprint as
+"blocked", which folds to `Stale`/`Never` per spec §11 without corrupting
+evidence links.
