@@ -31,23 +31,23 @@ structure ToolchainIdentity where
   name    : String
   version : String
   target  : Option String := none
-  deriving Repr
+  deriving Repr, Inhabited
 
 structure AdapterIdentity where
   name       : String
   version    : String
   toolchains : Array ToolchainIdentity := #[]
-  deriving Repr
+  deriving Repr, Inhabited
 
 structure LibraryTarget where
   path : String
-  deriving Repr
+  deriving Repr, Inhabited
 
 structure SolutionTarget where
   id    : String
   root  : String
   entry : String
-  deriving Repr
+  deriving Repr, Inhabited
 
 structure AnalysisRequest where
   schemaVersion  : Nat
@@ -55,7 +55,7 @@ structure AnalysisRequest where
   language       : String
   libraries      : Array LibraryTarget := #[]
   solutions      : Array SolutionTarget := #[]
-  deriving Repr
+  deriving Repr, Inhabited
 
 /-- Allow-list of top-level request keys. Anything outside this set fails
     the strict `denyUnknownFields` gate mirrored from the core Rust

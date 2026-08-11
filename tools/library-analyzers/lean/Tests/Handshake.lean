@@ -33,12 +33,12 @@ private def readFixture (name : String) : IO String := do
   let dir ← fixtureDir
   IO.FS.readFile (dir / name)
 
-private def fail (msg : String) : IO α := do
+private def fail (msg : String) : IO Unit := do
   IO.eprintln s!"handshake test failure: {msg}"
-  IO.Process.exit 1
+  discard <| (IO.Process.exit 1 : IO UInt32)
 
 private def check (cond : Bool) (msg : String) : IO Unit :=
-  if cond then pure () else discard (fail msg)
+  if cond then pure () else fail msg
 
 /-- `Lean.versionString` — the value `Analyzer.Main` reports at runtime —
     matches the pinned Lean 4.30.0 release. This trips when the checked-in
@@ -62,27 +62,27 @@ def testEmptyResponseShape : IO Unit := do
   | .ok v =>
     match v.getNat? with
     | .ok n   => check (n == 1) s!"schema_version = {n}"
-    | .error _ => discard (fail "schema_version was not a number")
-  | .error _ => discard (fail "schema_version missing")
+    | .error _ => (fail "schema_version was not a number")
+  | .error _ => (fail "schema_version missing")
   match resp.getObjVal? "libraries" with
   | .ok v =>
     match v.getArr? with
     | .ok a   => check (a.isEmpty) s!"libraries not empty ({a.size})"
-    | .error _ => discard (fail "libraries not an array")
-  | .error _ => discard (fail "libraries missing")
+    | .error _ => (fail "libraries not an array")
+  | .error _ => (fail "libraries missing")
   match resp.getObjVal? "solutions" with
   | .ok v =>
     match v.getArr? with
     | .ok a   => check (a.isEmpty) s!"solutions not empty ({a.size})"
-    | .error _ => discard (fail "solutions not an array")
-  | .error _ => discard (fail "solutions missing")
+    | .error _ => (fail "solutions not an array")
+  | .error _ => (fail "solutions missing")
 
 /-- The strict parser accepts the shared empty-request fixture and rejects
     both unknown top-level keys and mismatched schema versions. -/
 def testParseFixtures : IO Unit := do
   let raw ← readFixture "empty-request.json"
   match Analyzer.Protocol.parseRequest raw with
-  | .error e => discard (fail s!"empty fixture rejected: [{e.code}] {e.message}")
+  | .error e => (fail s!"empty fixture rejected: [{e.code}] {e.message}")
   | .ok req  =>
     check (req.schemaVersion == 1) s!"fixture schema_version = {req.schemaVersion}"
     check (req.libraries.isEmpty) "fixture libraries not empty"
@@ -90,11 +90,11 @@ def testParseFixtures : IO Unit := do
   let bad := "{\"schema_version\": 2, \"repository_root\": \".\", \"language\": \"lean\", \"libraries\": [], \"solutions\": []}"
   match Analyzer.Protocol.parseRequest bad with
   | .error _ => pure ()
-  | .ok _    => discard (fail "schema_version = 2 should be rejected")
+  | .ok _    => (fail "schema_version = 2 should be rejected")
   let unknown := "{\"schema_version\": 1, \"repository_root\": \".\", \"language\": \"lean\", \"libraries\": [], \"solutions\": [], \"extra\": 1}"
   match Analyzer.Protocol.parseRequest unknown with
   | .error _ => pure ()
-  | .ok _    => discard (fail "unknown top-level key should be rejected")
+  | .ok _    => (fail "unknown top-level key should be rejected")
 
 end Analyzer.Tests
 

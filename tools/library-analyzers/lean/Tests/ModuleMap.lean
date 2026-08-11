@@ -23,12 +23,12 @@ open Analyzer.ModuleMap
 
 namespace Analyzer.Tests.ModuleMap
 
-private def fail (msg : String) : IO α := do
+private def fail (msg : String) : IO Unit := do
   IO.eprintln s!"module map test failure: {msg}"
-  IO.Process.exit 1
+  discard <| (IO.Process.exit 1 : IO UInt32)
 
 private def check (cond : Bool) (msg : String) : IO Unit :=
-  if cond then pure () else discard (fail msg)
+  if cond then pure () else fail msg
 
 /-- Build an `AnalysisRequest` populated with only library targets. -/
 private def libReq (paths : List String) : AnalysisRequest :=
@@ -57,43 +57,43 @@ private def mkName (parts : List String) : Name :=
 def testNestedModule : IO Unit := do
   let path := "libraries/lean/Foo/Bar.lean"
   match buildModuleMap (libReq [path]) with
-  | .error d => discard (fail s!"nested module rejected: [{d.code}] {d.message}")
+  | .error d => (fail s!"nested module rejected: [{d.code}] {d.message}")
   | .ok m =>
     match moduleForPath m path with
     | some name =>
       check (name == mkName ["Foo", "Bar"])
         s!"expected Foo.Bar, got {name}"
-    | none => discard (fail s!"path not in map: {path}")
+    | none => (fail s!"path not in map: {path}")
 
 /-- A top-level `Main.lean` maps to the bare module `Main` without any
     special casing. -/
 def testMainLean : IO Unit := do
   let path := "libraries/lean/Main.lean"
   match buildModuleMap (libReq [path]) with
-  | .error d => discard (fail s!"Main.lean rejected: [{d.code}] {d.message}")
+  | .error d => (fail s!"Main.lean rejected: [{d.code}] {d.message}")
   | .ok m =>
     match moduleForPath m path with
     | some name =>
       check (name == mkName ["Main"]) s!"expected Main, got {name}"
-    | none => discard (fail s!"path not in map: {path}")
+    | none => (fail s!"path not in map: {path}")
 
 /-- Unicode component names round-trip through the mapping. -/
 def testUnicodeName : IO Unit := do
   let path := "libraries/lean/日本語.lean"
   match buildModuleMap (libReq [path]) with
-  | .error d => discard (fail s!"unicode rejected: [{d.code}] {d.message}")
+  | .error d => (fail s!"unicode rejected: [{d.code}] {d.message}")
   | .ok m =>
     match moduleForPath m path with
     | some name =>
       check (name == mkName ["日本語"]) s!"expected 日本語, got {name}"
-    | none => discard (fail s!"path not in map: {path}")
+    | none => (fail s!"path not in map: {path}")
 
 /-- Two distinct paths that would both resolve to module `Foo` are
     rejected before any parsing happens. -/
 def testDuplicateModuleOwnership : IO Unit := do
   let req := libReq ["libraries/lean/Foo.lean", "other/lean/Foo.lean"]
   match buildModuleMap req with
-  | .ok _ => discard (fail "duplicate module ownership was accepted")
+  | .ok _ => (fail "duplicate module ownership was accepted")
   | .error d =>
     check (d.code == "lean.module_map.duplicate_owner")
       s!"expected duplicate_owner, got [{d.code}] {d.message}"
@@ -102,7 +102,7 @@ def testDuplicateModuleOwnership : IO Unit := do
 def testDuplicatePath : IO Unit := do
   let req := libReq ["libraries/lean/Foo.lean", "libraries/lean/Foo.lean"]
   match buildModuleMap req with
-  | .ok _ => discard (fail "duplicate path was accepted")
+  | .ok _ => (fail "duplicate path was accepted")
   | .error d =>
     check (d.code == "lean.module_map.duplicate_owner")
       s!"expected duplicate_owner, got [{d.code}] {d.message}"
@@ -111,7 +111,7 @@ def testDuplicatePath : IO Unit := do
     identifier component. -/
 def testInvalidComponentLeadingDigit : IO Unit := do
   match buildModuleMap (libReq ["libraries/lean/1Bad.lean"]) with
-  | .ok _ => discard (fail "digit-leading component was accepted")
+  | .ok _ => (fail "digit-leading component was accepted")
   | .error d =>
     check (d.code == "lean.module_map.invalid_component")
       s!"expected invalid_component, got [{d.code}] {d.message}"
@@ -120,7 +120,7 @@ def testInvalidComponentLeadingDigit : IO Unit := do
     because `.` is the module-name separator. -/
 def testInvalidComponentDot : IO Unit := do
   match buildModuleMap (libReq ["libraries/lean/Foo.Bar.lean"]) with
-  | .ok _ => discard (fail "dot-in-component was accepted")
+  | .ok _ => (fail "dot-in-component was accepted")
   | .error d =>
     check (d.code == "lean.module_map.invalid_component")
       s!"expected invalid_component, got [{d.code}] {d.message}"
@@ -128,7 +128,7 @@ def testInvalidComponentDot : IO Unit := do
 /-- Empty components (double-slash) are invalid identifier components. -/
 def testEmptyComponent : IO Unit := do
   match buildModuleMap (libReq ["libraries/lean/Foo//Bar.lean"]) with
-  | .ok _ => discard (fail "empty component was accepted")
+  | .ok _ => (fail "empty component was accepted")
   | .error d =>
     check (d.code == "lean.module_map.invalid_component")
       s!"expected invalid_component, got [{d.code}] {d.message}"
@@ -136,7 +136,7 @@ def testEmptyComponent : IO Unit := do
 /-- `..` segments would escape the repository root. -/
 def testRepositoryEscapeParent : IO Unit := do
   match buildModuleMap (libReq ["libraries/../secret.lean"]) with
-  | .ok _ => discard (fail ".. escape was accepted")
+  | .ok _ => (fail ".. escape was accepted")
   | .error d =>
     check (d.code == "lean.module_map.repository_escape")
       s!"expected repository_escape, got [{d.code}] {d.message}"
@@ -144,7 +144,7 @@ def testRepositoryEscapeParent : IO Unit := do
 /-- Absolute paths escape the repository root. -/
 def testRepositoryEscapeAbsolute : IO Unit := do
   match buildModuleMap (libReq ["/etc/passwd.lean"]) with
-  | .ok _ => discard (fail "absolute path was accepted")
+  | .ok _ => (fail "absolute path was accepted")
   | .error d =>
     check (d.code == "lean.module_map.repository_escape")
       s!"expected repository_escape, got [{d.code}] {d.message}"
@@ -152,7 +152,7 @@ def testRepositoryEscapeAbsolute : IO Unit := do
 /-- Files without a `.lean` suffix are not managed sources. -/
 def testNotLean : IO Unit := do
   match buildModuleMap (libReq ["libraries/lean/Foo.txt"]) with
-  | .ok _ => discard (fail "non-.lean path was accepted")
+  | .ok _ => (fail "non-.lean path was accepted")
   | .error d =>
     check (d.code == "lean.module_map.not_lean")
       s!"expected not_lean, got [{d.code}] {d.message}"
@@ -169,7 +169,7 @@ def testStablePathByteOrdering : IO Unit := do
      "libraries/lean/Mango.lean"]
   match buildModuleMap (libReq paths) with
   | .error d =>
-    discard (fail s!"stable-sort case rejected: [{d.code}] {d.message}")
+    (fail s!"stable-sort case rejected: [{d.code}] {d.message}")
   | .ok m =>
     let ordered := m.entries.toList.map (·.path)
     let expected :=
@@ -185,21 +185,21 @@ def testStablePathByteOrdering : IO Unit := do
 def testSolutionEntry : IO Unit := do
   let req := solReq "abc999/a/main" "solutions/abc999/a/main" "Main.lean"
   match buildModuleMap req with
-  | .error d => discard (fail s!"solution rejected: [{d.code}] {d.message}")
+  | .error d => (fail s!"solution rejected: [{d.code}] {d.message}")
   | .ok m =>
     let key := "solutions/abc999/a/main/Main.lean"
     match moduleForPath m key with
     | some _ => pure ()
-    | none   => discard (fail s!"solution entry path not in map: {key}")
+    | none   => (fail s!"solution entry path not in map: {key}")
 
 /-- Paths not in the map return `none`, not a fabricated module name. -/
 def testUnmanagedPathIsNone : IO Unit := do
   match buildModuleMap (libReq ["libraries/lean/Foo.lean"]) with
-  | .error d => discard (fail s!"unexpected error: [{d.code}] {d.message}")
+  | .error d => (fail s!"unexpected error: [{d.code}] {d.message}")
   | .ok m =>
     match moduleForPath m "libraries/lean/Other.lean" with
     | none   => pure ()
-    | some n => discard (fail s!"unmanaged path returned {n}")
+    | some n => (fail s!"unmanaged path returned {n}")
 
 end Analyzer.Tests.ModuleMap
 

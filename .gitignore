@@ -8,3 +8,4 @@ web/dist/
 web/dist-root/
 web/dist-compro-env/
 web/.astro/
+tools/library-analyzers/lean/.lake/
