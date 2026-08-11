@@ -27,6 +27,11 @@ pub struct DependencyManifest {
 }
 
 /// Public HTTPS archive pinned by SHA-256.
+///
+/// A single manifest may list several per-target archives (for example, one
+/// LLVM tarball per supported triple). `target_os` and `target_arch` filter
+/// which archive `prepare` downloads on the current host; both must be `Some`
+/// or both `None`. `None` means the archive is used on every target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveDependency {
     pub name: String,
@@ -35,12 +40,19 @@ pub struct ArchiveDependency {
     pub url: String,
     pub sha256: ContentDigest,
     pub format: ArchiveFormat,
+    /// Target OS gate. `Some("linux")` means the archive is only downloaded on
+    /// Linux hosts. Must be set together with `target_arch` or both left
+    /// `None`.
+    pub target_os: Option<String>,
+    /// Target CPU architecture gate. See `target_os`.
+    pub target_arch: Option<String>,
 }
 
 /// Archive formats accepted by the safe extractor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArchiveFormat {
     TarGz,
+    TarXz,
     Zip,
 }
 
@@ -48,6 +60,7 @@ impl ArchiveFormat {
     pub fn as_str(&self) -> &'static str {
         match self {
             ArchiveFormat::TarGz => "tar.gz",
+            ArchiveFormat::TarXz => "tar.xz",
             ArchiveFormat::Zip => "zip",
         }
     }
@@ -305,6 +318,21 @@ mod tests {
     #[test]
     fn archive_format_display_round_trips() {
         assert_eq!(ArchiveFormat::TarGz.to_string(), "tar.gz");
+        assert_eq!(ArchiveFormat::TarXz.to_string(), "tar.xz");
         assert_eq!(ArchiveFormat::Zip.to_string(), "zip");
+    }
+
+    #[test]
+    fn archive_dependency_can_carry_target_gate() {
+        let dep = ArchiveDependency {
+            name: "llvm-linux-x64".into(),
+            url: "https://example.com/x.tar.xz".into(),
+            sha256: digest(0),
+            format: ArchiveFormat::TarXz,
+            target_os: Some("linux".into()),
+            target_arch: Some("x86_64".into()),
+        };
+        assert_eq!(dep.target_os.as_deref(), Some("linux"));
+        assert_eq!(dep.target_arch.as_deref(), Some("x86_64"));
     }
 }

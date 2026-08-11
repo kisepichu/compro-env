@@ -89,8 +89,14 @@ pub enum PrepareError {
         #[source]
         source: ContentDigestError,
     },
-    #[error("unknown archive format: {value:?} (expected 'tar.gz' or 'zip')")]
+    #[error("unknown archive format: {value:?} (expected 'tar.gz', 'tar.xz', or 'zip')")]
     InvalidArchiveFormat { value: String },
+    #[error(
+        "archive {name:?} declares only one of `target_os`/`target_arch`; \
+         set both to gate the archive to a specific platform, or omit both to \
+         apply it everywhere"
+    )]
+    IncompleteArchiveTarget { name: String },
     #[error("duplicate dependency name: {name:?}")]
     Duplicate { name: String },
     #[error("prepared manifest is missing: {path}")]
@@ -143,6 +149,10 @@ struct ArchiveDependencyFile {
     url: String,
     sha256: String,
     format: String,
+    #[serde(default)]
+    target_os: Option<String>,
+    #[serde(default)]
+    target_arch: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -200,11 +210,18 @@ pub fn load_dependency_manifest(root: &Path) -> Result<DependencyManifest, Prepa
         validate_public_https(&a.url)?;
         let sha256 = parse_digest(&a.sha256)?;
         let format = parse_archive_format(&a.format)?;
+        if a.target_os.is_some() != a.target_arch.is_some() {
+            return Err(PrepareError::IncompleteArchiveTarget {
+                name: a.name.clone(),
+            });
+        }
         archives.push(ArchiveDependency {
             name: a.name,
             url: a.url,
             sha256,
             format,
+            target_os: a.target_os,
+            target_arch: a.target_arch,
         });
     }
 
@@ -260,6 +277,7 @@ fn parse_digest(value: &str) -> Result<ContentDigest, PrepareError> {
 fn parse_archive_format(value: &str) -> Result<ArchiveFormat, PrepareError> {
     match value {
         "tar.gz" => Ok(ArchiveFormat::TarGz),
+        "tar.xz" => Ok(ArchiveFormat::TarXz),
         "zip" => Ok(ArchiveFormat::Zip),
         _ => Err(PrepareError::InvalidArchiveFormat {
             value: value.to_string(),
@@ -358,7 +376,9 @@ pub fn expected_dependency_id(
     write_framed(&mut hasher, platform.os.as_bytes());
     write_framed(&mut hasher, platform.arch.as_bytes());
 
-    // Archives: sorted by name for stability.
+    // Archives: sorted by name for stability. Target OS/arch are folded in
+    // (empty string when unset) so per-target archive gates produce distinct
+    // ids on different platforms while an unset gate remains stable.
     let mut archives = manifest.archives.clone();
     archives.sort_by(|a, b| a.name.cmp(&b.name));
     write_framed(&mut hasher, b"archives");
@@ -367,6 +387,11 @@ pub fn expected_dependency_id(
         write_framed(&mut hasher, a.url.as_bytes());
         write_framed(&mut hasher, a.sha256.as_str().as_bytes());
         write_framed(&mut hasher, a.format.as_str().as_bytes());
+        write_framed(&mut hasher, a.target_os.as_deref().unwrap_or("").as_bytes());
+        write_framed(
+            &mut hasher,
+            a.target_arch.as_deref().unwrap_or("").as_bytes(),
+        );
     }
 
     // Git: sorted by name for stability.

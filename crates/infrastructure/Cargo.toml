@@ -26,6 +26,7 @@ wait-timeout = "0.2"
 tar = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
+xz2 = "0.1"
 fs2 = "0.4"
 tempfile = "3"
 

@@ -138,11 +138,14 @@ pub fn prepare_dependencies(
     let mut artifacts: Vec<PreparedArtifact> = Vec::new();
     let outcome = (|| -> Result<(), PrepareRunError> {
         for archive in &manifest.archives {
-            artifacts.push(prepare_archive(
+            if let Some(artifact) = prepare_archive(
                 &staging,
                 archive,
+                &request.target_platform,
                 &request.download_policy,
-            )?);
+            )? {
+                artifacts.push(artifact);
+            }
         }
         for git in &manifest.git {
             artifacts.push(prepare_git(&staging, git, &request.download_policy)?);
@@ -180,11 +183,29 @@ pub fn prepare_dependencies(
     Ok(set)
 }
 
+/// Return `true` when the archive's per-target gate matches `platform`, or the
+/// archive declares no gate at all. Callers use this to filter multi-target
+/// archive lists (for example, one LLVM tarball per supported triple) before
+/// downloading anything.
+pub fn archive_matches_platform(archive: &ArchiveDependency, platform: &TargetPlatform) -> bool {
+    match (archive.target_os.as_deref(), archive.target_arch.as_deref()) {
+        (None, None) => true,
+        (Some(os), Some(arch)) => os == platform.os && arch == platform.arch,
+        // The manifest loader rejects one-sided gates, so this arm is
+        // unreachable in practice; return `false` defensively.
+        _ => false,
+    }
+}
+
 fn prepare_archive(
     staging: &Path,
     archive: &ArchiveDependency,
+    platform: &TargetPlatform,
     policy: &DownloadPolicy,
-) -> Result<PreparedArtifact, PrepareRunError> {
+) -> Result<Option<PreparedArtifact>, PrepareRunError> {
+    if !archive_matches_platform(archive, platform) {
+        return Ok(None);
+    }
     let downloads = staging.join("downloads");
     fs::create_dir_all(&downloads).map_err(|source| PrepareRunError::CreateDir {
         path: downloads.display().to_string(),
@@ -194,13 +215,13 @@ fn prepare_archive(
     let downloaded = download_artifact(&archive.url, &archive_path, &archive.sha256, policy)?;
     let extract_root = staging.join("archives").join(&archive.name);
     extract_archive(&downloaded.path, archive.format, &extract_root)?;
-    Ok(PreparedArtifact {
+    Ok(Some(PreparedArtifact {
         name: archive.name.clone(),
         kind: PreparedArtifactKind::Archive,
         relative_path: format!("downloads/{}.{}", archive.name, archive.format.as_str()),
         sha256: archive.sha256.clone(),
         install_relative_path: Some(format!("archives/{}", archive.name)),
-    })
+    }))
 }
 
 fn prepare_git(

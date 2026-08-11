@@ -262,15 +262,79 @@ fn load_dependency_manifest_rejects_unknown_archive_format() {
             r#"
 [[archives]]
 name = "a"
-url = "https://example.com/x.tar.xz"
+url = "https://example.com/x.rar"
 sha256 = "{VALID_SHA}"
-format = "tar.xz"
+format = "rar"
 "#,
         ),
     );
     let err = load_dependency_manifest(dir.path()).unwrap_err();
     assert!(
         matches!(err, PrepareError::InvalidArchiveFormat { .. }),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn load_dependency_manifest_accepts_tar_xz_format() {
+    let dir = TempDir::new().unwrap();
+    write_manifest(
+        dir.path(),
+        &format!(
+            r#"
+[[archives]]
+name = "a"
+url = "https://example.com/x.tar.xz"
+sha256 = "{VALID_SHA}"
+format = "tar.xz"
+"#,
+        ),
+    );
+    let manifest = load_dependency_manifest(dir.path()).unwrap();
+    assert_eq!(manifest.archives[0].format, ArchiveFormat::TarXz);
+}
+
+#[test]
+fn load_dependency_manifest_accepts_matched_target_gate() {
+    let dir = TempDir::new().unwrap();
+    write_manifest(
+        dir.path(),
+        &format!(
+            r#"
+[[archives]]
+name = "gated"
+url = "https://example.com/x.tar.xz"
+sha256 = "{VALID_SHA}"
+format = "tar.xz"
+target_os = "linux"
+target_arch = "x86_64"
+"#,
+        ),
+    );
+    let manifest = load_dependency_manifest(dir.path()).unwrap();
+    assert_eq!(manifest.archives[0].target_os.as_deref(), Some("linux"));
+    assert_eq!(manifest.archives[0].target_arch.as_deref(), Some("x86_64"));
+}
+
+#[test]
+fn load_dependency_manifest_rejects_incomplete_target_gate() {
+    let dir = TempDir::new().unwrap();
+    write_manifest(
+        dir.path(),
+        &format!(
+            r#"
+[[archives]]
+name = "only-os"
+url = "https://example.com/x.tar.xz"
+sha256 = "{VALID_SHA}"
+format = "tar.xz"
+target_os = "linux"
+"#,
+        ),
+    );
+    let err = load_dependency_manifest(dir.path()).unwrap_err();
+    assert!(
+        matches!(err, PrepareError::IncompleteArchiveTarget { .. }),
         "{err:?}"
     );
 }

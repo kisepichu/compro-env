@@ -201,6 +201,8 @@ fn prepare_dependencies_publishes_prepared_set_atomically() {
             url: server.url("/sample.tar.gz"),
             sha256: ContentDigest::from_hex(sha).unwrap(),
             format: ArchiveFormat::TarGz,
+            target_os: None,
+            target_arch: None,
         }],
         ..empty_manifest()
     };
@@ -250,6 +252,8 @@ fn prepare_dependencies_fails_on_checksum_mismatch() {
             url: server.url("/mismatch.tar.gz"),
             sha256: ContentDigest::from_hex(advertised_sha).unwrap(),
             format: ArchiveFormat::TarGz,
+            target_os: None,
+            target_arch: None,
         }],
         ..empty_manifest()
     };
@@ -296,6 +300,8 @@ fn prepare_dependencies_fails_on_truncated_download() {
             url: server.url("/trunc.tar.gz"),
             sha256: ContentDigest::from_hex(advertised_sha).unwrap(),
             format: ArchiveFormat::TarGz,
+            target_os: None,
+            target_arch: None,
         }],
         ..empty_manifest()
     };
@@ -327,6 +333,8 @@ fn prepare_dependencies_rejects_tar_symlink_entry() {
             url: server.url("/evil.tar.gz"),
             sha256: ContentDigest::from_hex(sha).unwrap(),
             format: ArchiveFormat::TarGz,
+            target_os: None,
+            target_arch: None,
         }],
         ..empty_manifest()
     };
@@ -355,6 +363,8 @@ fn prepare_dependencies_rejects_zip_parent_traversal() {
             url: server.url("/evil.zip"),
             sha256: ContentDigest::from_hex(sha).unwrap(),
             format: ArchiveFormat::Zip,
+            target_os: None,
+            target_arch: None,
         }],
         ..empty_manifest()
     };
@@ -390,6 +400,8 @@ fn prepare_dependencies_rejects_scheme_changing_redirect() {
             )
             .unwrap(),
             format: ArchiveFormat::TarGz,
+            target_os: None,
+            target_arch: None,
         }],
         ..empty_manifest()
     };
@@ -420,6 +432,8 @@ fn prepare_dependencies_repairs_corrupt_existing_prepared_dir() {
             url: server.url("/sample.tar.gz"),
             sha256: ContentDigest::from_hex(sha).unwrap(),
             format: ArchiveFormat::TarGz,
+            target_os: None,
+            target_arch: None,
         }],
         ..empty_manifest()
     };
