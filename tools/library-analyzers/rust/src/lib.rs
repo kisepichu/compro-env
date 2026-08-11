@@ -7,3 +7,4 @@
 pub mod dependencies;
 pub mod module_graph;
 pub mod request;
+pub mod symbols;

@@ -1,10 +1,9 @@
-//! `ce-rust` — Rust language analyzer for compro-env (plan 043).
+//! `ce-rust` — Rust language analyzer for compro-env (plans 043–044).
 //!
 //! Reads a single `AnalysisRequest` JSON document from stdin, executes
 //! `rustc -Vv` to record the invoking toolchain, resolves direct dependencies
-//! (Task 2) using `syn`, and writes a single `AnalysisResponse` JSON document
-//! to stdout. Symbol analysis is delivered by a later plan; every library
-//! returns `symbol_analysis = partial` with an explicit diagnostic.
+//! and library symbols using `syn`, and writes a single `AnalysisResponse`
+//! JSON document to stdout.
 
 use std::io::{Read, Write};
 use std::process::{Command, ExitCode};
@@ -13,18 +12,16 @@ use anyhow::{Context, bail};
 use ce_library_rust_analyzer::dependencies::analyze_request;
 use ce_library_rust_analyzer::module_graph::RustWorkspace;
 use ce_library_rust_analyzer::request::parse_request;
+use ce_library_rust_analyzer::symbols::analyze_symbols;
 use library_adapter_protocol::{
-    AdapterIdentity, AnalysisRequest, AnalysisResponse, AnalysisState, Diagnostic, SCHEMA_VERSION,
-    Severity, SymbolAnalysis, ToolchainIdentity,
+    AdapterIdentity, AnalysisRequest, AnalysisResponse, AnalysisState, Diagnostic, LibraryAnalysis,
+    Location, Position, SCHEMA_VERSION, Severity, SymbolAnalysis, ToolchainIdentity,
 };
 
 /// Public adapter identity. `library-adapter-build` cross-checks this against
 /// `LanguageBuildPlan::expected_adapter_name` during the handshake.
 pub const ADAPTER_NAME: &str = "ce-rust";
 pub const ADAPTER_VERSION: &str = "0.1.0";
-/// Emitted on every library indicating that symbols are out of MVP scope.
-const SYMBOLS_PENDING_CODE: &str = "rust.mvp.symbols-pending";
-const SYMBOLS_PENDING_MESSAGE: &str = "Rust symbol analysis is delivered by a follow-up plan";
 
 fn main() -> ExitCode {
     match run() {
@@ -60,14 +57,7 @@ fn build_response(request: &AnalysisRequest) -> anyhow::Result<AnalysisResponse>
     let workspace = RustWorkspace::from_request(request).context("build workspace model")?;
     let (mut libraries, solutions) = analyze_request(request, &workspace);
     for lib in &mut libraries {
-        // Symbol analysis is out of Task 2 scope; stamp a stable diagnostic
-        // so downstream normalization can pass the partial state through
-        // without inventing a new code path.
-        lib.symbol_analysis = SymbolAnalysis {
-            state: AnalysisState::Partial,
-            symbols: vec![],
-        };
-        lib.diagnostics.insert(0, symbols_pending_diagnostic());
+        run_symbol_analysis(&workspace, lib);
     }
     Ok(AnalysisResponse {
         schema_version: SCHEMA_VERSION,
@@ -77,12 +67,48 @@ fn build_response(request: &AnalysisRequest) -> anyhow::Result<AnalysisResponse>
     })
 }
 
-fn symbols_pending_diagnostic() -> Diagnostic {
-    Diagnostic {
-        severity: Severity::Info,
-        code: SYMBOLS_PENDING_CODE.into(),
-        message: SYMBOLS_PENDING_MESSAGE.into(),
-        location: None,
+/// Populate `lib.symbol_analysis` from the on-disk source. Failure to read
+/// the source or parse the file yields `state = failed` plus a diagnostic;
+/// the surrounding dependency analysis stays whatever the dependency pass
+/// produced.
+fn run_symbol_analysis(workspace: &RustWorkspace, lib: &mut LibraryAnalysis) {
+    let absolute = workspace.absolute(&lib.path);
+    let source = match std::fs::read_to_string(&absolute) {
+        Ok(s) => s,
+        Err(err) => {
+            lib.symbol_analysis = SymbolAnalysis {
+                state: AnalysisState::Failed,
+                symbols: vec![],
+            };
+            lib.diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "rust.symbols.read".into(),
+                message: format!("failed to read {}: {err}", lib.path),
+                location: Some(entry_location(&lib.path)),
+            });
+            return;
+        }
+    };
+    let analysis = analyze_symbols(&source, &lib.path, &[]);
+    if let AnalysisState::Failed = analysis.state {
+        lib.diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            code: "rust.symbols.parse".into(),
+            message: format!("failed to parse {}", lib.path),
+            location: Some(entry_location(&lib.path)),
+        });
+    }
+    lib.symbol_analysis = analysis;
+}
+
+fn entry_location(path: &str) -> Location {
+    Location {
+        path: path.to_string(),
+        start: Position {
+            line: 1,
+            column: Some(1),
+        },
+        end: None,
     }
 }
 
