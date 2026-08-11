@@ -503,16 +503,30 @@ impl SubmissionRecovery for LibraryCheckerRecovery {
             }
 
             for overview in &list.submissions {
+                let sub_time = overview
+                    .submission_time
+                    .as_deref()
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&Utc));
+
                 // Time-based pagination cutoff checked before per-row field guards so
                 // any old submission (even with wrong problem/lang) stops the scan.
-                if let Some(lb) = lower_bound
-                    && let Some(time_str) = &overview.submission_time
-                    && let Ok(sub_time) = DateTime::parse_from_rfc3339(time_str)
+                if let (Some(lb), Some(t)) = (lower_bound, sub_time)
+                    && t < lb - Duration::seconds(GRACE_SECS)
                 {
-                    let sub_time: DateTime<Utc> = sub_time.with_timezone(&Utc);
-                    if sub_time < lb - Duration::seconds(GRACE_SECS) {
-                        stop_pagination = true;
-                        break;
+                    stop_pagination = true;
+                    break;
+                }
+
+                // When lower_bound is set, we must be able to prove each candidate
+                // sits inside the attempt window. A row with a missing/unparseable
+                // submission_time cannot be proven in-window, so exclude it — the
+                // alternative would let old submissions leak past the lower_bound
+                // filter via a hash collision.
+                if let Some(lb) = lower_bound {
+                    match sub_time {
+                        Some(t) if t >= lb - Duration::seconds(GRACE_SECS) => {}
+                        _ => continue,
                     }
                 }
 

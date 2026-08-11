@@ -1146,6 +1146,92 @@ fn recovery_registry_contains_librarychecker() {
     assert!(registry.contains(&OJKind::LibraryChecker));
 }
 
+// ─── Recovery test: missing submission_time excluded when lower_bound set ─
+
+/// Regression: when `submitted_at_lower_bound` is set, a candidate whose
+/// `submission_time` we cannot parse cannot be proven in-window; the
+/// recovery must NOT accept it even on a hash match, otherwise an old
+/// submission could leak past the lower_bound filter.
+#[test]
+fn recover_rejects_candidate_with_unparseable_submission_time_when_lower_bound_set() {
+    let source = "fn main_timeless() {}";
+    let sub_req = SubmissionRequest {
+        online_judge: OJKind::LibraryChecker,
+        contest_id: "librarychecker-aplusb".to_string(),
+        problem_id: "aplusb".to_string(),
+        lang_id: "rust".to_string(),
+        source: source.to_string(),
+    };
+    let base_req = RecoveryRequest::from_request(&sub_req);
+    let rec_req = RecoveryRequest {
+        submitted_at_lower_bound: Some(Utc::now() - ChronoDuration::minutes(5)),
+        ..base_req
+    };
+
+    let alice_json = current_user_json("alice");
+    // Overview omits submission_time entirely.
+    let overview = r#"{"id":8888,"problem_name":"aplusb","lang":"rust","is_latest":true,"status":"AC","time":0.0,"memory":0,"user_name":"alice"}"#;
+    let list = format!(r#"{{"submissions":[{overview}],"count":1}}"#);
+    let source_json = serde_json::to_string(source).expect("json");
+    let detail = format!(r#"{{"overview":{overview},"source":{source_json},"can_rejudge":false}}"#);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else if url.starts_with("/submissions/8888") {
+            detail.clone()
+        } else {
+            list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    // Even though the source hash matches, without a parseable timestamp we
+    // cannot prove the row is inside the window, so we don't recover.
+    assert!(
+        matches!(outcome, RecoveryOutcome::AcceptanceUnknown),
+        "expected AcceptanceUnknown for unverifiable timestamp, got {outcome:?}"
+    );
+}
+
+/// Complement: when `submitted_at_lower_bound` is NOT set, a missing
+/// `submission_time` is fine (there is nothing to prove in-window against).
+#[test]
+fn recover_accepts_candidate_with_missing_time_when_no_lower_bound() {
+    let source = "fn main_no_lower() {}";
+    let rec_req = recovery_request_for("aplusb", "rust", source);
+
+    let alice_json = current_user_json("alice");
+    let overview = r#"{"id":6666,"problem_name":"aplusb","lang":"rust","is_latest":true,"status":"AC","time":0.0,"memory":0,"user_name":"alice"}"#;
+    let list = format!(r#"{{"submissions":[{overview}],"count":1}}"#);
+    let source_json = serde_json::to_string(source).expect("json");
+    let detail = format!(r#"{{"overview":{overview},"source":{source_json},"can_rejudge":false}}"#);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else if url.starts_with("/submissions/6666") {
+            detail.clone()
+        } else {
+            list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    match outcome {
+        RecoveryOutcome::Recovered { handle } => assert_eq!(handle.submission_id, "6666"),
+        other => panic!("expected Recovered, got {other:?}"),
+    }
+}
+
 // ─── Recovery test 16: query params encode reserved characters ────────────
 
 /// Regression: recovery must URL-encode `problem_id` / `lang_id` / user so
