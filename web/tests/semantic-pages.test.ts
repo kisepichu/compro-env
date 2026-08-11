@@ -20,6 +20,7 @@ import {
   splitSourcePath,
 } from "@/lib/pages/libraries.ts";
 import { renderNotFoundPage } from "@/lib/pages/notfound.ts";
+import { renderSearchPage } from "@/lib/pages/search.ts";
 import {
   listSolutionRoutes,
   renderContestPage,
@@ -448,6 +449,60 @@ describe("Solution browse and detail", () => {
     expect(doc.getElementById("verification")).toBeNull();
     const status = doc.querySelector("article header .status-badge")!;
     expect(status.getAttribute("data-status")).toBe("not_configured");
+  });
+});
+
+// ---- Search page shell ----
+
+describe("Search page (/search/)", () => {
+  const siteData = buildFixtureSiteData();
+  const html = renderSearchPage(rootConfig, siteData);
+
+  it("sets robots noindex,nofollow and marks Search current in the nav", () => {
+    assertShell(html, {
+      config: rootConfig,
+      expectH1: "Search",
+      currentNav: "search",
+      expectMainIgnored: true,
+      expectRobots: "noindex,nofollow",
+    });
+  });
+
+  it("emits the hydration IDs the client relies on", () => {
+    const doc = parse(html);
+    // Root container carries the base for the client to resolve URLs.
+    const app = doc.getElementById("search-app")!;
+    expect(app).toBeTruthy();
+    expect(app.getAttribute("data-base")).toBe("/");
+    // Per spec §13.2 the shell reserves the semantic slots below.
+    for (const id of [
+      "parsed-filters",
+      "search-status",
+      "search-alert",
+      "search-summary",
+      "search-results",
+      "search-pagination",
+      "search-empty",
+    ]) {
+      expect(doc.getElementById(id)).toBeTruthy();
+    }
+    // Live regions carry the spec-mandated attributes.
+    expect(doc.getElementById("search-status")!.getAttribute("role")).toBe("status");
+    expect(doc.getElementById("search-summary")!.getAttribute("aria-live")).toBe("polite");
+    expect(doc.getElementById("search-alert")!.getAttribute("role")).toBe("alert");
+    // Grammar-hint and no-JS panels expose recovery links.
+    const empty = doc.getElementById("search-empty")!;
+    expect(empty.textContent).toMatch(/lang:cpp|lang/);
+    expect(html).toContain("<noscript>");
+  });
+
+  it("data-base carries the project base under /compro-env/", () => {
+    const projectHtml = renderSearchPage(projectConfig, siteData);
+    const doc = parse(projectHtml);
+    expect(doc.getElementById("search-app")!.getAttribute("data-base")).toBe(
+      "/compro-env/",
+    );
+    assertBaseSafety(doc, "/compro-env/");
   });
 });
 
