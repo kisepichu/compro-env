@@ -15,8 +15,11 @@ use domain::adapter_build::{ExpectedBuild, TargetPlatform};
 use domain::adapter_prepare::ExpectedPreparedSet;
 use infrastructure::library_adapter::build::{BuildRequest, build_adapters};
 use infrastructure::library_adapter::build_state::{BuildStateError, inspect_build_state};
+use infrastructure::library_adapter::cpp_toolchain::select_cpp_toolchain;
 use infrastructure::library_adapter::inputs::{calculate_input_digest, load_build_inputs};
-use infrastructure::library_adapter::language_plans::{rust_build_plan, sanitized_language_env};
+use infrastructure::library_adapter::language_plans::{
+    cpp_build_plan, rust_build_plan, sanitized_language_env,
+};
 use infrastructure::library_adapter::prepare::{PREPARED_SUBDIR, prepared_dir};
 use infrastructure::library_adapter::prepared::{
     expected_dependency_id, load_dependency_manifest, validate_prepared_set,
@@ -156,6 +159,22 @@ fn run(args: Args) -> anyhow::Result<()> {
 
     let git_commit_sha = read_git_commit_sha(&repository_root)?;
 
+    let mut language_plans = vec![rust_build_plan(&repository_root)];
+    // Plan 045 Task 2: attach the C++ plan when the current target is one of
+    // the three officially supported LLVM 22.1.0 triples AND the prepared set
+    // actually has that install unpacked. `cpp_build_plan` returns
+    // `PreparedInstallMissing` in the interim between `prepare` and `build`
+    // when the operator is on an unsupported host — treat both as "skip C++"
+    // rather than a hard error so a Rust-only rebuild still works.
+    if select_cpp_toolchain(&target_platform).is_ok() {
+        match cpp_build_plan(&repository_root, &target_platform, &prepared_set) {
+            Ok(plan) => language_plans.push(plan),
+            Err(err) => {
+                eprintln!("library-adapter-build: skipping C++ adapter: {err}");
+            }
+        }
+    }
+
     let request = BuildRequest {
         repository_root: repository_root.clone(),
         analyzer_root: analyzer_root.clone(),
@@ -165,7 +184,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         input_digest,
         git_commit_sha,
         prepared_set,
-        language_plans: vec![rust_build_plan(&repository_root)],
+        language_plans,
         handshake_timeout: Duration::from_secs(args.handshake_timeout_secs),
     };
 

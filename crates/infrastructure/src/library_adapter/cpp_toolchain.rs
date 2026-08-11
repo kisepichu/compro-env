@@ -14,12 +14,13 @@
 //! cleared environment with a minimal PATH so the host system's `LLVM_CONFIG`
 //! or `PATH` can never impersonate the pinned build.
 
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use domain::adapter_build::{ContentDigest, TargetPlatform};
-use domain::adapter_prepare::ArchiveFormat;
+use domain::adapter_prepare::{ArchiveFormat, PreparedSet};
 use thiserror::Error;
 
 /// The single Clang/LLVM release these C++ analyzer builds are pinned to.
@@ -91,6 +92,16 @@ pub enum CppToolchainError {
     VersionMismatch { expected: String, actual: String },
     #[error("failed to read LLVM version: {0}")]
     VersionRead(#[source] io::Error),
+    #[error("prepared LLVM install for {archive_name:?} is not on disk at {path}")]
+    PreparedInstallMissing { archive_name: String, path: String },
+    #[error("prepared LLVM install for {archive_name:?} does not contain bin/clang under {path}")]
+    PreparedInstallLayout { archive_name: String, path: String },
+    #[error("failed to read prepared LLVM install directory {path}: {source}")]
+    PreparedInstallIo {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
 }
 
 /// Return the toolchain spec for the current build target, or fail before any
@@ -232,11 +243,63 @@ pub fn default_version_reader(llvm_config: &Path) -> Result<String, io::Error> {
     Ok(text.trim().to_string())
 }
 
+/// Resolve the LLVM install directory (the folder that contains `bin/`,
+/// `lib/`, `include/`, and CMake package files) under a prepared set for the
+/// given target platform.
+///
+/// The dependency-manifest pipeline unpacks the LLVM tarball into
+/// `<prepared_root>/archives/<archive_name>/`. Official release archives ship
+/// a top-level directory (e.g. `LLVM-22.1.0-Linux-X64/`), so we search one
+/// level deeper for the directory that owns `bin/clang`. If future archives
+/// unpack flat we still find `bin/clang` at the archive root and return that.
+///
+/// This is the helper `cpp_build_plan` uses to derive `CE_LLVM_DIR` for the
+/// build.sh driver; it also produces a `CppToolchainPaths` via
+/// `validate_llvm_layout` so callers can audit the pinned identity.
+pub fn locate_prepared_llvm_root(
+    prepared_set: &PreparedSet,
+    platform: &TargetPlatform,
+) -> Result<PathBuf, CppToolchainError> {
+    let spec = select_cpp_toolchain(platform)?;
+    let archives_dir = prepared_set.root.join("archives").join(&spec.archive_name);
+    if !archives_dir.is_dir() {
+        return Err(CppToolchainError::PreparedInstallMissing {
+            archive_name: spec.archive_name.clone(),
+            path: archives_dir.display().to_string(),
+        });
+    }
+    // Prefer the tarball's top-level directory (contains bin/, lib/, ...).
+    // Fall back to `archives_dir` itself if a future flat archive lands here.
+    if archives_dir.join("bin/clang").is_file() {
+        return Ok(archives_dir);
+    }
+    let entries =
+        fs::read_dir(&archives_dir).map_err(|source| CppToolchainError::PreparedInstallIo {
+            path: archives_dir.display().to_string(),
+            source,
+        })?;
+    for entry in entries {
+        let entry = entry.map_err(|source| CppToolchainError::PreparedInstallIo {
+            path: archives_dir.display().to_string(),
+            source,
+        })?;
+        let path = entry.path();
+        if path.is_dir() && path.join("bin/clang").is_file() {
+            return Ok(path);
+        }
+    }
+    Err(CppToolchainError::PreparedInstallLayout {
+        archive_name: spec.archive_name,
+        path: archives_dir.display().to_string(),
+    })
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain::adapter_prepare::{DependencyId, PreparedManifest};
 
     fn platform(os: &str, arch: &str) -> TargetPlatform {
         TargetPlatform {
@@ -259,5 +322,82 @@ mod tests {
     fn select_returns_linux_x86_64_spec() {
         let spec = select_cpp_toolchain(&platform("linux", "x86_64")).unwrap();
         assert_eq!(spec.archive_name, CPP_TOOLCHAIN_LINUX_X64_NAME);
+    }
+
+    /// Helper: build a `PreparedSet` whose `root` points at a temporary
+    /// directory. The manifest inside is a placeholder — `locate_prepared_llvm_root`
+    /// only inspects the on-disk layout, not the manifest.
+    fn prepared_set_at(root: PathBuf, platform: TargetPlatform) -> PreparedSet {
+        let digest = ContentDigest::from_sha256_bytes([0u8; 32]);
+        PreparedSet {
+            id: DependencyId::new(digest.clone()),
+            root: root.clone(),
+            manifest: PreparedManifest {
+                id: DependencyId::new(digest),
+                target_platform: platform,
+                artifacts: vec![],
+            },
+        }
+    }
+
+    #[test]
+    fn locate_prepared_llvm_root_finds_nested_top_level_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let plat = platform("linux", "x86_64");
+        let top = tmp
+            .path()
+            .join("archives")
+            .join(CPP_TOOLCHAIN_LINUX_X64_NAME)
+            .join("LLVM-22.1.0-Linux-X64");
+        std::fs::create_dir_all(top.join("bin")).unwrap();
+        std::fs::write(top.join("bin/clang"), b"stub").unwrap();
+        let set = prepared_set_at(tmp.path().to_path_buf(), plat.clone());
+        let root = locate_prepared_llvm_root(&set, &plat).unwrap();
+        assert_eq!(root, top);
+    }
+
+    #[test]
+    fn locate_prepared_llvm_root_accepts_flat_layout() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let plat = platform("linux", "x86_64");
+        let flat = tmp
+            .path()
+            .join("archives")
+            .join(CPP_TOOLCHAIN_LINUX_X64_NAME);
+        std::fs::create_dir_all(flat.join("bin")).unwrap();
+        std::fs::write(flat.join("bin/clang"), b"stub").unwrap();
+        let set = prepared_set_at(tmp.path().to_path_buf(), plat.clone());
+        let root = locate_prepared_llvm_root(&set, &plat).unwrap();
+        assert_eq!(root, flat);
+    }
+
+    #[test]
+    fn locate_prepared_llvm_root_missing_archive_fails() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let plat = platform("linux", "x86_64");
+        let set = prepared_set_at(tmp.path().to_path_buf(), plat.clone());
+        let err = locate_prepared_llvm_root(&set, &plat).unwrap_err();
+        assert!(
+            matches!(err, CppToolchainError::PreparedInstallMissing { .. }),
+            "expected PreparedInstallMissing, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn locate_prepared_llvm_root_rejects_archive_without_clang() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let plat = platform("linux", "x86_64");
+        let archive_dir = tmp
+            .path()
+            .join("archives")
+            .join(CPP_TOOLCHAIN_LINUX_X64_NAME);
+        std::fs::create_dir_all(&archive_dir).unwrap();
+        // Empty directory: no bin/clang, no children with bin/clang.
+        let set = prepared_set_at(tmp.path().to_path_buf(), plat.clone());
+        let err = locate_prepared_llvm_root(&set, &plat).unwrap_err();
+        assert!(
+            matches!(err, CppToolchainError::PreparedInstallLayout { .. }),
+            "expected PreparedInstallLayout, got {err:?}"
+        );
     }
 }
