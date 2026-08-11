@@ -217,16 +217,6 @@ private def joinRootEntry (root entry : String) : String :=
   else if root.endsWith "/" then root ++ entry
   else s!"{root}/{entry}"
 
-/-- Attach the plan-050 stable placeholder diagnostic to a library target's
-    diagnostics array. Solutions never carry it (they have no symbol
-    analysis block). -/
-private def withSymbolDeferred (a : TargetAnalysis) : TargetAnalysis :=
-  { a with diagnostics := a.diagnostics.push {
-      severity := .info
-      code := "lean.symbols.deferred"
-      message := "Lean symbol extraction is deferred to plan 050."
-    } }
-
 /-- Analyze every target in `request` under the supplied `map`. Libraries
     are emitted first in request order, then solutions in request order —
     the same order the response envelope's `libraries` / `solutions`
@@ -237,7 +227,7 @@ def analyzeRequest
   let mut libs : Array TargetAnalysis := #[]
   for lib in request.libraries do
     let a ← analyzeTarget map request.repositoryRoot lib.path
-    libs := libs.push (withSymbolDeferred a)
+    libs := libs.push a
   let mut sols : Array TargetAnalysis := #[]
   for sol in request.solutions do
     let path := joinRootEntry sol.root sol.entry
@@ -302,18 +292,27 @@ private def dependencyAnalysisJson (a : TargetAnalysis) : Json :=
     ("dependencies", Json.arr (a.dependencies.map dependencyToJson))
   ]
 
-/-- Wire JSON for a library target (spec §6.3): includes the pending
-    `symbol_analysis` block that plan 050 will populate. -/
-def libraryJson (path : String) (a : TargetAnalysis) : Json :=
+/-- Wire JSON for a library target (spec §6.3) — dependency and
+    symbol analyses side-by-side. Callers pass the projected symbol
+    analysis JSON built by `Analyzer.Symbols.symbolAnalysisToJson`. -/
+def libraryJsonWithSymbols
+    (path : String) (a : TargetAnalysis) (symbolJson : Json) : Json :=
   Json.mkObj [
     ("path", Json.str path),
     ("dependency_analysis", dependencyAnalysisJson a),
-    ("symbol_analysis", Json.mkObj [
-      ("state", Json.str "partial"),
-      ("symbols", Json.arr #[])
-    ]),
+    ("symbol_analysis", symbolJson),
     ("diagnostics", Json.arr (a.diagnostics.map diagnosticToJson))
   ]
+
+/-- Legacy library JSON with a stubbed `partial` symbol analysis. Kept
+    for tests that predate plan 050's `symbolJson` wiring; callers that
+    can supply a real symbol analysis should prefer
+    `libraryJsonWithSymbols`. -/
+def libraryJson (path : String) (a : TargetAnalysis) : Json :=
+  libraryJsonWithSymbols path a (Json.mkObj [
+    ("state", Json.str "partial"),
+    ("symbols", Json.arr #[])
+  ])
 
 /-- Wire JSON for a solution target (spec §6.3): no symbol analysis. -/
 def solutionJson (id : String) (a : TargetAnalysis) : Json :=

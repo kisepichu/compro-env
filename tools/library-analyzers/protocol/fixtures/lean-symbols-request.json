@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "repository_root": "<REPOSITORY_ROOT>",
+  "language": "lean",
+  "libraries": [
+    { "path": "libraries/lean/symbols/Basic.lean" },
+    { "path": "libraries/lean/symbols/Structs.lean" },
+    { "path": "libraries/lean/symbols/NS.lean" },
+    { "path": "libraries/lean/symbols/Broken.lean" }
+  ],
+  "solutions": []
+}

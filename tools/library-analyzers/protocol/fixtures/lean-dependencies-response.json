@@ -47,13 +47,7 @@
         "state": "partial",
         "symbols": []
       },
-      "diagnostics": [
-        {
-          "severity": "info",
-          "code": "lean.symbols.deferred",
-          "message": "Lean symbol extraction is deferred to plan 050."
-        }
-      ]
+      "diagnostics": []
     },
     {
       "path": "libraries/lean/A/B.lean",
@@ -75,13 +69,7 @@
         "state": "partial",
         "symbols": []
       },
-      "diagnostics": [
-        {
-          "severity": "info",
-          "code": "lean.symbols.deferred",
-          "message": "Lean symbol extraction is deferred to plan 050."
-        }
-      ]
+      "diagnostics": []
     },
     {
       "path": "libraries/lean/Standalone.lean",
@@ -102,11 +90,6 @@
             "path": "libraries/lean/Standalone.lean",
             "start": { "line": 1, "column": 1 }
           }
-        },
-        {
-          "severity": "info",
-          "code": "lean.symbols.deferred",
-          "message": "Lean symbol extraction is deferred to plan 050."
         }
       ]
     }

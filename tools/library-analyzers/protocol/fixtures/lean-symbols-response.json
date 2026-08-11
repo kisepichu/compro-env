@@ -1,0 +1,545 @@
+{
+  "adapter": {
+    "name": "ce-lean",
+    "toolchains": [
+      {
+        "name": "lean",
+        "version": "4.30.0"
+      }
+    ],
+    "version": "0.1.0"
+  },
+  "libraries": [
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 12,
+                "line": 1
+              },
+              "path": "libraries/lean/symbols/Basic.lean",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            },
+            "name": "Init"
+          }
+        ],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/lean/symbols/Basic.lean",
+      "symbol_analysis": {
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "def",
+            "location": {
+              "end": {
+                "column": 22,
+                "line": 2
+              },
+              "path": "libraries/lean/symbols/Basic.lean",
+              "start": {
+                "column": 1,
+                "line": 2
+              }
+            },
+            "name": "hello",
+            "search_names": [
+              "hello"
+            ]
+          },
+          {
+            "kind": "theorem",
+            "location": {
+              "end": {
+                "column": 37,
+                "line": 3
+              },
+              "path": "libraries/lean/symbols/Basic.lean",
+              "start": {
+                "column": 1,
+                "line": 3
+              }
+            },
+            "name": "hello_eq",
+            "search_names": [
+              "hello_eq"
+            ]
+          },
+          {
+            "kind": "axiom",
+            "location": {
+              "end": {
+                "column": 20,
+                "line": 4
+              },
+              "path": "libraries/lean/symbols/Basic.lean",
+              "start": {
+                "column": 1,
+                "line": 4
+              }
+            },
+            "name": "mystery",
+            "search_names": [
+              "mystery"
+            ]
+          },
+          {
+            "kind": "opaque",
+            "location": {
+              "end": {
+                "column": 20,
+                "line": 5
+              },
+              "path": "libraries/lean/symbols/Basic.lean",
+              "start": {
+                "column": 1,
+                "line": 5
+              }
+            },
+            "name": "secret",
+            "search_names": [
+              "secret"
+            ]
+          },
+          {
+            "kind": "abbrev",
+            "location": {
+              "end": {
+                "column": 20,
+                "line": 6
+              },
+              "path": "libraries/lean/symbols/Basic.lean",
+              "start": {
+                "column": 1,
+                "line": 6
+              }
+            },
+            "name": "Alias",
+            "search_names": [
+              "Alias"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 12,
+                "line": 1
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            },
+            "name": "Init"
+          }
+        ],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/lean/symbols/Structs.lean",
+      "symbol_analysis": {
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "structure",
+            "location": {
+              "end": {
+                "column": 10,
+                "line": 4
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 1,
+                "line": 2
+              }
+            },
+            "name": "Point",
+            "search_names": [
+              "Point"
+            ]
+          },
+          {
+            "kind": "constructor",
+            "location": {
+              "end": {
+                "column": 16,
+                "line": 2
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 11,
+                "line": 2
+              }
+            },
+            "name": "mk",
+            "qualified_name": "Point.mk",
+            "search_names": [
+              "mk",
+              "Point.mk"
+            ]
+          },
+          {
+            "kind": "field",
+            "location": {
+              "end": {
+                "column": 4,
+                "line": 3
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 3,
+                "line": 3
+              }
+            },
+            "name": "x",
+            "qualified_name": "Point.x",
+            "search_names": [
+              "x",
+              "Point.x"
+            ]
+          },
+          {
+            "kind": "field",
+            "location": {
+              "end": {
+                "column": 4,
+                "line": 4
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 3,
+                "line": 4
+              }
+            },
+            "name": "y",
+            "qualified_name": "Point.y",
+            "search_names": [
+              "y",
+              "Point.y"
+            ]
+          },
+          {
+            "kind": "class",
+            "location": {
+              "end": {
+                "column": 10,
+                "line": 6
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 1,
+                "line": 5
+              }
+            },
+            "name": "HasFoo",
+            "search_names": [
+              "HasFoo"
+            ]
+          },
+          {
+            "kind": "constructor",
+            "location": {
+              "end": {
+                "column": 13,
+                "line": 5
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 7,
+                "line": 5
+              }
+            },
+            "name": "mk",
+            "qualified_name": "HasFoo.mk",
+            "search_names": [
+              "mk",
+              "HasFoo.mk"
+            ]
+          },
+          {
+            "kind": "field",
+            "location": {
+              "end": {
+                "column": 6,
+                "line": 6
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 3,
+                "line": 6
+              }
+            },
+            "name": "foo",
+            "qualified_name": "HasFoo.foo",
+            "search_names": [
+              "foo",
+              "HasFoo.foo"
+            ]
+          },
+          {
+            "kind": "instance",
+            "location": {
+              "end": {
+                "column": 11,
+                "line": 8
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 1,
+                "line": 7
+              }
+            },
+            "name": "instHasFooNat",
+            "search_names": [
+              "instHasFooNat"
+            ]
+          },
+          {
+            "kind": "inductive",
+            "location": {
+              "end": {
+                "column": 22,
+                "line": 11
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 1,
+                "line": 9
+              }
+            },
+            "name": "Tree",
+            "search_names": [
+              "Tree"
+            ]
+          },
+          {
+            "kind": "constructor",
+            "location": {
+              "end": {
+                "column": 9,
+                "line": 10
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 3,
+                "line": 10
+              }
+            },
+            "name": "leaf",
+            "qualified_name": "Tree.leaf",
+            "search_names": [
+              "leaf",
+              "Tree.leaf"
+            ]
+          },
+          {
+            "kind": "constructor",
+            "location": {
+              "end": {
+                "column": 22,
+                "line": 11
+              },
+              "path": "libraries/lean/symbols/Structs.lean",
+              "start": {
+                "column": 3,
+                "line": 11
+              }
+            },
+            "name": "node",
+            "qualified_name": "Tree.node",
+            "search_names": [
+              "node",
+              "Tree.node"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 12,
+                "line": 1
+              },
+              "path": "libraries/lean/symbols/NS.lean",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            },
+            "name": "Init"
+          }
+        ],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/lean/symbols/NS.lean",
+      "symbol_analysis": {
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "def",
+            "location": {
+              "end": {
+                "column": 19,
+                "line": 3
+              },
+              "path": "libraries/lean/symbols/NS.lean",
+              "start": {
+                "column": 1,
+                "line": 3
+              }
+            },
+            "name": "top",
+            "qualified_name": "Outer.top",
+            "search_names": [
+              "top",
+              "Outer.top"
+            ]
+          },
+          {
+            "kind": "def",
+            "location": {
+              "end": {
+                "column": 20,
+                "line": 5
+              },
+              "path": "libraries/lean/symbols/NS.lean",
+              "start": {
+                "column": 1,
+                "line": 5
+              }
+            },
+            "name": "deep",
+            "qualified_name": "Outer.Inner.deep",
+            "search_names": [
+              "deep",
+              "Outer.Inner.deep"
+            ]
+          },
+          {
+            "kind": "def",
+            "location": {
+              "end": {
+                "column": 19,
+                "line": 8
+              },
+              "path": "libraries/lean/symbols/NS.lean",
+              "start": {
+                "column": 1,
+                "line": 8
+              }
+            },
+            "name": "αβγ",
+            "search_names": [
+              "αβγ"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 12,
+                "line": 1
+              },
+              "path": "libraries/lean/symbols/Broken.lean",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            },
+            "name": "Init"
+          }
+        ],
+        "state": "complete"
+      },
+      "diagnostics": [
+        {
+          "code": "lean.symbols.elaboration",
+          "location": {
+            "end": {
+              "column": 27,
+              "line": 3
+            },
+            "path": "libraries/lean/symbols/Broken.lean",
+            "start": {
+              "column": 24,
+              "line": 3
+            }
+          },
+          "message": "target elaboration produced errors; symbols may be incomplete",
+          "severity": "error"
+        }
+      ],
+      "path": "libraries/lean/symbols/Broken.lean",
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": [
+          {
+            "kind": "def",
+            "location": {
+              "end": {
+                "column": 20,
+                "line": 2
+              },
+              "path": "libraries/lean/symbols/Broken.lean",
+              "start": {
+                "column": 1,
+                "line": 2
+              }
+            },
+            "name": "good",
+            "search_names": [
+              "good"
+            ]
+          },
+          {
+            "kind": "theorem",
+            "location": {
+              "end": {
+                "column": 27,
+                "line": 3
+              },
+              "path": "libraries/lean/symbols/Broken.lean",
+              "start": {
+                "column": 1,
+                "line": 3
+              }
+            },
+            "name": "bad",
+            "search_names": [
+              "bad"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "schema_version": 1,
+  "solutions": []
+}
