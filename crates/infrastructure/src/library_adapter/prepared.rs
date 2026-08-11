@@ -89,7 +89,7 @@ pub enum PrepareError {
         #[source]
         source: ContentDigestError,
     },
-    #[error("unknown archive format: {value:?} (expected 'tar.gz', 'tar.xz', or 'zip')")]
+    #[error("unknown archive format: {value:?} (expected 'tar.gz', 'tar.xz', 'tar.zst', or 'zip')")]
     InvalidArchiveFormat { value: String },
     #[error(
         "archive {name:?} declares only one of `target_os`/`target_arch`; \
@@ -278,6 +278,7 @@ fn parse_archive_format(value: &str) -> Result<ArchiveFormat, PrepareError> {
     match value {
         "tar.gz" => Ok(ArchiveFormat::TarGz),
         "tar.xz" => Ok(ArchiveFormat::TarXz),
+        "tar.zst" => Ok(ArchiveFormat::TarZst),
         "zip" => Ok(ArchiveFormat::Zip),
         _ => Err(PrepareError::InvalidArchiveFormat {
             value: value.to_string(),

@@ -44,6 +44,35 @@ format = "tar.xz"
 target_os = "macos"
 target_arch = "aarch64"
 
+# Lean 4.30.0 official release archives (plan 048).
+#
+# Source: <https://github.com/leanprover/lean4/releases/tag/v4.30.0>.
+# Digests must stay in sync with
+# `crates/infrastructure/src/library_adapter/lean_toolchain.rs`.
+[[archives]]
+name = "lean-linux-x64"
+url = "https://github.com/leanprover/lean4/releases/download/v4.30.0/lean-4.30.0-linux.tar.zst"
+sha256 = "4dad74141c2c119ca1aa626656be83b8e14238afba97271fd7bf1eb3f081b319"
+format = "tar.zst"
+target_os = "linux"
+target_arch = "x86_64"
+
+[[archives]]
+name = "lean-linux-arm64"
+url = "https://github.com/leanprover/lean4/releases/download/v4.30.0/lean-4.30.0-linux_aarch64.tar.zst"
+sha256 = "c99c6f0edd446956d4758c59d4383e8e6411ff6cc71a01f9caabe5eba454121d"
+format = "tar.zst"
+target_os = "linux"
+target_arch = "aarch64"
+
+[[archives]]
+name = "lean-macos-arm64"
+url = "https://github.com/leanprover/lean4/releases/download/v4.30.0/lean-4.30.0-darwin_aarch64.tar.zst"
+sha256 = "072dca4a38fbc0d3cedb96fea886cc243b424f2bd16247596200b9a9ab93f0f5"
+format = "tar.zst"
+target_os = "macos"
+target_arch = "aarch64"
+
 # Declarative toolchain pins fold into the dependency-id so a mismatched host
 # rustup toolchain never impersonates the pinned one. Plan 043 pins the Rust
 # compiler; downloads (source dist, registry mirrors) are added by later plans
@@ -52,3 +81,13 @@ target_arch = "aarch64"
 name = "rustc"
 version = "1.92.0"
 components = ["rustfmt", "clippy"]
+
+# Lean 4.30.0 toolchain pin (plan 048). The declarative pin folds into the
+# dependency-id so a mismatched host Elan toolchain never impersonates the
+# pinned one. The `lean-toolchain` file next to the analyzer's `lakefile.toml`
+# also pins `leanprover/lean4:v4.30.0` so `lake env` inside the adapter
+# selects the same release.
+[[toolchains]]
+name = "lean"
+version = "4.30.0"
+components = ["lake"]
