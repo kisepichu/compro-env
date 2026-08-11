@@ -87,12 +87,28 @@ impl<'de> Deserialize<'de> for SubmissionCaseResult {
 pub(super) struct SubmissionInfoResponse {
     pub(super) overview: SubmissionOverview,
     // Not exposed: must not appear in error summaries.
-    #[allow(dead_code)]
     source: String,
     #[allow(dead_code)]
     compile_error: Option<String>,
     pub(super) can_rejudge: bool,
     pub(super) case_results: Option<Vec<SubmissionCaseResult>>,
+}
+
+impl SubmissionInfoResponse {
+    /// Returns `sha256:<lowercase-hex>` of the submission source without
+    /// exposing the source string. Used by the recovery adapter to compare
+    /// against `RecoveryRequest.source_hash`.
+    pub(super) fn source_sha256_hash(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(self.source.as_bytes());
+        let hash = h.finalize();
+        let mut hex = String::with_capacity(hash.len() * 2);
+        for b in hash {
+            hex.push_str(&format!("{b:02x}"));
+        }
+        format!("sha256:{hex}")
+    }
 }
 
 impl<'de> Deserialize<'de> for SubmissionInfoResponse {

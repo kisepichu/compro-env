@@ -4,15 +4,17 @@
 //! Spec § 9: LibraryChecker is `UnattendedTrackable / TestcaseDetails / BestEffort`.
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use domain::entity::{OJKind, Session};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use usecases::submission::{
     InfrastructureErrorKind, JudgeResult, JudgeVerdict, PollObservation, PollSubmissionError,
-    RecoveryMode, ResultDetailLevel, StartSubmissionError, SubmissionAdapterDescriptor,
-    SubmissionHandle, SubmissionMode, SubmissionPoller, SubmissionRequest, SubmissionStart,
-    SubmissionStarter, TestcaseOutcome,
+    RecoverSubmissionError, RecoveryMode, RecoveryOutcome, RecoveryRequest, ResultDetailLevel,
+    StartSubmissionError, SubmissionAdapterDescriptor, SubmissionHandle, SubmissionMode,
+    SubmissionPoller, SubmissionRecovery, SubmissionRequest, SubmissionStart, SubmissionStarter,
+    TestcaseOutcome,
 };
 
 use super::schema;
@@ -347,6 +349,206 @@ fn map_observation(
         verdict,
         testcases,
     }))
+}
+
+// ─── SubmissionRecovery ───────────────────────────────────────────────────
+
+/// Maximum number of `GET /submissions` list pages to fetch per recovery attempt.
+/// An operational safety net to prevent runaway iteration (spec §8.2 / plan 058).
+const MAX_RECOVERY_PAGES: u32 = 3;
+
+/// Submissions per page. LibraryChecker's API maximum is 1000; 100 is conservative.
+const PAGE_SIZE: i32 = 100;
+
+/// Grace window in seconds: submissions this many seconds before
+/// `submitted_at_lower_bound` are still considered potentially in-window.
+const GRACE_SECS: i64 = 60;
+
+pub struct LibraryCheckerRecovery {
+    client: reqwest::blocking::Client,
+    base_url: String,
+}
+
+impl LibraryCheckerRecovery {
+    pub fn new() -> Result<Self> {
+        Self::with_base_url(REST_BASE.to_string())
+    }
+
+    /// Override the base URL — used in tests to point at a local fixture server.
+    pub fn with_base_url(base: String) -> Result<Self> {
+        Ok(Self {
+            client: reqwest::blocking::Client::builder().build()?,
+            base_url: base,
+        })
+    }
+
+    /// Fetches the currently-authenticated user's username.
+    /// Returns `None` on any transport or parse failure (best-effort).
+    fn get_current_username(&self, id_token: &str) -> Option<String> {
+        let url = format!("{}/auth/current_user", self.base_url);
+        let resp = self.client.get(&url).bearer_auth(id_token).send().ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let body = resp.text().ok()?;
+        let r: schema::CurrentUserInfoResponse = serde_json::from_str(&body).ok()?;
+        r.user.map(|u| u.name)
+    }
+
+    /// Fetches one page of the submission list. Returns `None` on failure.
+    fn list_page(
+        &self,
+        problem_id: &str,
+        lang_id: &str,
+        user: &str,
+        skip: i32,
+    ) -> Option<schema::SubmissionListResponse> {
+        let url = format!(
+            "{}/submissions?problem={}&lang={}&user={}&order=-id&limit={}&skip={}",
+            self.base_url, problem_id, lang_id, user, PAGE_SIZE, skip
+        );
+        let resp = self.client.get(&url).send().ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let body = resp.text().ok()?;
+        serde_json::from_str(&body).ok()
+    }
+
+    /// Fetches the full detail for one submission. Returns `None` on failure.
+    fn fetch_detail(&self, id: i32) -> Option<schema::SubmissionInfoResponse> {
+        let url = format!("{}/submissions/{}", self.base_url, id);
+        let resp = self.client.get(&url).send().ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let body = resp.text().ok()?;
+        serde_json::from_str(&body).ok()
+    }
+}
+
+impl SubmissionRecovery for LibraryCheckerRecovery {
+    fn descriptor(&self) -> SubmissionAdapterDescriptor {
+        SubmissionAdapterDescriptor {
+            name: "librarychecker".to_string(),
+            version: "1".to_string(),
+            submission_mode: SubmissionMode::UnattendedTrackable,
+            result_detail: ResultDetailLevel::TestcaseDetails,
+            recovery_mode: RecoveryMode::BestEffort,
+        }
+    }
+
+    fn recover_submission(
+        &self,
+        request: &RecoveryRequest,
+        session: Option<&Session>,
+    ) -> Result<RecoveryOutcome, RecoverSubmissionError> {
+        let session = session.ok_or_else(|| RecoverSubmissionError::Infrastructure {
+            kind: InfrastructureErrorKind::CredentialsMissing,
+            summary: sanitize(
+                "LibraryChecker recovery requires a session. Run `ce login librarychecker`.",
+            ),
+        })?;
+
+        // Non-Firebase sessions cannot provide a Bearer token for /auth/current_user.
+        let id_token = match firebase_tokens(session) {
+            Ok((id, _)) => id,
+            Err(_) => return Ok(RecoveryOutcome::AcceptanceUnknown),
+        };
+
+        let current_user = match self.get_current_username(id_token) {
+            Some(u) => u,
+            None => return Ok(RecoveryOutcome::AcceptanceUnknown),
+        };
+
+        let lower_bound = request.submitted_at_lower_bound;
+        let mut seen_ids: HashSet<i32> = HashSet::new();
+        // (id, submission_time_rfc3339)
+        let mut matches: Vec<(i32, Option<String>)> = Vec::new();
+        let mut stop_pagination = false;
+
+        for page in 0..MAX_RECOVERY_PAGES {
+            let skip = page as i32 * PAGE_SIZE;
+            let list =
+                match self.list_page(&request.problem_id, &request.lang_id, &current_user, skip) {
+                    Some(l) => l,
+                    None => return Ok(RecoveryOutcome::AcceptanceUnknown),
+                };
+
+            if list.submissions.is_empty() {
+                break;
+            }
+
+            for overview in &list.submissions {
+                // Time-based pagination cutoff checked before per-row field guards so
+                // any old submission (even with wrong problem/lang) stops the scan.
+                if let Some(lb) = lower_bound
+                    && let Some(time_str) = &overview.submission_time
+                    && let Ok(sub_time) = DateTime::parse_from_rfc3339(time_str)
+                {
+                    let sub_time: DateTime<Utc> = sub_time.with_timezone(&Utc);
+                    if sub_time < lb - Duration::seconds(GRACE_SECS) {
+                        stop_pagination = true;
+                        break;
+                    }
+                }
+
+                // Per-row field guards — defence against server bugs or stale cache.
+                if overview.user_name.as_deref() != Some(current_user.as_str()) {
+                    continue;
+                }
+                if overview.problem_name != request.problem_id {
+                    continue;
+                }
+                if overview.lang != request.lang_id {
+                    continue;
+                }
+
+                // Deduplicate by submission ID (list may return duplicates).
+                if !seen_ids.insert(overview.id) {
+                    continue;
+                }
+
+                // Fetch detail and compare source hash. Transport failures abort
+                // recovery: zero or more candidates is always AcceptanceUnknown.
+                let detail = match self.fetch_detail(overview.id) {
+                    Some(d) => d,
+                    None => return Ok(RecoveryOutcome::AcceptanceUnknown),
+                };
+
+                if detail.source_sha256_hash() == request.source_hash {
+                    matches.push((overview.id, overview.submission_time.clone()));
+                }
+            }
+
+            if stop_pagination {
+                break;
+            }
+        }
+
+        if matches.len() == 1 {
+            let (id, sub_time_str) = &matches[0];
+            let submitted_at = sub_time_str
+                .as_deref()
+                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(Utc::now);
+            Ok(RecoveryOutcome::Recovered {
+                handle: SubmissionHandle {
+                    online_judge: OJKind::LibraryChecker,
+                    submission_id: id.to_string(),
+                    submission_url: format!("{SUBMISSION_BASE}/{id}"),
+                    locator: Some(format!(
+                        "{}:{}:{}",
+                        request.problem_id, request.lang_id, request.source_hash
+                    )),
+                    submitted_at,
+                },
+            })
+        } else {
+            Ok(RecoveryOutcome::AcceptanceUnknown)
+        }
+    }
 }
 
 // ─── URL helpers ──────────────────────────────────────────────────────────

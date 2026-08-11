@@ -13,4 +13,5 @@
 
 pub mod atcoder;
 pub mod poller;
+pub mod recovery;
 pub mod registry;

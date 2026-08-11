@@ -1,21 +1,26 @@
-//! Fixture-based integration tests for `LibraryCheckerPoller`.
+//! Fixture-based integration tests for `LibraryCheckerPoller` and
+//! `LibraryCheckerRecovery`.
 //!
 //! Each test spins a local `tiny_http` server so no real network is needed.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use chrono::Utc;
-use domain::entity::OJKind;
-use infrastructure::online_judge_impl::librarychecker::submission::LibraryCheckerPoller;
+use chrono::{Duration as ChronoDuration, Utc};
+use domain::entity::{OJKind, Session};
+use infrastructure::online_judge_impl::librarychecker::submission::{
+    LibraryCheckerPoller, LibraryCheckerRecovery,
+};
 use infrastructure::submission_impl::poller::build_poller_registry;
+use infrastructure::submission_impl::recovery::build_recovery_registry;
 use tiny_http::{Header, Response, Server};
 use usecases::submission::{
-    InfrastructureErrorKind, JudgeVerdict, PollObservation, PollSubmissionError, SubmissionHandle,
-    SubmissionPoller,
+    InfrastructureErrorKind, JudgeVerdict, PollObservation, PollSubmissionError,
+    RecoverSubmissionError, RecoveryOutcome, RecoveryRequest, SubmissionHandle, SubmissionPoller,
+    SubmissionRecovery, SubmissionRequest,
 };
 
 // ─── Fixture server ──────────────────────────────────────────────────────────
@@ -473,4 +478,619 @@ fn poll_summary_never_leaks_source_or_stderr() {
         !debug_str.contains("SECRET_CHECKER_XYZ"),
         "checker_out leaked into debug output: {debug_str}"
     );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Recovery tests (LibraryCheckerRecovery / Task 3)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── Recovery helpers ─────────────────────────────────────────────────────
+
+fn firebase_session() -> Session {
+    Session::Firebase {
+        online_judge: OJKind::LibraryChecker,
+        id_token: "test-id-token".to_string(),
+        refresh_token: "test-refresh-token".to_string(),
+    }
+}
+
+fn recovery_for(server: &FixtureServer) -> LibraryCheckerRecovery {
+    LibraryCheckerRecovery::with_base_url(format!("http://{}", server.addr))
+        .expect("recovery constructs")
+}
+
+fn current_user_json(name: &str) -> String {
+    format!(
+        r#"{{"user":{{"name":"{}","library_url":"","is_developer":false}}}}"#,
+        name
+    )
+}
+
+fn overview_json(id: i32, problem: &str, lang: &str, user: &str, time: &str) -> String {
+    format!(
+        r#"{{"id":{},"problem_name":"{}","lang":"{}","is_latest":true,"status":"AC","time":0.0,"memory":0,"user_name":"{}","submission_time":"{}"}}"#,
+        id, problem, lang, user, time
+    )
+}
+
+fn detail_json(id: i32, problem: &str, lang: &str, user: &str, source: &str, time: &str) -> String {
+    let source_json = serde_json::to_string(source).expect("source serializes");
+    format!(
+        r#"{{"overview":{{"id":{},"problem_name":"{}","lang":"{}","is_latest":true,"status":"AC","time":0.0,"memory":0,"user_name":"{}","submission_time":"{}"}},  "source":{},"can_rejudge":false}}"#,
+        id, problem, lang, user, time, source_json
+    )
+}
+
+fn list_json(overviews: &[String]) -> String {
+    format!(
+        r#"{{"submissions":[{}],"count":{}}}"#,
+        overviews.join(","),
+        overviews.len()
+    )
+}
+
+/// Builds a `RecoveryRequest` by hashing `source` the same way the
+/// production code does (via `SubmissionRequest::from_request`).
+fn recovery_request_for(problem_id: &str, lang_id: &str, source: &str) -> RecoveryRequest {
+    let sub_req = SubmissionRequest {
+        online_judge: OJKind::LibraryChecker,
+        contest_id: format!("librarychecker-{problem_id}"),
+        problem_id: problem_id.to_string(),
+        lang_id: lang_id.to_string(),
+        source: source.to_string(),
+    };
+    RecoveryRequest::from_request(&sub_req)
+}
+
+// ─── Recovery test 1: single hash match → Recovered ──────────────────────
+
+#[test]
+fn recover_returns_recovered_on_single_source_hash_match() {
+    let source_match = "fn main_match() {}";
+    let source_other = "fn main_other() {}";
+    let time = "2024-01-15T10:00:00Z";
+
+    let rec_req = recovery_request_for("aplusb", "rust", source_match);
+
+    let alice_json = current_user_json("alice");
+    let list = list_json(&[
+        overview_json(1234, "aplusb", "rust", "alice", time),
+        overview_json(1235, "aplusb", "rust", "alice", time),
+    ]);
+    let detail_1234 = detail_json(1234, "aplusb", "rust", "alice", source_match, time);
+    let detail_1235 = detail_json(1235, "aplusb", "rust", "alice", source_other, time);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else if url.starts_with("/submissions/1234") {
+            detail_1234.clone()
+        } else if url.starts_with("/submissions/1235") {
+            detail_1235.clone()
+        } else {
+            list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    match outcome {
+        RecoveryOutcome::Recovered { handle } => {
+            assert_eq!(handle.submission_id, "1234");
+            assert_eq!(handle.online_judge, OJKind::LibraryChecker);
+            assert!(
+                handle.submission_url.contains("1234"),
+                "url should contain id: {}",
+                handle.submission_url
+            );
+        }
+        other => panic!("expected Recovered, got {other:?}"),
+    }
+}
+
+// ─── Recovery test 2: empty list → AcceptanceUnknown ─────────────────────
+
+#[test]
+fn recover_returns_acceptance_unknown_on_zero_candidates() {
+    let rec_req = recovery_request_for("aplusb", "rust", "fn main_zero() {}");
+    let alice_json = current_user_json("alice");
+    let empty_list = list_json(&[]);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else {
+            empty_list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    assert!(
+        matches!(outcome, RecoveryOutcome::AcceptanceUnknown),
+        "expected AcceptanceUnknown, got {outcome:?}"
+    );
+}
+
+// ─── Recovery test 3: multiple matches → AcceptanceUnknown ───────────────
+
+#[test]
+fn recover_returns_acceptance_unknown_on_multiple_matches() {
+    let source = "fn main_multi() {}";
+    let time = "2024-01-15T10:00:00Z";
+    let rec_req = recovery_request_for("aplusb", "rust", source);
+
+    let alice_json = current_user_json("alice");
+    let list = list_json(&[
+        overview_json(1234, "aplusb", "rust", "alice", time),
+        overview_json(1235, "aplusb", "rust", "alice", time),
+    ]);
+    // Both details return the same source → two matches.
+    let detail = detail_json(1234, "aplusb", "rust", "alice", source, time);
+    let detail2 = detail_json(1235, "aplusb", "rust", "alice", source, time);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else if url.starts_with("/submissions/1234") {
+            detail.clone()
+        } else if url.starts_with("/submissions/1235") {
+            detail2.clone()
+        } else {
+            list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    assert!(
+        matches!(outcome, RecoveryOutcome::AcceptanceUnknown),
+        "expected AcceptanceUnknown for multiple matches, got {outcome:?}"
+    );
+}
+
+// ─── Recovery test 4: wrong problem → AcceptanceUnknown ──────────────────
+
+#[test]
+fn recover_ignores_wrong_problem() {
+    let source = "fn main_wrong_prob() {}";
+    let time = "2024-01-15T10:00:00Z";
+    let rec_req = recovery_request_for("aplusb", "rust", source);
+
+    let alice_json = current_user_json("alice");
+    // Overview has problem_name = "different_problem", not "aplusb".
+    let list = list_json(&[overview_json(
+        1234,
+        "different_problem",
+        "rust",
+        "alice",
+        time,
+    )]);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else {
+            list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    assert!(
+        matches!(outcome, RecoveryOutcome::AcceptanceUnknown),
+        "expected AcceptanceUnknown for wrong problem, got {outcome:?}"
+    );
+}
+
+// ─── Recovery test 5: wrong language → AcceptanceUnknown ─────────────────
+
+#[test]
+fn recover_ignores_wrong_language() {
+    let source = "fn main_wrong_lang() {}";
+    let time = "2024-01-15T10:00:00Z";
+    let rec_req = recovery_request_for("aplusb", "rust", source);
+
+    let alice_json = current_user_json("alice");
+    // Overview has lang = "cpp", not "rust".
+    let list = list_json(&[overview_json(1234, "aplusb", "cpp", "alice", time)]);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else {
+            list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    assert!(
+        matches!(outcome, RecoveryOutcome::AcceptanceUnknown),
+        "expected AcceptanceUnknown for wrong language, got {outcome:?}"
+    );
+}
+
+// ─── Recovery test 6: wrong user in list row → AcceptanceUnknown ─────────
+
+#[test]
+fn recover_ignores_wrong_user() {
+    let source = "fn main_wrong_user() {}";
+    let time = "2024-01-15T10:00:00Z";
+    let rec_req = recovery_request_for("aplusb", "rust", source);
+
+    // current_user is "bob", but overview's user_name is "alice".
+    let bob_json = current_user_json("bob");
+    let list = list_json(&[overview_json(1234, "aplusb", "rust", "alice", time)]);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            bob_json.clone()
+        } else {
+            list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    assert!(
+        matches!(outcome, RecoveryOutcome::AcceptanceUnknown),
+        "expected AcceptanceUnknown for wrong user, got {outcome:?}"
+    );
+}
+
+// ─── Recovery test 7: submission time outside attempt window → AcceptanceUnknown
+
+#[test]
+fn recover_ignores_submissions_outside_attempt_window() {
+    let source = "fn main_old() {}";
+    let rec_req_base = recovery_request_for("aplusb", "rust", source);
+
+    let lower_bound = Utc::now();
+    // Submission is 1 hour before lower_bound — well outside the 60s grace window.
+    let old_time = lower_bound - ChronoDuration::hours(1);
+    let old_time_str = old_time.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+    let rec_req = RecoveryRequest {
+        submitted_at_lower_bound: Some(lower_bound),
+        ..rec_req_base
+    };
+
+    let alice_json = current_user_json("alice");
+    let list = list_json(&[overview_json(
+        1234,
+        "aplusb",
+        "rust",
+        "alice",
+        &old_time_str,
+    )]);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else {
+            list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    assert!(
+        matches!(outcome, RecoveryOutcome::AcceptanceUnknown),
+        "expected AcceptanceUnknown for outside-window submission, got {outcome:?}"
+    );
+}
+
+// ─── Recovery test 8: pagination stops when entries older than window ─────
+
+#[test]
+fn recover_paginates_but_stops_when_older_than_window() {
+    let lower_bound = Utc::now();
+    // Recent time is just 1 second in the future (well within window).
+    let recent_time_str = (lower_bound + ChronoDuration::seconds(1))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    // Old time is 120 s before lower_bound, beyond the 60 s grace.
+    let old_time_str = (lower_bound - ChronoDuration::seconds(120))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+
+    // Page 0 (skip=0): 100 recent entries with wrong problem — no detail fetch.
+    let mut page0_entries = Vec::new();
+    for i in 0..100i32 {
+        page0_entries.push(overview_json(
+            i + 2000,
+            "wrong_problem",
+            "rust",
+            "alice",
+            &recent_time_str,
+        ));
+    }
+    let page0_json = list_json(&page0_entries);
+
+    // Page 1 (skip=100): 1 old entry → stops pagination.
+    let page1_json = list_json(&[overview_json(
+        9999,
+        "aplusb",
+        "rust",
+        "alice",
+        &old_time_str,
+    )]);
+
+    let list_request_count = Arc::new(AtomicUsize::new(0));
+    let list_count_clone = Arc::clone(&list_request_count);
+    let alice_json = current_user_json("alice");
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else if url.starts_with("/submissions/") {
+            // No detail requests expected.
+            "{}".to_string()
+        } else {
+            let page = list_count_clone.fetch_add(1, Ordering::SeqCst);
+            if page == 0 {
+                page0_json.clone()
+            } else {
+                page1_json.clone()
+            }
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let rec_req = RecoveryRequest {
+        online_judge: OJKind::LibraryChecker,
+        contest_id: "librarychecker-aplusb".to_string(),
+        problem_id: "aplusb".to_string(),
+        lang_id: "rust".to_string(),
+        source_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            .to_string(),
+        submitted_at_lower_bound: Some(lower_bound),
+    };
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+
+    assert_eq!(
+        list_request_count.load(Ordering::SeqCst),
+        2,
+        "should make exactly 2 list requests (page 0 and page 1), not 3"
+    );
+    assert!(
+        matches!(outcome, RecoveryOutcome::AcceptanceUnknown),
+        "expected AcceptanceUnknown, got {outcome:?}"
+    );
+}
+
+// ─── Recovery test 9: list 500 → AcceptanceUnknown ───────────────────────
+
+#[test]
+fn recover_returns_acceptance_unknown_on_list_failure() {
+    let rec_req = recovery_request_for("aplusb", "rust", "fn main_list_fail() {}");
+    let alice_json = current_user_json("alice");
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        if url == "/auth/current_user" {
+            let _ = req.respond(Response::from_data(alice_json.as_bytes().to_vec()));
+        } else {
+            let _ = req.respond(Response::empty(500u16));
+        }
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    assert!(
+        matches!(outcome, RecoveryOutcome::AcceptanceUnknown),
+        "expected AcceptanceUnknown on list 500, got {outcome:?}"
+    );
+}
+
+// ─── Recovery test 10: detail 500 → AcceptanceUnknown ────────────────────
+
+#[test]
+fn recover_returns_acceptance_unknown_on_detail_failure() {
+    let source = "fn main_detail_fail() {}";
+    let time = "2024-01-15T10:00:00Z";
+    let rec_req = recovery_request_for("aplusb", "rust", source);
+
+    let alice_json = current_user_json("alice");
+    let list = list_json(&[overview_json(1234, "aplusb", "rust", "alice", time)]);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        if url == "/auth/current_user" {
+            let _ = req.respond(Response::from_data(alice_json.as_bytes().to_vec()));
+        } else if url.starts_with("/submissions/") {
+            // Detail request fails.
+            let _ = req.respond(Response::empty(500u16));
+        } else {
+            let _ = req.respond(Response::from_data(list.as_bytes().to_vec()));
+        }
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    assert!(
+        matches!(outcome, RecoveryOutcome::AcceptanceUnknown),
+        "expected AcceptanceUnknown on detail 500, got {outcome:?}"
+    );
+}
+
+// ─── Recovery test 11: duplicate ids in list → fetch detail once ──────────
+
+#[test]
+fn recover_dedupes_by_submission_id() {
+    let source = "fn main_dedup() {}";
+    let time = "2024-01-15T10:00:00Z";
+    let rec_req = recovery_request_for("aplusb", "rust", source);
+
+    let alice_json = current_user_json("alice");
+    // Same overview twice in the list.
+    let ov = overview_json(42, "aplusb", "rust", "alice", time);
+    let list = list_json(&[ov.clone(), ov]);
+    let detail = detail_json(42, "aplusb", "rust", "alice", source, time);
+
+    let detail_count = Arc::new(AtomicUsize::new(0));
+    let detail_count_clone = Arc::clone(&detail_count);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else if url.starts_with("/submissions/") {
+            detail_count_clone.fetch_add(1, Ordering::SeqCst);
+            detail.clone()
+        } else {
+            list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+
+    assert_eq!(
+        detail_count.load(Ordering::SeqCst),
+        1,
+        "should fetch detail exactly once for duplicate ids"
+    );
+    match outcome {
+        RecoveryOutcome::Recovered { handle } => {
+            assert_eq!(handle.submission_id, "42");
+        }
+        other => panic!("expected Recovered after dedup, got {other:?}"),
+    }
+}
+
+// ─── Recovery test 12: session = None → CredentialsMissing ───────────────
+
+#[test]
+fn recover_returns_credentials_missing_when_session_is_none() {
+    // No server needed — the error fires before any HTTP is attempted.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    drop(listener);
+
+    let recovery =
+        LibraryCheckerRecovery::with_base_url(format!("http://{addr}")).expect("constructs");
+    let rec_req = recovery_request_for("aplusb", "rust", "fn main() {}");
+
+    let err = recovery
+        .recover_submission(&rec_req, None)
+        .expect_err("should return Err for missing session");
+    match err {
+        RecoverSubmissionError::Infrastructure { kind, .. } => {
+            assert_eq!(kind, InfrastructureErrorKind::CredentialsMissing);
+        }
+    }
+}
+
+// ─── Recovery test 13: error summary is sanitized ─────────────────────────
+
+#[test]
+fn recover_sanitizes_summaries() {
+    // The CredentialsMissing path (session=None) is the Err path. Verify its
+    // summary is sanitized — no bearer tokens, cookies, or refresh_token strings.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    drop(listener);
+
+    let recovery =
+        LibraryCheckerRecovery::with_base_url(format!("http://{addr}")).expect("constructs");
+    let rec_req = recovery_request_for("aplusb", "rust", "fn main() {}");
+
+    let err = recovery
+        .recover_submission(&rec_req, None)
+        .expect_err("should error");
+    match err {
+        RecoverSubmissionError::Infrastructure { summary, .. } => {
+            let lower = summary.to_lowercase();
+            assert!(
+                !lower.contains("bearer "),
+                "summary must not contain bearer: {summary}"
+            );
+            assert!(
+                !lower.contains("cookie="),
+                "summary must not contain cookie=: {summary}"
+            );
+            assert!(
+                !lower.contains("refresh_token"),
+                "summary must not contain refresh_token: {summary}"
+            );
+        }
+    }
+}
+
+// ─── Recovery test 14: source must not appear in debug output ─────────────
+
+#[test]
+fn recover_never_leaks_source_in_debug() {
+    let secret_source = "fn main_SECRET_XYZ_DO_NOT_LEAK() {}";
+    let time = "2024-01-15T10:00:00Z";
+    let rec_req = recovery_request_for("aplusb", "rust", secret_source);
+
+    let alice_json = current_user_json("alice");
+    let list = list_json(&[overview_json(42, "aplusb", "rust", "alice", time)]);
+    let detail = detail_json(42, "aplusb", "rust", "alice", secret_source, time);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else if url.starts_with("/submissions/") {
+            detail.clone()
+        } else {
+            list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+
+    let debug_str = format!("{outcome:?}");
+    assert!(
+        !debug_str.contains("SECRET_XYZ_DO_NOT_LEAK"),
+        "source leaked into debug output: {debug_str}"
+    );
+    assert!(
+        matches!(outcome, RecoveryOutcome::Recovered { .. }),
+        "expected Recovered for source-hash match"
+    );
+}
+
+// ─── Recovery test 15: registry contains LibraryChecker ──────────────────
+
+#[test]
+fn recovery_registry_contains_librarychecker() {
+    let registry = build_recovery_registry().expect("registry constructs");
+    assert!(registry.contains(&OJKind::LibraryChecker));
 }
