@@ -6,9 +6,11 @@ pub mod id_generator;
 pub mod input_format;
 pub mod library_adapter;
 pub mod library_analysis;
+pub mod library_platform_service;
 pub mod online_judge;
 pub mod repository;
 pub mod service;
+pub mod site_data;
 pub mod submission;
 pub mod verification;
 
