@@ -246,6 +246,18 @@ impl SubmissionPoller for LibraryCheckerPoller {
                 summary: sanitize(&format!("submission {} not found", handle.submission_id)),
             });
         }
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            // The public poll endpoint should not require auth, but if the OJ
+            // starts gating it, classify as AuthenticationRejected so upstream
+            // stops the retry loop and surfaces an operator-repairable state.
+            return Err(PollSubmissionError::Infrastructure {
+                kind: InfrastructureErrorKind::AuthenticationRejected,
+                summary: sanitize(&format!(
+                    "LibraryChecker rejected poll auth status={}",
+                    status.as_u16()
+                )),
+            });
+        }
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
             let retry_after = response
                 .headers()
@@ -403,11 +415,22 @@ impl LibraryCheckerRecovery {
         user: &str,
         skip: i32,
     ) -> Option<schema::SubmissionListResponse> {
-        let url = format!(
-            "{}/submissions?problem={}&lang={}&user={}&order=-id&limit={}&skip={}",
-            self.base_url, problem_id, lang_id, user, PAGE_SIZE, skip
-        );
-        let resp = self.client.get(&url).send().ok()?;
+        let url = format!("{}/submissions", self.base_url);
+        // Delegate URL encoding to reqwest so problem/language/username values
+        // that contain '+', '@', or spaces round-trip safely.
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[
+                ("problem", problem_id),
+                ("lang", lang_id),
+                ("user", user),
+                ("order", "-id"),
+                ("limit", &PAGE_SIZE.to_string()),
+                ("skip", &skip.to_string()),
+            ])
+            .send()
+            .ok()?;
         if !resp.status().is_success() {
             return None;
         }

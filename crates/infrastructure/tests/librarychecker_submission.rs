@@ -99,8 +99,24 @@ fn poller_for(server: &FixtureServer) -> LibraryCheckerPoller {
         .expect("poller constructs")
 }
 
+/// Poll fixture handler: asserts every incoming request is a
+/// `GET /submissions/{id}` (as the poller is contractually required to do)
+/// and only then serves `body`. Catches accidental hits against any other
+/// path or method (e.g. a regression that adds `/auth/current_user` to the
+/// poll path).
 fn serve_body(body: String) -> impl FnMut(tiny_http::Request) {
     move |req| {
+        assert_eq!(
+            req.method().as_str(),
+            "GET",
+            "poll must use GET, got {}",
+            req.method().as_str()
+        );
+        assert!(
+            req.url().starts_with("/submissions/"),
+            "poll must hit /submissions/{{id}}, got {}",
+            req.url()
+        );
         let _ = req.respond(Response::from_data(body.as_bytes().to_vec()));
     }
 }
@@ -290,6 +306,41 @@ fn poll_retry_after_included_in_rate_limited_summary() {
             );
         }
         other => panic!("expected Infrastructure, got {other:?}"),
+    }
+}
+
+// ─── Test 9b: 401/403 → AuthenticationRejected ──────────────────────────────
+
+#[test]
+fn poll_401_becomes_authentication_rejected() {
+    let server = FixtureServer::start(|req| {
+        let _ = req.respond(Response::empty(401u16));
+    });
+    let err = poller_for(&server)
+        .poll_submission(&test_handle("1"), None)
+        .expect_err("should fail");
+    match err {
+        PollSubmissionError::Infrastructure { kind, summary } => {
+            assert_eq!(kind, InfrastructureErrorKind::AuthenticationRejected);
+            assert!(summary.contains("401"), "summary: {summary}");
+        }
+        other => panic!("expected Infrastructure(AuthenticationRejected), got {other:?}"),
+    }
+}
+
+#[test]
+fn poll_403_becomes_authentication_rejected() {
+    let server = FixtureServer::start(|req| {
+        let _ = req.respond(Response::empty(403u16));
+    });
+    let err = poller_for(&server)
+        .poll_submission(&test_handle("1"), None)
+        .expect_err("should fail");
+    match err {
+        PollSubmissionError::Infrastructure { kind, .. } => {
+            assert_eq!(kind, InfrastructureErrorKind::AuthenticationRejected);
+        }
+        other => panic!("expected Infrastructure(AuthenticationRejected), got {other:?}"),
     }
 }
 
@@ -1093,4 +1144,77 @@ fn recover_never_leaks_source_in_debug() {
 fn recovery_registry_contains_librarychecker() {
     let registry = build_recovery_registry().expect("registry constructs");
     assert!(registry.contains(&OJKind::LibraryChecker));
+}
+
+// ─── Recovery test 16: query params encode reserved characters ────────────
+
+/// Regression: recovery must URL-encode `problem_id` / `lang_id` / user so
+/// values that contain `+`, `@`, or spaces reach the server intact and don't
+/// silently reroute into a hash-mismatch AcceptanceUnknown.
+#[test]
+fn recover_url_encodes_query_params() {
+    use std::sync::Mutex;
+
+    let source = "fn plus_lang() {}";
+    let rec_req = recovery_request_for("some+problem", "c++20", source);
+
+    let alice_json = current_user_json("al ice");
+    let list = list_json(&[overview_json(
+        7777,
+        "some+problem",
+        "c++20",
+        "al ice",
+        "2024-01-15T10:00:00Z",
+    )]);
+    let detail = detail_json(
+        7777,
+        "some+problem",
+        "c++20",
+        "al ice",
+        source,
+        "2024-01-15T10:00:00Z",
+    );
+
+    let seen_list_query: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let seen_clone = Arc::clone(&seen_list_query);
+
+    let server = FixtureServer::start(move |req| {
+        let url = req.url().to_string();
+        let body = if url == "/auth/current_user" {
+            alice_json.clone()
+        } else if url.starts_with("/submissions/7777") {
+            detail.clone()
+        } else if url.starts_with("/submissions?") || url == "/submissions" {
+            *seen_clone.lock().unwrap() = Some(url.clone());
+            list.clone()
+        } else {
+            list.clone()
+        };
+        let _ = req.respond(Response::from_data(body.into_bytes()));
+    });
+
+    let outcome = recovery_for(&server)
+        .recover_submission(&rec_req, Some(&firebase_session()))
+        .expect("recovery ok");
+    assert!(
+        matches!(outcome, RecoveryOutcome::Recovered { .. }),
+        "expected Recovered, got {outcome:?}"
+    );
+
+    let query = seen_list_query
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("list request seen");
+    // The reserved characters must be percent-encoded (space → %20 or +,
+    // '+' → %2B, '@' → %40). Raw literals with unescaped '+' inside would be
+    // decoded as spaces by the server.
+    assert!(
+        query.contains("%2B") || query.contains("some%2Bproblem"),
+        "problem query should encode '+': {query}"
+    );
+    assert!(
+        !query.contains("some+problem"),
+        "raw '+' would decode as space server-side: {query}"
+    );
 }

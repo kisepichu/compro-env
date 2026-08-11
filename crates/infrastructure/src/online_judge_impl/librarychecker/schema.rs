@@ -5,11 +5,9 @@
 //!
 //! Sensitive fields (`source`, `compile_error`, `stderr`, `checker_out`) are
 //! captured by serde but intentionally not exposed via Debug or public accessors
-//! so they cannot leak into error summaries or logs.
-//!
-//! The types here are defined ahead of use (Tasks 2-3 in plan 058 will consume
-//! them), so dead_code is expected in Task 1.
-#![allow(dead_code)]
+//! so they cannot leak into error summaries or logs. A handful of other fields
+//! we deserialize purely to keep the shape faithful (e.g. `count`,
+//! `library_url`) carry per-field `#[allow(dead_code)]`.
 
 use serde::Deserialize;
 
@@ -22,9 +20,12 @@ pub(super) struct SubmissionOverview {
     pub(super) id: i32,
     pub(super) problem_name: String,
     pub(super) lang: String,
+    #[allow(dead_code)]
     pub(super) is_latest: bool,
     pub(super) status: String,
+    #[allow(dead_code)]
     pub(super) time: f32,
+    #[allow(dead_code)]
     pub(super) memory: i64,
     #[serde(default)]
     pub(super) user_name: Option<String>,
@@ -36,6 +37,7 @@ pub(super) struct SubmissionOverview {
 #[derive(Deserialize)]
 pub(super) struct SubmissionListResponse {
     pub(super) submissions: Vec<SubmissionOverview>,
+    #[allow(dead_code)]
     pub(super) count: i32,
 }
 
@@ -90,6 +92,7 @@ pub(super) struct SubmissionInfoResponse {
     source: String,
     #[allow(dead_code)]
     compile_error: Option<String>,
+    #[allow(dead_code)]
     pub(super) can_rejudge: bool,
     pub(super) case_results: Option<Vec<SubmissionCaseResult>>,
 }
@@ -138,7 +141,9 @@ impl<'de> Deserialize<'de> for SubmissionInfoResponse {
 #[derive(Deserialize)]
 pub(super) struct User {
     pub(super) name: String,
+    #[allow(dead_code)]
     pub(super) library_url: String,
+    #[allow(dead_code)]
     pub(super) is_developer: bool,
 }
 
