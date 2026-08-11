@@ -12,7 +12,8 @@
     "site:preview": "astro preview --root web",
     "site:dev": "astro dev --root web",
     "test": "vitest run --root web",
-    "test:watch": "vitest --root web"
+    "test:watch": "vitest --root web",
+    "verify:builds": "node scripts/verify-web-build.mjs"
   },
   "dependencies": {
     "astro": "7.2.0",
