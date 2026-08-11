@@ -266,7 +266,9 @@ export async function renderSource(
   const codeInner = lineHtmls.join("\n");
   const langAttr = escapeAttribute(opts.syntaxHighlight);
   const html =
-    `<section id="source" aria-labelledby="source-heading">` +
+    // Pagefind: source body is lowest-weight (spec §13) so title / symbol /
+    // description matches outrank raw source lines.
+    `<section id="source" aria-labelledby="source-heading" data-pagefind-weight="1">` +
       `<h2 id="source-heading">Source</h2>` +
       notesHtml +
       toolbar +
