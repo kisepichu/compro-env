@@ -45,11 +45,11 @@ pub trait SubmissionRecovery {
 }
 ```
 
-- [ ] Write failing tests for serializable handles, all start/poll/recovery outcomes, sanitized errors,
+- [x] Write failing tests for serializable handles, all start/poll/recovery outcomes, sanitized errors,
       capability consistency, and confirmed-not-accepted versus acceptance-unknown boundaries.
-- [ ] Implement strict request/outcome models and separate registries for all three ports.
-- [ ] Run `cargo test -p usecases --test submission`.
-- [ ] Invoke `/commit` with `feat: define reusable submission lifecycle ports`.
+- [x] Implement strict request/outcome models and separate registries for all three ports.
+- [x] Run `cargo test -p usecases --test submission`.
+- [x] Invoke `/commit` with `feat: define reusable submission lifecycle ports`.
 
 ### Task 2: Migrate existing submit implementations
 
@@ -62,16 +62,16 @@ pub trait SubmissionRecovery {
 - Modify: `crates/interfaces/src/controller.rs`
 - Modify: `crates/infrastructure/src/shell/mod.rs`
 
-- [ ] Write characterization tests for current AtCoder browser opening and LibraryChecker submitted URL output.
-- [ ] Move submission responsibility from `OnlineJudge` to `SubmissionStarter` after all call sites migrate.
-- [ ] Declare AtCoder `InteractiveUntrackable/OverallOnly/None`; return `UserActionRequired`.
-- [ ] Declare LibraryChecker `UnattendedTrackable/TestcaseDetails/BestEffort`; return a trackable handle.
-- [ ] Run all login/whoami/submit tests; invoke `/commit` with `refactor: migrate submit to lifecycle ports`.
+- [x] Write characterization tests for current AtCoder browser opening and LibraryChecker submitted URL output.
+- [x] Move submission responsibility from `OnlineJudge` to `SubmissionStarter` after all call sites migrate.
+- [x] Declare AtCoder `InteractiveUntrackable/OverallOnly/None`; return `UserActionRequired`.
+- [x] Declare LibraryChecker `UnattendedTrackable/TestcaseDetails/BestEffort`; return a trackable handle.
+- [x] Run all login/whoami/submit tests; invoke `/commit` with `refactor: migrate submit to lifecycle ports`.
 
 ### Task 3: Deliver submission ports
 
-- [ ] Prove `ce submit` output and global-config resolution remain unchanged with characterization tests.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record submission port completion`.
+- [x] Prove `ce submit` output and global-config resolution remain unchanged with characterization tests.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record submission port completion`.
 - [ ] Invoke `/pr --base main`; link plan 057 and state that it unblocks plan 058.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
