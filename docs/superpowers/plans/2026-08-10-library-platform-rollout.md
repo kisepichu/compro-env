@@ -108,6 +108,37 @@ The coordinator may start only these independent ready sets:
 Do not reserve or create a dependent branch early. A worker starts by fetching the prerequisite merge and
 creating its worktree from that new `origin/main`.
 
+## Human Gates
+
+Beyond the numbered leaf plans, some steps require the user to act. They are recorded here instead of being
+promoted to numbered plans because they are not agent-driven.
+
+### G1. Web design handoff and integration
+
+Trigger: plan 053 merged. Deadline: before plan 061 merges.
+
+The user runs the fixture Astro build produced by plans 052/053 (`npm ci` then `npm run site:build`, per
+spec §12.14 — this is the sole full-build entrypoint and it internally invokes `ce check`,
+`ce site-data generate --mode production`, Astro, and Pagefind) and hands the resulting site together with
+`docs/superpowers/specs/2026-08-10-library-web-structure-handoff.md` to an external design tool (e.g.
+Claude Design). The tool returns visual design plus Astro component and CSS proposals.
+
+The user then opens a branch `feat/library-design-integration` from current `origin/main` and applies the
+return as component markup and CSS only. The integration PR must preserve everything the handoff spec §18
+marks as "維持する": route URLs, permalinks, `L*` source anchors, `data-pagefind-*` attributes,
+landmark/heading order, keyboard interaction, and the semantic order of dependency and symbol lists. Route
+additions, data-field additions, and required JavaScript go into a separate proposal PR, never the
+integration PR.
+
+Deliver via `/pr --base main`, `/pr-review` until no new comments, CI green, then merge before starting
+plan 061.
+
+### G2. Live activation gates inside plans 061 and 062
+
+Plan 061 (Task 4) and plan 062 (Task 2) each carry an inline `HUMAN GATE` step for GitHub Pages source
+selection and repository-write credential provisioning. The plan files themselves are authoritative; do
+not merge those plans before the gate inside them is satisfied.
+
 ## PR Dependency Graph
 
 ```text
