@@ -110,12 +110,25 @@ void test_reject_missing_required_key() {
     CE_EXPECT_THROWS(ce_cpp::parse_request(bad), ce_cpp::ProtocolError);
 }
 
-void test_reject_non_empty_libraries() {
+void test_accepts_non_empty_libraries_after_plan_046() {
+    // Plan 046 makes non-empty library/solution arrays legal. Reject only
+    // malformed entries (unknown keys or missing `path`).
+    const std::string ok = R"({
+        "schema_version": 1,
+        "repository_root": ".",
+        "language": "cpp",
+        "libraries": [{"path": "libraries/cpp/a.hpp"}],
+        "solutions": []
+    })";
+    auto req = ce_cpp::parse_request(ok);
+    CE_EXPECT_EQ(req.libraries.size(), size_t{1});
+    CE_EXPECT_EQ(req.libraries[0].path, std::string("libraries/cpp/a.hpp"));
+
     const std::string bad = R"({
         "schema_version": 1,
         "repository_root": ".",
         "language": "cpp",
-        "libraries": [{"path": "x"}],
+        "libraries": [{"path": "x", "extra": 1}],
         "solutions": []
     })";
     CE_EXPECT_THROWS(ce_cpp::parse_request(bad), ce_cpp::ProtocolError);
@@ -160,7 +173,7 @@ int main() {
     test_reject_unknown_key();
     test_reject_wrong_schema_version();
     test_reject_missing_required_key();
-    test_reject_non_empty_libraries();
+    test_accepts_non_empty_libraries_after_plan_046();
     test_reject_unescaped_control_character();
     test_roundtrip_response();
     if (failures > 0) {

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "repository_root": "<REPOSITORY_ROOT>",
+  "language": "cpp",
+  "libraries": [
+    { "path": "libraries/cpp/a.hpp" },
+    { "path": "libraries/cpp/b.hpp" },
+    { "path": "libraries/cpp/c.hpp" },
+    { "path": "libraries/cpp/d.hpp" },
+    { "path": "libraries/cpp/日本語.hpp" }
+  ],
+  "solutions": [
+    {
+      "id": "abc/A/main",
+      "root": "solutions/abc/A/main",
+      "entry": "src/main.cpp"
+    }
+  ]
+}

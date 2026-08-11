@@ -1,0 +1,256 @@
+{
+  "adapter": {
+    "name": "ce-cpp",
+    "toolchains": [
+      {
+        "name": "clang",
+        "target": "x86_64-unknown-linux-gnu",
+        "version": "22.1.0"
+      }
+    ],
+    "version": "0.1.0"
+  },
+  "libraries": [
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 17,
+                "line": 3
+              },
+              "path": "libraries/cpp/a.hpp",
+              "start": {
+                "column": 1,
+                "line": 3
+              }
+            },
+            "path": "libraries/cpp/b.hpp"
+          },
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 19,
+                "line": 4
+              },
+              "path": "libraries/cpp/a.hpp",
+              "start": {
+                "column": 1,
+                "line": 4
+              }
+            },
+            "name": "ext.hpp"
+          },
+          {
+            "display": "missing header: missing.hpp",
+            "key": "include:missing.hpp",
+            "kind": "unresolved",
+            "location": {
+              "end": {
+                "column": 23,
+                "line": 5
+              },
+              "path": "libraries/cpp/a.hpp",
+              "start": {
+                "column": 1,
+                "line": 5
+              }
+            }
+          },
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 10,
+                "line": 7
+              },
+              "path": "libraries/cpp/a.hpp",
+              "start": {
+                "column": 1,
+                "line": 7
+              }
+            },
+            "path": "libraries/cpp/d.hpp"
+          },
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 17,
+                "line": 8
+              },
+              "path": "libraries/cpp/a.hpp",
+              "start": {
+                "column": 1,
+                "line": 8
+              }
+            },
+            "path": "libraries/cpp/b.hpp"
+          },
+          {
+            "display": "resolved to unmanaged repository file: libraries/cpp/outside/x.hpp",
+            "key": "include:outside/x.hpp",
+            "kind": "unresolved",
+            "location": {
+              "end": {
+                "column": 25,
+                "line": 9
+              },
+              "path": "libraries/cpp/a.hpp",
+              "start": {
+                "column": 1,
+                "line": 9
+              }
+            }
+          },
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 25,
+                "line": 10
+              },
+              "path": "libraries/cpp/a.hpp",
+              "start": {
+                "column": 1,
+                "line": 10
+              }
+            },
+            "path": "libraries/cpp/日本語.hpp"
+          }
+        ],
+        "state": "partial"
+      },
+      "diagnostics": [],
+      "path": "libraries/cpp/a.hpp",
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": []
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 17,
+                "line": 3
+              },
+              "path": "libraries/cpp/b.hpp",
+              "start": {
+                "column": 1,
+                "line": 3
+              }
+            },
+            "path": "libraries/cpp/a.hpp"
+          },
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 17,
+                "line": 4
+              },
+              "path": "libraries/cpp/b.hpp",
+              "start": {
+                "column": 1,
+                "line": 4
+              }
+            },
+            "path": "libraries/cpp/c.hpp"
+          }
+        ],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/cpp/b.hpp",
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": []
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/cpp/c.hpp",
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": []
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/cpp/d.hpp",
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": []
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/cpp/日本語.hpp",
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": []
+      }
+    }
+  ],
+  "schema_version": 1,
+  "solutions": [
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 17,
+                "line": 1
+              },
+              "path": "solutions/abc/A/main/src/main.cpp",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            },
+            "path": "libraries/cpp/a.hpp"
+          },
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 19,
+                "line": 2
+              },
+              "path": "solutions/abc/A/main/src/main.cpp",
+              "start": {
+                "column": 1,
+                "line": 2
+              }
+            },
+            "name": "ext.hpp"
+          }
+        ],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "id": "abc/A/main"
+    }
+  ]
+}
