@@ -673,6 +673,93 @@ fn validate_prepared_set_rejects_untracked_symlink() {
     );
 }
 
+/// Compute the SHA-256 of `bytes` as a lowercase-hex `ContentDigest`.
+fn digest_of(bytes: &[u8]) -> ContentDigest {
+    use sha2::{Digest as _, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let out: [u8; 32] = hasher.finalize().into();
+    ContentDigest::from_sha256_bytes(out)
+}
+
+#[cfg(unix)]
+#[test]
+fn validate_prepared_set_accepts_safe_symlink_inside_install_subtree() {
+    use std::os::unix::fs::symlink;
+    let dir = TempDir::new().unwrap();
+    let id = DependencyId::new(ContentDigest::from_sha256_bytes([1; 32]));
+
+    // One archive artifact with an install subtree at `archives/pkg`.
+    let src_bytes = b"stand-in for the extracted archive\n";
+    let src_digest = digest_of(src_bytes);
+    let manifest = PreparedManifest {
+        id: id.clone(),
+        target_platform: linux(),
+        artifacts: vec![PreparedArtifact {
+            name: "pkg".into(),
+            kind: PreparedArtifactKind::Archive,
+            relative_path: "downloads/pkg.tar.gz".into(),
+            sha256: src_digest,
+            install_relative_path: Some("archives/pkg".into()),
+        }],
+    };
+    write_prepared(dir.path(), &manifest);
+    write_file(
+        dir.path(),
+        "downloads/pkg.tar.gz",
+        std::str::from_utf8(src_bytes).unwrap(),
+    );
+    fs::create_dir_all(dir.path().join("archives/pkg/bin")).unwrap();
+    fs::write(dir.path().join("archives/pkg/bin/real"), b"binary").unwrap();
+    // sibling symlink inside the install subtree — the shape LLVM ships.
+    symlink("real", dir.path().join("archives/pkg/bin/alias")).unwrap();
+
+    let expected = ExpectedPreparedSet {
+        id: id.clone(),
+        target_platform: linux(),
+    };
+    validate_prepared_set(dir.path(), &expected).expect("safe symlink is accepted");
+}
+
+#[cfg(unix)]
+#[test]
+fn validate_prepared_set_rejects_symlink_escaping_install_subtree() {
+    use std::os::unix::fs::symlink;
+    let dir = TempDir::new().unwrap();
+    let id = DependencyId::new(ContentDigest::from_sha256_bytes([1; 32]));
+    let src_bytes = b"pkg archive body\n";
+    let manifest = PreparedManifest {
+        id: id.clone(),
+        target_platform: linux(),
+        artifacts: vec![PreparedArtifact {
+            name: "pkg".into(),
+            kind: PreparedArtifactKind::Archive,
+            relative_path: "downloads/pkg.tar.gz".into(),
+            sha256: digest_of(src_bytes),
+            install_relative_path: Some("archives/pkg".into()),
+        }],
+    };
+    write_prepared(dir.path(), &manifest);
+    write_file(
+        dir.path(),
+        "downloads/pkg.tar.gz",
+        std::str::from_utf8(src_bytes).unwrap(),
+    );
+    fs::create_dir_all(dir.path().join("archives/pkg/bin")).unwrap();
+    // symlink escapes into an unrelated subtree.
+    symlink("../../../evil", dir.path().join("archives/pkg/bin/alias")).unwrap();
+
+    let expected = ExpectedPreparedSet {
+        id,
+        target_platform: linux(),
+    };
+    let err = validate_prepared_set(dir.path(), &expected).unwrap_err();
+    assert!(
+        matches!(err, PrepareError::UntrackedPreparedEntry { .. }),
+        "{err:?}"
+    );
+}
+
 #[test]
 fn validate_prepared_set_rejects_untracked_file() {
     let dir = TempDir::new().unwrap();

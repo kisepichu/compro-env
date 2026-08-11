@@ -677,10 +677,35 @@ pub fn validate_prepared_set(
             })?
             .replace('\\', "/");
         if file_type.is_symlink() {
-            return Err(PrepareError::UntrackedPreparedEntry {
-                relative: relative_str,
-                reason: "symlinks are not permitted in a prepared set",
-            });
+            // Only accept symlinks that live inside an install subtree of a
+            // prepared archive and whose target resolves back into that same
+            // subtree. Official toolchain archives (LLVM, Rust) commonly ship
+            // sibling `bin/*-arch` symlinks; forbidding them outright would
+            // block the pinned toolchains this pipeline was built to serve.
+            let inside_install = allowed_prefixes
+                .iter()
+                .find(|prefix| relative.starts_with(prefix))
+                .cloned();
+            let inside_install = match inside_install {
+                Some(prefix) => prefix,
+                None => {
+                    return Err(PrepareError::UntrackedPreparedEntry {
+                        relative: relative_str,
+                        reason: "symlinks outside an install subtree are not permitted",
+                    });
+                }
+            };
+            let link_target = fs::read_link(dirent.path()).map_err(|source| PrepareError::Io {
+                path: display_path(dirent.path()),
+                source,
+            })?;
+            if !symlink_target_stays_within(&relative, &link_target, &inside_install) {
+                return Err(PrepareError::UntrackedPreparedEntry {
+                    relative: relative_str,
+                    reason: "symlink escapes its install subtree",
+                });
+            }
+            continue;
         }
         if !file_type.is_file() && !file_type.is_dir() {
             return Err(PrepareError::UntrackedPreparedEntry {
@@ -711,6 +736,40 @@ pub fn validate_prepared_set(
         root: path.to_path_buf(),
         manifest,
     })
+}
+
+/// Return true when a symlink at `symlink_relative` (relative to the prepared
+/// root) with the given `link_target` (as read from the on-disk symlink)
+/// resolves to a location still inside `install_prefix`.
+///
+/// The check is purely lexical — we never follow the link, so a symlink whose
+/// resolved path names a file that has been removed still passes. That is
+/// intentional: content trust comes from the artifact SHA-256, not from the
+/// existence of every internal reference.
+fn symlink_target_stays_within(
+    symlink_relative: &Path,
+    link_target: &Path,
+    install_prefix: &Path,
+) -> bool {
+    if link_target.is_absolute() {
+        return false;
+    }
+    let parent = symlink_relative.parent().unwrap_or(Path::new(""));
+    let joined = parent.join(link_target);
+    let mut normalized = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::Normal(part) => normalized.push(part),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !normalized.pop() {
+                    return false;
+                }
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => return false,
+        }
+    }
+    normalized.starts_with(install_prefix)
 }
 
 /// Return true when `relative` is a directory that any allowed file or
