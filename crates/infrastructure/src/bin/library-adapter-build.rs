@@ -178,9 +178,11 @@ fn run(args: Args) -> anyhow::Result<()> {
 }
 
 /// Read the current HEAD commit SHA. `library-adapter-build` records this in
-/// the published manifest so operators can trace a build back to source; a
-/// detached HEAD or missing `.git` becomes `"unknown"` because the SHA is not
-/// part of the deterministic build-id derivation.
+/// the published manifest so operators can trace a build back to source. When
+/// `git rev-parse HEAD` fails (missing `.git`) or yields a value that is not
+/// a 40-character hex string, this returns a placeholder of 40 zero digits so
+/// the manifest keeps the fixed-width shape; the SHA is not part of the
+/// deterministic build-id derivation.
 fn read_git_commit_sha(repository_root: &std::path::Path) -> anyhow::Result<String> {
     let output = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])

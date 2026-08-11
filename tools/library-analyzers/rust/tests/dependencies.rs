@@ -3,10 +3,11 @@
 //!
 //! Loads the checked-in `rust-dependencies-request.json`, substitutes the
 //! fixture tree's absolute path into `repository_root`, runs
-//! `analyze_dependencies`, and compares the response against the checked-in
-//! `rust-dependencies-response.json` byte-for-byte after canonical
-//! serialization. Any drift in the resolver's output surfaces as a diff
-//! against the checked-in expected fixture.
+//! `analyze_dependencies`, and compares the resolver's output to the
+//! checked-in `rust-dependencies-response.json` via structural JSON equality
+//! (`serde_json::Value == serde_json::Value`). Whitespace and key order do
+//! not affect the outcome; any semantic drift surfaces as a diff against
+//! the checked-in expected fixture.
 
 use std::fs;
 use std::path::{Path, PathBuf};
