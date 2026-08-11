@@ -43,7 +43,7 @@ private def fail (msg : String) : IO α := do
   IO.Process.exit 1
 
 private def check (cond : Bool) (msg : String) : IO Unit :=
-  if cond then pure () else discard (fail msg)
+  if cond then pure () else discard ((fail : String → IO Unit) msg)
 
 private def fixtureDir : IO System.FilePath := do
   match ← IO.getEnv "CE_LEAN_FIXTURE_DIR" with
@@ -95,7 +95,7 @@ def testFixtureResponse : IO Unit := do
   if actualStr != expectedStr then
     IO.eprintln s!"--- expected ---\n{expected.pretty}"
     IO.eprintln s!"--- actual ---\n{actual.pretty}"
-    discard (fail "response fixture drift")
+    discard ((fail : String → IO Unit) "response fixture drift")
 
 private def libReq (root : String) (paths : List String) : AnalysisRequest :=
   { schemaVersion  := 1
@@ -125,12 +125,12 @@ def testDeduplication : IO Unit := do
       s!"first dep path = {p}"
     match loc.start with
     | some pos => check (pos.line == 1) s!"first dep line = {pos.line}"
-    | none     => discard (fail "first dep missing start")
-  | _ => discard (fail "first dep not internal")
+    | none     => discard ((fail : String → IO Unit) "first dep missing start")
+  | _ => discard ((fail : String → IO Unit) "first dep not internal")
   match a.dependencies[1]! with
   | .internal p _ =>
     check (p == "libraries/lean/A/B.lean") s!"second dep path = {p}"
-  | _ => discard (fail "second dep not internal")
+  | _ => discard ((fail : String → IO Unit) "second dep not internal")
 
 /-- Position conversion counts Unicode scalar values, not UTF-8 bytes, so
     the `import` after a block comment containing a multi-byte character
@@ -152,8 +152,8 @@ def testUnicodeColumnConversion : IO Unit := do
       check (s.column == some 8)  s!"unicode start col = {s.column}"
       check (e.line == 2)         s!"unicode end line = {e.line}"
       check (e.column == some 16) s!"unicode end col = {e.column}"
-    | _, _ => discard (fail "unicode dep missing start/end")
-  | _ => discard (fail "unicode dep not internal")
+    | _, _ => discard ((fail : String → IO Unit) "unicode dep missing start/end")
+  | _ => discard ((fail : String → IO Unit) "unicode dep not internal")
 
 /-- A header parse error yields state `failed` when no imports survive and
     at least one `lean.dependencies.header_parse` diagnostic is attached. -/

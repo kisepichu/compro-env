@@ -1,7 +1,6 @@
-{
-  "version": "1.1.0",
-  "packagesDir": ".lake/packages",
-  "packages": [],
-  "name": "ce-lean-analyzer",
-  "lakeDir": ".lake"
-}
+{"version": "1.2.0",
+ "packagesDir": ".lake/packages",
+ "packages": [],
+ "name": "«ce-lean-analyzer»",
+ "lakeDir": ".lake",
+ "fixedToolchain": false}

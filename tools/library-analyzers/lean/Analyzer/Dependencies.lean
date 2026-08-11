@@ -1,7 +1,6 @@
 import Lean.Data.Json
 import Lean.Data.Name
 import Lean.Data.NameMap
-import Lean.Data.NameSet
 import Lean.Elab.Import
 import Lean.Parser.Module
 import Analyzer.Protocol
@@ -56,7 +55,7 @@ inductive Dependency where
   | internal   (path : String) (location : Location)
   | external   (name : String) (location : Location)
   | unresolved (key : String) (display : String) (location : Location)
-  deriving Repr
+  deriving Repr, Inhabited
 
 /-- Per-target analysis payload. Diagnostics collected while parsing this
     target are attached; per-request adapter identity and toolchain live
@@ -89,19 +88,20 @@ private def classifyImport (map : ModuleMap) (modName : Name) : ClassifyResult :
     scalar-value column. Newlines advance `line` and reset `column` to 1
     for the following character. Positions past the source end saturate
     at the last observed line/column. -/
-private def bytePosToPosition (source : String) (pos : String.Pos) : Position := Id.run do
+private def bytePosToPosition (source : String) (pos : String.Pos.Raw) :
+    Analyzer.Diagnostics.Position := Id.run do
   let mut line : Nat := 1
   let mut col  : Nat := 1
-  let mut i : String.Pos := 0
-  let endPos := source.endPos
+  let mut i : String.Pos.Raw := 0
+  let endPos : String.Pos.Raw := source.rawEndPos
   while i < pos && i < endPos do
-    let c := source.get i
+    let c := String.Pos.Raw.get source i
     if c == '\n' then
       line := line + 1
       col := 1
     else
       col := col + 1
-    i := source.next i
+    i := String.Pos.Raw.next source i
   return { line, column := some col }
 
 /-- Location for a syntax node inside `source`, with `path` set to the
@@ -120,9 +120,10 @@ private def fallbackLocation (repoRelPath : String) : Location :=
 
 /-- Direct children of the header's `many import` slot, or `#[]` when the
     header shape is unexpected. Each child is one `Lean.Parser.Module.import`
-    syntax node. -/
+    syntax node. The header layout in Lean 4.30 is `[prelude? , exports? ,
+    imports*]`, so the imports live at arg index 2. -/
 private def headerImportSyntaxes (header : Syntax) : Array Syntax :=
-  match header.getArg 1 with
+  match header.getArg 2 with
   | .node _ _ children => children
   | _ => #[]
 
@@ -140,7 +141,10 @@ def analyzeSource
   let parsed ← Parser.parseHeader input
   let headerStx := parsed.1
   let msgs := parsed.2.2
-  let imports := Elab.headerToImports headerStx
+  -- Pass `includeInit := false` so ambient prelude/Init are not
+  -- fabricated as dependency edges (spec §6.8: implicit prelude counts
+  -- as the ambient external toolchain, not as a per-target edge).
+  let imports := Elab.headerToImports headerStx false
   let importNodes := headerImportSyntaxes headerStx
   let mut deps : Array Dependency := #[]
   let mut seen : NameSet := {}
@@ -213,16 +217,6 @@ private def joinRootEntry (root entry : String) : String :=
   else if root.endsWith "/" then root ++ entry
   else s!"{root}/{entry}"
 
-/-- Attach the plan-050 stable placeholder diagnostic to a library target's
-    diagnostics array. Solutions never carry it (they have no symbol
-    analysis block). -/
-private def withSymbolDeferred (a : TargetAnalysis) : TargetAnalysis :=
-  { a with diagnostics := a.diagnostics.push {
-      severity := .info
-      code := "lean.symbols.deferred"
-      message := "Lean symbol extraction is deferred to plan 050."
-    } }
-
 /-- Analyze every target in `request` under the supplied `map`. Libraries
     are emitted first in request order, then solutions in request order —
     the same order the response envelope's `libraries` / `solutions`
@@ -233,7 +227,7 @@ def analyzeRequest
   let mut libs : Array TargetAnalysis := #[]
   for lib in request.libraries do
     let a ← analyzeTarget map request.repositoryRoot lib.path
-    libs := libs.push (withSymbolDeferred a)
+    libs := libs.push a
   let mut sols : Array TargetAnalysis := #[]
   for sol in request.solutions do
     let path := joinRootEntry sol.root sol.entry
@@ -241,7 +235,7 @@ def analyzeRequest
     sols := sols.push a
   return (libs, sols)
 
-private def positionToJson (p : Position) : Json :=
+private def positionToJson (p : Analyzer.Diagnostics.Position) : Json :=
   match p.column with
   | some c =>
     Json.mkObj [("line", Json.num (JsonNumber.fromNat p.line)),
@@ -298,18 +292,27 @@ private def dependencyAnalysisJson (a : TargetAnalysis) : Json :=
     ("dependencies", Json.arr (a.dependencies.map dependencyToJson))
   ]
 
-/-- Wire JSON for a library target (spec §6.3): includes the pending
-    `symbol_analysis` block that plan 050 will populate. -/
-def libraryJson (path : String) (a : TargetAnalysis) : Json :=
+/-- Wire JSON for a library target (spec §6.3) — dependency and
+    symbol analyses side-by-side. Callers pass the projected symbol
+    analysis JSON built by `Analyzer.Symbols.symbolAnalysisToJson`. -/
+def libraryJsonWithSymbols
+    (path : String) (a : TargetAnalysis) (symbolJson : Json) : Json :=
   Json.mkObj [
     ("path", Json.str path),
     ("dependency_analysis", dependencyAnalysisJson a),
-    ("symbol_analysis", Json.mkObj [
-      ("state", Json.str "partial"),
-      ("symbols", Json.arr #[])
-    ]),
+    ("symbol_analysis", symbolJson),
     ("diagnostics", Json.arr (a.diagnostics.map diagnosticToJson))
   ]
+
+/-- Legacy library JSON with a stubbed `partial` symbol analysis. Kept
+    for tests that predate plan 050's `symbolJson` wiring; callers that
+    can supply a real symbol analysis should prefer
+    `libraryJsonWithSymbols`. -/
+def libraryJson (path : String) (a : TargetAnalysis) : Json :=
+  libraryJsonWithSymbols path a (Json.mkObj [
+    ("state", Json.str "partial"),
+    ("symbols", Json.arr #[])
+  ])
 
 /-- Wire JSON for a solution target (spec §6.3): no symbol analysis. -/
 def solutionJson (id : String) (a : TargetAnalysis) : Json :=

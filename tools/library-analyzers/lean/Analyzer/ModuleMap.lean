@@ -103,7 +103,7 @@ private def rejectEscape (path : String) : Except Diagnostic Unit := do
 private def stripLeanSuffix (path : String) : Except Diagnostic String :=
   let suffix := ".lean"
   if path.endsWith suffix then
-    .ok (path.dropRight suffix.length)
+    .ok (path.dropEnd suffix.length).toString
   else
     .error (notLean path)
 
@@ -131,7 +131,7 @@ private def validateComponent (path component : String) :
     throw (invalidComponent path component "is empty")
   if component.contains '.' then
     throw (invalidComponent path component "contains '.'")
-  match component.data.head? with
+  match component.toList.head? with
   | some c =>
     if c.isDigit then
       throw (invalidComponent path component "starts with a digit")
