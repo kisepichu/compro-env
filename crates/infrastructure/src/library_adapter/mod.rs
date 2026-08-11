@@ -11,6 +11,8 @@ pub mod build;
 pub mod build_state;
 pub mod download;
 pub mod inputs;
+#[cfg(unix)]
+pub mod language_plans;
 pub mod prepare;
 pub mod prepared;
 pub mod process;

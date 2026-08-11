@@ -16,6 +16,7 @@ members = [
     "crates/interfaces",
     "crates/infrastructure",
     "crates/library-adapter-protocol",
+    "tools/library-analyzers/rust",
 ]
 resolver = "2"
 

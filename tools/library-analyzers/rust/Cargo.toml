@@ -1,0 +1,16 @@
+[package]
+name = "ce-library-rust-analyzer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+
+[[bin]]
+name = "rust-analyzer"
+path = "src/main.rs"
+
+[dependencies]
+library-adapter-protocol = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

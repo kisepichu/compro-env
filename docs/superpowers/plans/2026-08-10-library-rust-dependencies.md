@@ -29,12 +29,12 @@
 - Modify: `tools/library-analyzers/build-inputs.toml`
 - Modify: `tools/library-analyzers/dependencies.toml`
 
-- [ ] Write a process fixture test that sends an empty Rust request and expects protocol v1, adapter
+- [x] Write a process fixture test that sends an empty Rust request and expects protocol v1, adapter
       identity `ce-rust`, toolchain `rustc=1.92.0`, and empty target arrays.
-- [ ] Run `cargo test -p infrastructure rust_adapter_handshake`; observe missing executable/build input.
-- [ ] Implement stdin JSON parsing, strict request validation, exact `rustc -Vv` normalization, and stdout JSON.
-- [ ] Run `tools/library-analyzers/prepare`, then `tools/library-analyzers/build`; expect handshake success.
-- [ ] Invoke `/commit` with `feat: add Rust analyzer protocol executable`.
+- [x] Run `cargo test -p infrastructure rust_adapter_handshake`; observe missing executable/build input.
+- [x] Implement stdin JSON parsing, strict request validation, exact `rustc -Vv` normalization, and stdout JSON.
+- [x] Run `tools/library-analyzers/prepare`, then `tools/library-analyzers/build`; expect handshake success.
+- [x] Invoke `/commit` with `feat: add Rust analyzer protocol executable`.
 
 ### Task 2: Resolve direct Rust dependencies
 

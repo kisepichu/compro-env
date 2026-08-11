@@ -70,5 +70,5 @@ pub fn handshake_adapter(
 - [x] Run `cargo test -p infrastructure adapter_build` and `tools/library-analyzers/build --check`.
 - [x] Run rollout repository verification and `git diff --check`.
 - [x] Invoke `/commit` with `docs: record adapter build completion` after checking plan progress.
-- [ ] Invoke `/pr --base main`; link plan 042 and state that it unblocks plan 043.
-- [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+- [x] Invoke `/pr --base main`; link plan 042 and state that it unblocks plan 043.
+- [x] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
