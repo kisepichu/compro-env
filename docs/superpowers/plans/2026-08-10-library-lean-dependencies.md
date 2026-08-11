@@ -30,12 +30,12 @@ def buildModuleMap (request : AnalysisRequest) : Except Diagnostic ModuleMap
 def moduleForPath (map : ModuleMap) (path : String) : Option Name
 ```
 
-- [ ] Write failing tests for nested modules, `Main.lean`, Unicode names, duplicate module ownership,
+- [x] Write failing tests for nested modules, `Main.lean`, Unicode names, duplicate module ownership,
       invalid components, repository escapes, and stable path-byte ordering.
-- [ ] Implement a bijective module/path map from request targets and configured roots.
-- [ ] Reject duplicate module ownership before parsing any source.
-- [ ] Run `lake env lean Tests/ModuleMap.lean` through the prepared toolchain.
-- [ ] Invoke `/commit` with `feat: map Lean modules to managed sources`.
+- [x] Implement a bijective module/path map from request targets and configured roots.
+- [x] Reject duplicate module ownership before parsing any source.
+- [x] Run `lake env lean Tests/ModuleMap.lean` through the prepared toolchain.
+- [x] Invoke `/commit` with `feat: map Lean modules to managed sources`.
 
 ### Task 2: Parse explicit imports and locations
 
@@ -46,17 +46,17 @@ def moduleForPath (map : ModuleMap) (path : String) : Option Name
 - Create: `tools/library-analyzers/protocol/fixtures/lean-dependencies-request.json`
 - Create: `tools/library-analyzers/protocol/fixtures/lean-dependencies-response.json`
 
-- [ ] Write failing fixtures for multiple imports, internal/external imports, cycles, missing modules,
+- [x] Write failing fixtures for multiple imports, internal/external imports, cycles, missing modules,
       malformed headers, comments, Unicode before import, and one-based source spans.
-- [ ] Use `Parser.parseHeader`; classify only imports present in the parsed header and deduplicate by key.
-- [ ] Mark malformed/missing active imports `partial`; do not silently return an empty complete analysis.
-- [ ] Run Lean dependency tests and compare protocol response JSON exactly.
-- [ ] Invoke `/commit` with `feat: analyze direct Lean library dependencies`.
+- [x] Use `Parser.parseHeader`; classify only imports present in the parsed header and deduplicate by key.
+- [x] Mark malformed/missing active imports `partial`; do not silently return an empty complete analysis.
+- [x] Run Lean dependency tests and compare protocol response JSON exactly.
+- [x] Invoke `/commit` with `feat: analyze direct Lean library dependencies`.
 
 ### Task 3: Deliver Lean dependencies
 
-- [ ] Run handshake, module-map, dependency fixture, and normalized snapshot tests.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record Lean dependency adapter completion`.
+- [x] Run handshake, module-map, dependency fixture, and normalized snapshot tests.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record Lean dependency adapter completion`.
 - [ ] Invoke `/pr --base main`; link plan 049 and state that it unblocks plan 050.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
