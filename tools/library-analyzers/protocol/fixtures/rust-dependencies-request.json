@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "repository_root": "<REPOSITORY_ROOT>",
+  "language": "rust",
+  "libraries": [
+    { "path": "libraries/rust/a.rs" },
+    { "path": "libraries/rust/a/b.rs" },
+    { "path": "libraries/rust/custom/where.rs" }
+  ],
+  "solutions": [
+    {
+      "id": "abc/A/main",
+      "root": "solutions/abc/A/main",
+      "entry": "src/main.rs"
+    }
+  ]
+}

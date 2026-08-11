@@ -176,8 +176,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "library-adapter-protocol",
+ "proc-macro2",
  "serde",
  "serde_json",
+ "syn 2.0.117",
+ "tempfile",
  "thiserror",
 ]
 

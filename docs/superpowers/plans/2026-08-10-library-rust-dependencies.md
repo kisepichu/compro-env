@@ -54,12 +54,12 @@ pub fn analyze_dependencies(
 ) -> Vec<TargetDependencyAnalysis>;
 ```
 
-- [ ] Write failing fixtures for `mod`, `#[path]`, grouped/aliased/glob `use`, `crate/self/super`,
+- [x] Write failing fixtures for `mod`, `#[path]`, grouped/aliased/glob `use`, `crate/self/super`,
       qualified paths, external crates, cycles, cfg-inactive items, and unresolved macro-generated paths.
-- [ ] Implement deterministic module ownership and same-language internal path resolution.
-- [ ] Mark analysis `partial` whenever an active source reference cannot be resolved uniquely.
-- [ ] Run `cargo test -p ce-library-rust-analyzer dependencies`; compare checked-in JSON exactly.
-- [ ] Invoke `/commit` with `feat: analyze direct Rust library dependencies`.
+- [x] Implement deterministic module ownership and same-language internal path resolution.
+- [x] Mark analysis `partial` whenever an active source reference cannot be resolved uniquely.
+- [x] Run `cargo test -p ce-library-rust-analyzer dependencies`; compare checked-in JSON exactly.
+- [x] Invoke `/commit` with `feat: analyze direct Rust library dependencies`.
 
 ### Task 3: Deliver Rust dependencies
 
