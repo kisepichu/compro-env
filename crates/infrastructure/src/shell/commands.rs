@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand};
 use domain::entity::{Language, OJKind};
 use interfaces::controller::input::{
-    CheckInput, InitInput, LoginInput, LogoutInput, NewInput, SubmitInput, TestInput, WhoamiInput,
+    CheckInput, InitInput, LoginInput, LogoutInput, NewInput, SiteDataBuildMode,
+    SiteDataGenerateInput, SubmitInput, TestInput, WhoamiInput,
 };
 use usecases::online_judge::Credentials;
 
@@ -72,6 +73,24 @@ pub enum Commands {
         /// Limit the run to a single language id (default: all languages).
         #[arg(long)]
         language: Option<String>,
+    },
+    /// Manage the public library site data JSON.
+    SiteData {
+        #[command(subcommand)]
+        subcommand: SiteDataSubcommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SiteDataSubcommand {
+    /// Generate `site-data.json` atomically. Runs entirely offline.
+    Generate {
+        /// Output directory. Defaults to `target/ce-site-data` under the repo.
+        #[arg(long)]
+        output: Option<String>,
+        /// Build mode: `production` (default, strict) or `preview`.
+        #[arg(long, default_value = "production")]
+        mode: String,
     },
 }
 
@@ -201,5 +220,19 @@ pub struct CheckCommand {
 impl CheckInput for CheckCommand {
     fn language(&self) -> Option<String> {
         self.language.clone()
+    }
+}
+
+pub struct SiteDataGenerateCommand {
+    pub output: Option<String>,
+    pub mode: SiteDataBuildMode,
+}
+
+impl SiteDataGenerateInput for SiteDataGenerateCommand {
+    fn output(&self) -> Option<String> {
+        self.output.clone()
+    }
+    fn mode(&self) -> SiteDataBuildMode {
+        self.mode
     }
 }

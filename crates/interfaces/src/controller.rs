@@ -1,11 +1,26 @@
 use anyhow::Result;
+use domain::analysis::DiscoveryManifest;
 use domain::library::LibraryProjectConfig;
+use domain::library::{LibraryId, SolutionId};
+use site_schema::BuildMode as SchemaBuildMode;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use usecases::check::{CheckSelection, CheckSummary};
+use usecases::git_history::GitHistory;
+use usecases::library_analyzer::LibraryAnalyzer;
+use usecases::repository::site_data_repository::SiteDataRepository;
+use usecases::repository::verification_repository::VerificationRepository;
 use usecases::service::Service;
+use usecases::site_data::ProjectedRelation;
+use usecases::site_data_generator::{
+    GenerateSiteData, default_output_dir, generate_site_data, write_site_data,
+};
 
 pub mod input;
-use input::{InitInput, LoginInput, LogoutInput, NewInput, SubmitInput, TestInput, WhoamiInput};
+use input::{
+    InitInput, LoginInput, LogoutInput, NewInput, SiteDataBuildMode, SiteDataGenerateInput,
+    SubmitInput, TestInput, WhoamiInput,
+};
 
 pub struct Controller {
     service: Service,
@@ -89,5 +104,52 @@ impl Controller {
         repository_root: &Path,
     ) -> Result<CheckSummary> {
         self.service.check(config, selection, repository_root)
+    }
+
+    /// Runs `ce site-data generate`. Ports are supplied by the shell layer so
+    /// tests can inject fakes. The controller assembles the input struct and
+    /// dispatches to the use-case orchestrator, then writes atomically.
+    #[allow(clippy::too_many_arguments)]
+    pub fn site_data_generate(
+        &self,
+        args: &dyn SiteDataGenerateInput,
+        repository_root: &Path,
+        config: &LibraryProjectConfig,
+        manifest: &DiscoveryManifest,
+        analyzer: &dyn LibraryAnalyzer,
+        verifications: &dyn VerificationRepository,
+        git_history: &dyn GitHistory,
+        site_data_repository: &dyn SiteDataRepository,
+        oj_by_contest: &BTreeMap<String, String>,
+        relations: &BTreeMap<LibraryId, Vec<ProjectedRelation>>,
+        manual_dependency_edges: &BTreeMap<LibraryId, BTreeSet<LibraryId>>,
+        solution_has_preprocess: &BTreeMap<SolutionId, bool>,
+        library_descriptions: &BTreeMap<LibraryId, String>,
+    ) -> Result<std::path::PathBuf> {
+        let mode = match args.mode() {
+            SiteDataBuildMode::Production => SchemaBuildMode::Production,
+            SiteDataBuildMode::Preview => SchemaBuildMode::Preview,
+        };
+        let output = args
+            .output()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| default_output_dir(repository_root));
+        let spec = GenerateSiteData {
+            repository_root,
+            config,
+            manifest,
+            analyzer,
+            verifications,
+            git_history,
+            oj_by_contest,
+            relations,
+            manual_dependency_edges,
+            solution_has_preprocess,
+            library_descriptions,
+            mode,
+        };
+        let data = generate_site_data(&spec)?;
+        write_site_data(site_data_repository, &output, &data)?;
+        Ok(output)
     }
 }

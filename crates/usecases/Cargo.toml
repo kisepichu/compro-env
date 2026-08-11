@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 domain = { workspace = true }
 library-adapter-protocol = { workspace = true }
+site-schema = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }

@@ -16,6 +16,7 @@ members = [
     "crates/interfaces",
     "crates/infrastructure",
     "crates/library-adapter-protocol",
+    "crates/site-schema",
     "tools/library-analyzers/rust",
 ]
 resolver = "2"
@@ -31,6 +32,7 @@ usecases = { path = "crates/usecases" }
 interfaces = { path = "crates/interfaces" }
 infrastructure = { path = "crates/infrastructure" }
 library-adapter-protocol = { path = "crates/library-adapter-protocol" }
+site-schema = { path = "crates/site-schema" }
 
 [dependencies]
 infrastructure = { workspace = true }

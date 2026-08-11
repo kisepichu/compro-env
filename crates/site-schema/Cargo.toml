@@ -1,0 +1,15 @@
+[package]
+name = "site-schema"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "write-site-data-schema"
+path = "src/bin/write_schema.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+schemars = "1"

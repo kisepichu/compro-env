@@ -1,0 +1,922 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "compro-env site-data v1",
+  "description": "Public projection of libraries, solutions, and verification state served by the static site.",
+  "$ref": "#/$defs/SiteData",
+  "$defs": {
+    "AdapterIdentity": {
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "language",
+        "name",
+        "version"
+      ]
+    },
+    "AnalysisState": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "failed"
+      ]
+    },
+    "BuildMetadata": {
+      "description": "Immutable evidence about how this build was produced (spec §12.14, §15.5).",
+      "type": "object",
+      "properties": {
+        "adapters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AdapterIdentity"
+          }
+        },
+        "generated_at": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/BuildMode"
+        },
+        "observed_toolchains": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolchainIdentity"
+          }
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "source_commit_sha": {
+          "type": "string"
+        },
+        "source_commit_short_sha": {
+          "type": "string"
+        },
+        "source_committed_at": {
+          "type": "string"
+        },
+        "uncommitted_changes": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "generated_at",
+        "mode",
+        "source_commit_sha",
+        "source_commit_short_sha",
+        "source_committed_at",
+        "uncommitted_changes",
+        "observed_toolchains",
+        "adapters"
+      ]
+    },
+    "BuildMode": {
+      "type": "string",
+      "enum": [
+        "production",
+        "preview"
+      ]
+    },
+    "DependencyAnalysisPublic": {
+      "description": "Dependency analysis projection.\n\n`has_private_dependencies` is a *count-free* boolean — spec §4.4 forbids\nleaking names or counts of private targets.",
+      "type": "object",
+      "properties": {
+        "direct": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LibraryLink"
+          }
+        },
+        "has_private_dependencies": {
+          "type": "boolean"
+        },
+        "state": {
+          "$ref": "#/$defs/AnalysisState"
+        },
+        "transitive": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LibraryLink"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "direct",
+        "transitive",
+        "has_private_dependencies"
+      ]
+    },
+    "DiagnosticPublic": {
+      "description": "Public diagnostic entry (spec §4.4).",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PublicLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/DiagnosticSeverity"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "code",
+        "message"
+      ]
+    },
+    "DiagnosticSeverity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ]
+    },
+    "EvidenceStatus": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "rejected",
+        "unavailable",
+        "stale",
+        "never"
+      ]
+    },
+    "LanguageSummary": {
+      "description": "Public-only language card (spec §12.4).",
+      "type": "object",
+      "properties": {
+        "display_name": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "library_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "syntax_highlight": {
+          "type": "string"
+        },
+        "verification_summary": {
+          "$ref": "#/$defs/VerificationCounts"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "display_name",
+        "syntax_highlight",
+        "library_count",
+        "verification_summary"
+      ]
+    },
+    "LibraryLink": {
+      "description": "A cross-reference to another public library.",
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": "string"
+        },
+        "library_id": {
+          "type": "string"
+        },
+        "manual": {
+          "type": "boolean"
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "library_id",
+        "language",
+        "title",
+        "source_path",
+        "manual"
+      ]
+    },
+    "LibraryPageData": {
+      "description": "Canonical public projection of a `LibraryFile` (spec §12.5).",
+      "type": "object",
+      "properties": {
+        "dependency_analysis": {
+          "$ref": "#/$defs/DependencyAnalysisPublic"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DiagnosticPublic"
+          }
+        },
+        "language": {
+          "type": "string"
+        },
+        "library_id": {
+          "type": "string"
+        },
+        "page_id": {
+          "type": "string"
+        },
+        "relations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RelationPublic"
+          }
+        },
+        "reverse_dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LibraryLink"
+          }
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "symbol_analysis": {
+          "$ref": "#/$defs/SymbolAnalysisPublic"
+        },
+        "syntax_highlight": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "updated_by_commit": {
+          "type": "string"
+        },
+        "verification": {
+          "$ref": "#/$defs/LibraryVerificationView"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "page_id",
+        "library_id",
+        "language",
+        "title",
+        "source_path",
+        "source",
+        "syntax_highlight",
+        "updated_at",
+        "updated_by_commit",
+        "symbol_analysis",
+        "dependency_analysis",
+        "reverse_dependencies",
+        "relations",
+        "verification",
+        "diagnostics"
+      ]
+    },
+    "LibraryVerificationStatus": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "rejected",
+        "unavailable",
+        "stale",
+        "never"
+      ]
+    },
+    "LibraryVerificationView": {
+      "description": "Aggregate verification state on a library page (spec §12.8).",
+      "type": "object",
+      "properties": {
+        "aggregate_status": {
+          "$ref": "#/$defs/LibraryVerificationStatus"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VerificationEvidence"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "aggregate_status",
+        "evidence"
+      ]
+    },
+    "LinePosition": {
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "line": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "line"
+      ]
+    },
+    "PublicLocation": {
+      "description": "Location within the current page's source. `path` is intentionally absent\nbecause it is always the library's own source. The Web layer generates\n`#L<line>` anchors from `start.line`; symbol locations without valid lines\nare rendered under a `#symbols` anchor.",
+      "type": "object",
+      "properties": {
+        "end": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LinePosition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "start": {
+          "$ref": "#/$defs/LinePosition"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "start"
+      ]
+    },
+    "RelationPublic": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "manual": {
+          "type": "boolean"
+        },
+        "target": {
+          "$ref": "#/$defs/LibraryLink"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "target",
+        "manual"
+      ]
+    },
+    "SiteData": {
+      "description": "Root document written to `site-data.json`.",
+      "type": "object",
+      "properties": {
+        "build": {
+          "$ref": "#/$defs/BuildMetadata"
+        },
+        "languages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LanguageSummary"
+          }
+        },
+        "libraries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LibraryPageData"
+          }
+        },
+        "schema_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "site": {
+          "$ref": "#/$defs/SiteMetadata"
+        },
+        "solutions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SolutionPageData"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "build",
+        "site",
+        "languages",
+        "libraries",
+        "solutions"
+      ]
+    },
+    "SiteMetadata": {
+      "description": "Repository-level publishing metadata (spec §6, `[library.site]`).",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "repository_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "description",
+        "language"
+      ]
+    },
+    "SolutionDiagnosticPublic": {
+      "description": "Solution diagnostic — public location is limited to the entry source file.\n\nWhen the diagnostic originally referred to a non-entry file, the projection\nstrips the location and populates `location_notice` with a fixed message\n(spec §12, §12.7).",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PublicLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "location_notice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/DiagnosticSeverity"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "code",
+        "message"
+      ]
+    },
+    "SolutionPageData": {
+      "description": "Canonical public projection of a `Solution` (spec §12.7).",
+      "type": "object",
+      "properties": {
+        "contest_id": {
+          "type": "string"
+        },
+        "dependency_analysis_state": {
+          "$ref": "#/$defs/AnalysisState"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SolutionDiagnosticPublic"
+          }
+        },
+        "direct_dependencies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LibraryLink"
+          }
+        },
+        "has_preprocess": {
+          "type": "boolean"
+        },
+        "has_private_dependencies": {
+          "type": "boolean"
+        },
+        "language": {
+          "type": "string"
+        },
+        "online_judge": {
+          "type": "string"
+        },
+        "page_id": {
+          "type": "string"
+        },
+        "problem_code": {
+          "type": "string"
+        },
+        "solution_id": {
+          "type": "string"
+        },
+        "solution_name": {
+          "type": "string"
+        },
+        "solved_at": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_path": {
+          "type": "string"
+        },
+        "syntax_highlight": {
+          "type": "string"
+        },
+        "verification": {
+          "$ref": "#/$defs/SolutionVerificationView"
+        },
+        "verifies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LibraryLink"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "page_id",
+        "solution_id",
+        "contest_id",
+        "problem_code",
+        "solution_name",
+        "online_judge",
+        "language",
+        "solved_at",
+        "source_path",
+        "source",
+        "syntax_highlight",
+        "has_preprocess",
+        "verifies",
+        "direct_dependencies",
+        "has_private_dependencies",
+        "verification",
+        "dependency_analysis_state",
+        "diagnostics"
+      ]
+    },
+    "SolutionVerificationStatus": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "rejected",
+        "unavailable",
+        "stale",
+        "never",
+        "not_configured"
+      ]
+    },
+    "SolutionVerificationView": {
+      "description": "Verification view on a solution page (spec §12.7, §12.8).\n\n`not_configured` is only ever emitted here — libraries collapse to `never`\nwhen they have no direct verifiers.",
+      "type": "object",
+      "properties": {
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VerificationResultPublic"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/SolutionVerificationStatus"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ]
+    },
+    "SymbolAnalysisPublic": {
+      "description": "Symbol analysis projection.",
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/AnalysisState"
+        },
+        "symbols": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SymbolPublic"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "symbols"
+      ]
+    },
+    "SymbolPublic": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PublicLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "qualified_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "search_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "signature": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "name",
+        "search_names"
+      ]
+    },
+    "TestcaseVerdictPublic": {
+      "type": "object",
+      "properties": {
+        "execution_time_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "memory_kib": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string"
+        },
+        "verdict": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "verdict"
+      ]
+    },
+    "ToolchainIdentity": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "VerificationCounts": {
+      "description": "Rolled-up counts per public verification status.",
+      "type": "object",
+      "properties": {
+        "never": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "rejected": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "stale": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "unavailable": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "verified": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "verified",
+        "rejected",
+        "unavailable",
+        "stale",
+        "never"
+      ]
+    },
+    "VerificationEvidence": {
+      "description": "Latest verification observation for a `[verify].libraries` link.",
+      "type": "object",
+      "properties": {
+        "judged_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "oj_submission_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "online_judge": {
+          "type": "string"
+        },
+        "solution_id": {
+          "type": "string"
+        },
+        "solution_page_id": {
+          "type": "string"
+        },
+        "stale_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/EvidenceStatus"
+        },
+        "verdict": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "solution_id",
+        "solution_page_id",
+        "online_judge",
+        "status"
+      ]
+    },
+    "VerificationResultPublic": {
+      "description": "Latest terminal verification result attached to a solution page.\n\nOnly publishable fields exist: no session/token/cookie/raw OJ payload.",
+      "type": "object",
+      "properties": {
+        "attempt_id": {
+          "type": "string"
+        },
+        "execution_time_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "judged_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "memory_kib": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "oj_submission_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stale_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "submitted_source_hash": {
+          "type": "string"
+        },
+        "testcases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TestcaseVerdictPublic"
+          }
+        },
+        "verdict": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verify_fingerprint": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "submitted_source_hash",
+        "verify_fingerprint",
+        "testcases"
+      ]
+    }
+  }
+}
