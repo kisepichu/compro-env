@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 // ─── Value Objects ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum OJKind {
     AtCoder,
     LibraryChecker,
