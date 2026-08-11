@@ -41,13 +41,13 @@ pub fn classify_solution_status(
 ) -> VerificationStatus;
 ```
 
-- [ ] Write failing tests for cycles, private closure, stable byte order, source bytes without newline
+- [x] Write failing tests for cycles, private closure, stable byte order, source bytes without newline
       normalization, rename/content/mapping/capability changes, symbol-only failure, and status precedence.
-- [ ] Implement field-framed canonical hashing with per-input hashes for stale reasons.
-- [ ] Aggregate libraries from direct verifiers only; zero direct verifiers is `never`.
-- [ ] Run `cargo test -p usecases verification::fingerprint` and
+- [x] Implement field-framed canonical hashing with per-input hashes for stale reasons.
+- [x] Aggregate libraries from direct verifiers only; zero direct verifiers is `never`.
+- [x] Run `cargo test -p usecases verification::fingerprint` and
       `cargo test -p usecases verification::status`.
-- [ ] Invoke `/commit` with `feat: derive verification fingerprints and statuses`.
+- [x] Invoke `/commit` with `feat: derive verification fingerprints and statuses`.
 
 ### Task 2: Build immutable plans and validate transitions
 
@@ -71,18 +71,18 @@ pub fn apply_transition(
 ) -> Result<VerificationRecord, InvalidTransition>;
 ```
 
-- [ ] Write failing tests for stable plan JSON/hash, frozen submitted source, `replaces_attempt_id`, every
+- [x] Write failing tests for stable plan JSON/hash, frozen submitted source, `replaces_attempt_id`, every
       valid transition, stale events, handle preservation, and every forbidden backward/attempt transition.
-- [ ] Implement immutable `SubmissionPlanBody` plus plan hash and exhaustive transition matching.
-- [ ] Add hidden in-process prepare serialization helpers, but no public CLI command.
-- [ ] Run `cargo test -p usecases verification::plan` and
+- [x] Implement immutable `SubmissionPlanBody` plus plan hash and exhaustive transition matching.
+- [x] Add hidden in-process prepare serialization helpers, but no public CLI command.
+- [x] Run `cargo test -p usecases verification::plan` and
       `cargo test -p usecases verification::transition`.
-- [ ] Invoke `/commit` with `feat: build immutable verification plans`.
+- [x] Invoke `/commit` with `feat: build immutable verification plans`.
 
 ### Task 3: Deliver verification planning
 
-- [ ] Run all fingerprint/status/plan/transition fixtures twice and compare canonical bytes.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record verification planning completion`.
+- [x] Run all fingerprint/status/plan/transition fixtures twice and compare canonical bytes.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record verification planning completion`.
 - [ ] Invoke `/pr --base main`; link plan 056 and state that it unblocks plan 057.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
