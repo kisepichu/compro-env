@@ -32,6 +32,10 @@ fs2 = "0.4"
 name = "library-adapter-prepare"
 path = "src/bin/library-adapter-prepare.rs"
 
+[[bin]]
+name = "library-adapter-build"
+path = "src/bin/library-adapter-build.rs"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 nix = { version = "0.29", features = ["signal", "process"] }
