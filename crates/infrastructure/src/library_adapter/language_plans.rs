@@ -175,17 +175,18 @@ pub fn cpp_build_plan(
 /// Build plan for the Lean adapter (spec §§6.8, 6.9; plan 048 Task 2).
 ///
 /// The plan invokes `tools/library-analyzers/lean/build.sh` under `bash`.
-/// That script runs `lake build ce-lean` inside `lake env` against the
-/// caller-picked staging directory (`CE_ADAPTER_STAGE_DIR`, injected by the
-/// build driver) and points Lake at the prepared Lean install via
-/// `CE_LEAN_ROOT`.
+/// That script runs `lake build ce-lean` against the caller-picked staging
+/// directory (`CE_ADAPTER_STAGE_DIR`, injected by the build driver) with
+/// `PATH` pinned to the prepared `bin/`. `CE_LEAN_ROOT` points build.sh at
+/// the prepared Lean install.
 ///
 /// The resulting executable lands at `<CE_ADAPTER_STAGE_DIR>/lean/ce-lean`,
 /// so `output_relative_path` is set relative to the plan's working directory
 /// — left unset here so the build driver defaults it to the staging
 /// directory. The handshake runs the freshly built executable against the
-/// empty `AnalysisRequest`; `handshake_environment` forwards the sanitized
-/// env plus `CE_LEAN_ROOT` so the loader picks up `libLean.so` at run time.
+/// empty `AnalysisRequest`; both environments prepend `CE_LEAN_ROOT/lib` to
+/// `LD_LIBRARY_PATH` so the dynamic linker resolves `libLean_shared.so`
+/// (and its siblings shipped in the tarball) at run time.
 pub fn lean_build_plan(
     repository_root: &Path,
     platform: &TargetPlatform,
@@ -197,17 +198,8 @@ pub fn lean_build_plan(
         .to_string_lossy()
         .into_owned();
 
-    let mut env = sanitized_language_env();
-    env.insert(
-        "CE_LEAN_ROOT".into(),
-        lean_root.to_string_lossy().into_owned(),
-    );
-
-    let mut handshake_env = sanitized_language_env();
-    handshake_env.insert(
-        "CE_LEAN_ROOT".into(),
-        lean_root.to_string_lossy().into_owned(),
-    );
+    let build_env = build_lean_env(&lean_root, sanitized_language_env());
+    let handshake_env = build_lean_env(&lean_root, sanitized_language_env());
 
     Ok(LanguageBuildPlan {
         language: LEAN_LANGUAGE.into(),
@@ -215,7 +207,7 @@ pub fn lean_build_plan(
         expected_adapter_name: LEAN_ADAPTER_NAME.into(),
         expected_adapter_version: LEAN_ADAPTER_VERSION.into(),
         argv: vec!["bash".into(), script],
-        environment: env,
+        environment: build_env,
         // Working directory unset → driver uses the staging directory. The
         // lake build tree lives at `<staging>/lean/ce-lean`, which is where
         // the driver reads from before copying into `<staging>/bin/`.
@@ -223,4 +215,23 @@ pub fn lean_build_plan(
         output_relative_path: "lean/ce-lean".into(),
         handshake_environment: handshake_env,
     })
+}
+
+/// Inject `CE_LEAN_ROOT` plus `<lean_root>/lib` on `LD_LIBRARY_PATH` into a
+/// sanitized env map. Any existing `LD_LIBRARY_PATH` is preserved by
+/// appending after the prepared `lib/` — the pinned Lean shared objects
+/// resolve first, and host-provided libraries the loader still needs
+/// (libc, libstdc++, …) continue to resolve through their original
+/// entries.
+fn build_lean_env(lean_root: &Path, mut env: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let root_str = lean_root.to_string_lossy().into_owned();
+    let lib_dir = lean_root.join("lib").to_string_lossy().into_owned();
+    env.insert("CE_LEAN_ROOT".into(), root_str);
+    let entry = env.entry("LD_LIBRARY_PATH".into()).or_default();
+    if entry.is_empty() {
+        *entry = lib_dir;
+    } else {
+        *entry = format!("{lib_dir}:{entry}");
+    }
+    env
 }

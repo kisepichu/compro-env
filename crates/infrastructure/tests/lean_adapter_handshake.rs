@@ -3,10 +3,12 @@
 //!
 //! Like the C++ handshake test, this one deliberately does **not** try to
 //! run `tools/library-analyzers/prepare` or compile the analyzer itself:
-//! the prepared Lean tarball is ~150 MB and `lake build` needs both that
-//! archive and a network hop to fetch Lean's built-in modules on a fresh
-//! host. Instead the test is gated behind `CE_RUN_LEAN_HANDSHAKE=1` and
-//! probes for the already-published
+//! the prepared Lean tarball is ~150 MB, and the compiled `ce-lean`
+//! binary still needs `libLean_shared.so` from that install on
+//! `LD_LIBRARY_PATH` at run time (the committed `lake-manifest.json`
+//! declares no external packages, so `lake build` itself is offline).
+//! Instead the test is gated behind `CE_RUN_LEAN_HANDSHAKE=1` and probes
+//! for the already-published
 //! `<repo>/target/library-analyzers/bin/lean-analyzer` symlink. Without
 //! the gate the test prints a hint and returns success, so
 //! `cargo test --all` stays green on fresh clones.

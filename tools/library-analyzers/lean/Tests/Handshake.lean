@@ -11,9 +11,11 @@ must yield the exact identity envelope the build driver's handshake gate
 expects: adapter `ce-lean` @ `0.1.0`, one `lean` toolchain, and no
 libraries or solutions.
 
-The Lean release string is threaded in explicitly so a version drift in
-`Lean.versionString` at build time surfaces here as a mismatch instead of
-silently changing the reported identity.
+The Lean release string is threaded in explicitly to lock the response
+envelope shape, and `Lean.versionString` — the value `Analyzer.Main`
+actually reports at runtime — is asserted against the same expected pin
+so a toolchain drift at build time surfaces here as a mismatch instead
+of silently changing the reported identity.
 -/
 
 open Lean
@@ -37,6 +39,13 @@ private def fail (msg : String) : IO α := do
 
 private def check (cond : Bool) (msg : String) : IO Unit :=
   if cond then pure () else discard (fail msg)
+
+/-- `Lean.versionString` — the value `Analyzer.Main` reports at runtime —
+    matches the pinned Lean 4.30.0 release. This trips when the checked-in
+    `lean-toolchain` is bumped without updating the expected constant. -/
+def testLeanVersionStringMatchesPin : IO Unit := do
+  check (Lean.versionString == expectedLeanVersion)
+    s!"Lean.versionString = {Lean.versionString}, expected {expectedLeanVersion}"
 
 /-- The response constructor's identity envelope matches the expected
     handshake shape when the request is an empty analysis. -/
@@ -90,6 +99,7 @@ def testParseFixtures : IO Unit := do
 end Analyzer.Tests
 
 def main : IO Unit := do
+  Analyzer.Tests.testLeanVersionStringMatchesPin
   Analyzer.Tests.testEmptyResponseShape
   Analyzer.Tests.testParseFixtures
   IO.println "ce-lean handshake tests passed"

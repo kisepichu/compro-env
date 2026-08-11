@@ -4,9 +4,10 @@
 # Called by `library-adapter-build` under a cleared environment plus the
 # allowlist wired in `language_plans.rs`. The parent driver picks the
 # staging/bin paths and points us at the prepared Lean install; this script
-# stages the analyzer sources under `<CE_ADAPTER_STAGE_DIR>/lean/`, runs
-# `lake build ce-lean` inside `lake env`, and drops `ce-lean` where the
-# driver expects it (`<CE_ADAPTER_STAGE_DIR>/lean/ce-lean`).
+# stages the analyzer sources under `<CE_ADAPTER_STAGE_DIR>/lean/`, pins
+# `PATH` to the prepared `bin/` so `lake` and `lean` resolve there (no
+# `lake env`, no Elan), runs `lake build ce-lean`, and drops `ce-lean`
+# where the driver expects it (`<CE_ADAPTER_STAGE_DIR>/lean/ce-lean`).
 #
 # Required env:
 #   CE_ADAPTER_REPOSITORY_ROOT  Path to the compro-env repository root.

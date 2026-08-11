@@ -66,15 +66,16 @@ def requestKeys : List String :=
 def libraryKeys : List String := ["path"]
 def solutionKeys : List String := ["id", "root", "entry"]
 
-private def objKeys (j : Json) : Except Analyzer.Diagnostics.ProtocolError (List String) :=
+private def objKeys (context : String) (j : Json) :
+    Except Analyzer.Diagnostics.ProtocolError (List String) :=
   match j with
   | Json.obj m => Except.ok (m.toArray.toList.map Prod.fst)
-  | _          => Except.error (.mk' "invalid_request" "top-level JSON must be an object")
+  | _          => Except.error (.mk' "invalid_request" s!"{context} must be a JSON object")
 
 private def rejectUnknown
     (raw : Json) (allowed : List String) (context : String) :
     Except Analyzer.Diagnostics.ProtocolError Unit := do
-  let keys ← objKeys raw
+  let keys ← objKeys context raw
   for k in keys do
     if !allowed.contains k then
       throw (.mk' "unknown_field" s!"unknown field {k} in {context}")
