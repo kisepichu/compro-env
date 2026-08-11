@@ -15,7 +15,15 @@ buildDir = ".lake/build"
 [[lean_lib]]
 name = "Analyzer"
 
+[[lean_lib]]
+name = "Tests"
+
 [[lean_exe]]
 name = "ce-lean"
 root = "Analyzer.Main"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "ce-lean-handshake-test"
+root = "Tests.Handshake"
 supportInterpreter = true
