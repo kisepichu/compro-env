@@ -60,5 +60,5 @@
 - [x] Run Lean handshake tests and the generic adapter build/process suites.
 - [x] Run rollout repository verification and `git diff --check`.
 - [x] Invoke `/commit` with `docs: record Lean toolchain completion`.
-- [ ] Invoke `/pr --base main`; link plan 048 and state that it unblocks plan 049.
-- [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+- [x] Invoke `/pr --base main`; link plan 048 and state that it unblocks plan 049.
+- [x] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
