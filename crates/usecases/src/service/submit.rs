@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use domain::entity::{Language, OJKind, Solution};
 
 use super::Service;
-use crate::submission::{SubmissionRequest, SubmissionStart};
+use crate::submission::{StartSubmissionError, SubmissionRequest, SubmissionStart};
 
 /// Everything `submit` needs after source preparation (read file + preprocess hook).
 struct PreparedSubmission {
@@ -54,9 +54,18 @@ impl Service {
             lang_id: prepared.lang_id,
             source: prepared.source,
         };
-        starter
-            .start_submission(&request, session.as_ref())
-            .map_err(|e| anyhow::anyhow!(e))
+        // Normalize `Err(Unavailable)` back into `Ok(SubmissionStart::Unavailable)`
+        // so the shell's "unavailable" branch is reached uniformly. The starter's
+        // internal `Err(Unavailable)` and its returned `Ok(SubmissionStart::Unavailable)`
+        // both mean "this OJ can't serve this request" — the shell only needs to
+        // handle it in one place.
+        match starter.start_submission(&request, session.as_ref()) {
+            Ok(start) => Ok(start),
+            Err(StartSubmissionError::Unavailable { reason }) => {
+                Ok(SubmissionStart::Unavailable { reason })
+            }
+            Err(e) => Err(anyhow::anyhow!(e)),
+        }
     }
 
     /// Prepares the submission source and returns it WITHOUT contacting the OJ
@@ -708,6 +717,65 @@ mod tests {
         match result {
             SubmissionStart::UserActionRequired { url } => assert_eq!(url, expected_url),
             other => panic!("expected UserActionRequired, got {other:?}"),
+        }
+    }
+
+    /// Starter that reports `Err(StartSubmissionError::Unavailable)`. Service::submit
+    /// normalizes this to `Ok(SubmissionStart::Unavailable)` so the shell layer has a
+    /// single "unavailable" branch to handle.
+    struct UnavailableStarter;
+    impl SubmissionStarter for UnavailableStarter {
+        fn descriptor(&self) -> SubmissionAdapterDescriptor {
+            stub_descriptor()
+        }
+        fn start_submission(
+            &self,
+            _request: &SubmissionRequest,
+            _session: Option<&Session>,
+        ) -> Result<SubmissionStart, StartSubmissionError> {
+            Err(StartSubmissionError::Unavailable {
+                reason: crate::submission::UnavailableReason::InteractiveUntrackable,
+            })
+        }
+    }
+
+    /// Regression: `Err(Unavailable)` from a starter is turned into
+    /// `Ok(SubmissionStart::Unavailable)` so callers do not need to duplicate
+    /// the "OJ cannot serve this request" handling in two places.
+    #[test]
+    fn submit_normalizes_err_unavailable_into_ok_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ce.toml"),
+            ce_toml_with_language_and_passing_test(),
+        )
+        .unwrap();
+        let service = Service::new(
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ))),
+            registry_with(Box::new(UnavailableStarter)),
+            Box::new(StubContestRepo {
+                problem: default_problem(),
+            }),
+            Box::new(StubSolutionRepo {
+                solution_dir: dir.path().to_path_buf(),
+                source: Some("fn main() {}".to_string()),
+            }),
+            Box::new(StubSession { session: None }),
+            Box::new(StubConfig {
+                lang_id: Some("6088".to_string()),
+                submit_file: "src/main.rs".to_string(),
+                submit_preprocess: None,
+            }),
+            Box::new(SpawningCommandRunner),
+        );
+        match service.submit("abc001", "a", "main") {
+            Ok(SubmissionStart::Unavailable { reason }) => {
+                assert!(matches!(
+                    reason,
+                    crate::submission::UnavailableReason::InteractiveUntrackable
+                ));
+            }
+            other => panic!("expected Ok(Unavailable), got {other:?}"),
         }
     }
 

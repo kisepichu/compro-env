@@ -382,16 +382,56 @@ fn transport_failure_after_send_is_acceptance_unknown() {
 }
 
 /// The `Sanitized` constructor strips credential-like substrings automatically,
-/// so adapters that forget to sanitize cannot leak by accident.
+/// so adapters that forget to sanitize cannot leak by accident. The dummy
+/// values here (`TOKEN123`, `RS_abc123`, `hunter2`) are deliberately obvious
+/// non-secrets that still exercise the same code path.
 #[test]
 fn sanitized_summary_strips_credential_substrings() {
-    let raw = "auth failed: Bearer eyJhbGciOi...; cookie=REVEL_SESSION=abc123; password=xxx";
+    let raw = "auth failed: Bearer TOKEN123; cookie=REVEL_SESSION=RS_abc123; password=hunter2";
     let summary = usecases::submission::sanitize_summary(raw);
     let lower = summary.to_lowercase();
-    assert!(!lower.contains("bearer"));
-    assert!(!lower.contains("revel_session"));
-    assert!(!lower.contains("password"));
-    assert!(!summary.contains("eyJhbGciOi"));
+    // Keywords are scrubbed:
+    assert!(
+        !lower.contains("bearer"),
+        "summary still contains 'bearer': {summary}"
+    );
+    assert!(
+        !lower.contains("revel_session"),
+        "summary still contains 'revel_session': {summary}"
+    );
+    assert!(
+        !lower.contains("password"),
+        "summary still contains 'password': {summary}"
+    );
+    // AND the value fragments trailing each keyword are scrubbed:
+    assert!(
+        !summary.contains("TOKEN123"),
+        "summary still leaks Bearer value: {summary}"
+    );
+    assert!(
+        !summary.contains("RS_abc123"),
+        "summary still leaks cookie value: {summary}"
+    );
+    assert!(
+        !summary.contains("hunter2"),
+        "summary still leaks password value: {summary}"
+    );
+}
+
+/// Regression: `sanitize_summary` must never panic on multi-byte UTF-8 input.
+/// An earlier version indexed the full-Unicode-lowercased string by input byte
+/// offsets, which panics whenever `to_lowercase()` changed the string's length.
+#[test]
+fn sanitize_summary_handles_multibyte_utf8_without_panic() {
+    // Non-ASCII text bracketing a keyword-value pair.
+    let raw = "認証エラー: Bearer TOKEN123 が拒否されました 🚫";
+    let summary = usecases::submission::sanitize_summary(raw);
+    assert!(!summary.to_lowercase().contains("bearer"));
+    assert!(!summary.contains("TOKEN123"));
+    // Surrounding non-ASCII is preserved verbatim.
+    assert!(summary.contains("認証エラー"));
+    assert!(summary.contains("拒否されました"));
+    assert!(summary.contains("🚫"));
 }
 
 // ── Registries and capability consistency ──────────────────────────────────

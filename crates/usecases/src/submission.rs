@@ -372,13 +372,19 @@ pub fn sanitize_summary(input: &str) -> String {
         "apikey",
         "token=",
     ];
+    // Case-insensitive match using `to_ascii_lowercase` so `lower` and `input`
+    // share the same byte layout — indexing by `i` into either is safe.
+    // Full Unicode `to_lowercase` can change the string's length (e.g. `İ` →
+    // `i̇`, two chars), which would break byte-indexed slicing.
+    let lower = input.to_ascii_lowercase();
     let mut out = String::with_capacity(input.len());
-    let lower = input.to_lowercase();
-    let bytes = input.as_bytes();
     let mut i = 0;
     while i < input.len() {
+        // `i` is always on a UTF-8 char boundary of `input` (loop invariant).
         let mut matched_len = 0usize;
         for kw in &keywords {
+            // Byte-safe: the keyword is ASCII, so a match starts at a char
+            // boundary in `input` too.
             if lower[i..].starts_with(kw) {
                 matched_len = kw.len();
                 break;
@@ -386,16 +392,26 @@ pub fn sanitize_summary(input: &str) -> String {
         }
         if matched_len > 0 {
             out.push_str(placeholder);
+            // Scan the value that follows the keyword up to the next
+            // whitespace or ASCII separator. We look at bytes of `lower` (safe
+            // because we only compare against ASCII terminators), then snap
+            // `j` forward to a char boundary before resuming outer iteration.
+            let bytes = lower.as_bytes();
             let mut j = i + matched_len;
             while j < input.len() {
-                let c = bytes[j] as char;
-                if c.is_whitespace() || matches!(c, ';' | ',' | '"' | '\'' | ')' | ']') {
+                let b = bytes[j];
+                if b.is_ascii_whitespace() || matches!(b, b';' | b',' | b'"' | b'\'' | b')' | b']')
+                {
                     break;
                 }
                 j += 1;
             }
+            while j < input.len() && !input.is_char_boundary(j) {
+                j += 1;
+            }
             i = j;
         } else {
+            // Copy one UTF-8 scalar so `i` stays on a char boundary.
             let ch_end = input[i..]
                 .char_indices()
                 .nth(1)
@@ -631,12 +647,15 @@ mod tests {
 
     #[test]
     fn sanitize_summary_scrubs_bearer_and_cookie() {
-        let out = sanitize_summary("auth failed: Bearer ey.abc; cookie=REVEL_SESSION=xxx; done");
+        // Dummy values (`TOKEN123`, `RS_abc123`) are non-secrets that still
+        // trigger the keyword + trailing-token scrub.
+        let out =
+            sanitize_summary("auth failed: Bearer TOKEN123; cookie=REVEL_SESSION=RS_abc123; done");
         let lower = out.to_lowercase();
         assert!(!lower.contains("bearer "));
         assert!(!lower.contains("cookie="));
-        assert!(!out.contains("ey.abc"));
-        assert!(!out.contains("REVEL_SESSION=xxx"));
+        assert!(!out.contains("TOKEN123"));
+        assert!(!out.contains("REVEL_SESSION=RS_abc123"));
     }
 
     #[test]
@@ -656,9 +675,21 @@ mod tests {
     #[test]
     fn start_error_from_transport_after_send_sanitizes_input() {
         let err =
-            StartSubmissionError::from_transport_after_send("write failed after Bearer eyJ.leaked");
+            StartSubmissionError::from_transport_after_send("write failed after Bearer TOKEN123");
         let s = err.summary();
         assert!(!s.to_lowercase().contains("bearer "));
-        assert!(!s.contains("eyJ.leaked"));
+        assert!(!s.contains("TOKEN123"));
+    }
+
+    /// Regression: no panic on multi-byte UTF-8 either from the outer scan
+    /// or from the trailing-token skip, and non-ASCII surroundings are kept.
+    #[test]
+    fn sanitize_summary_multibyte_utf8_is_lossless_and_safe() {
+        let raw = "認証エラー: Bearer TOKEN123 が拒否されました 🚫";
+        let out = sanitize_summary(raw);
+        assert!(!out.to_lowercase().contains("bearer"));
+        assert!(!out.contains("TOKEN123"));
+        assert!(out.contains("認証エラー"));
+        assert!(out.contains("🚫"));
     }
 }
