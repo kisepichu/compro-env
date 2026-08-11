@@ -24,8 +24,9 @@ use interfaces::controller::input::CheckInput;
 use usecases::check::{CheckSelection, LanguageCheckStatus};
 use usecases::command_runner::CommandRunner;
 use usecases::config::Config as _;
-use usecases::online_judge::{CredentialKind, Credentials, SubmitOutcome};
+use usecases::online_judge::{CredentialKind, Credentials};
 use usecases::service::Service;
+use usecases::submission::SubmissionStart;
 
 // The Unix-only runner lives at `crate::command_runner_impl::UnixCommandRunner`;
 // on other targets we fall back to a stub that reports the platform as
@@ -259,18 +260,22 @@ pub fn run() -> Result<()> {
                 }
             } else {
                 match controller.submit(&command) {
-                    Ok(SubmitOutcome::OpenBrowser { url }) => {
+                    Ok(SubmissionStart::UserActionRequired { url }) => {
                         // stdout carries the URL only, so it stays copy/paste- and pipe-friendly.
                         println!("{url}");
                         open_browser(&url);
                         Ok(())
                     }
-                    Ok(SubmitOutcome::Submitted { submission_url }) => {
+                    Ok(SubmissionStart::Trackable { handle }) => {
                         // Human-facing note on stderr; stdout stays the URL only (same as above).
                         eprintln!("Submitted.");
-                        println!("{submission_url}");
-                        open_browser(&submission_url);
+                        println!("{}", handle.submission_url);
+                        open_browser(&handle.submission_url);
                         Ok(())
+                    }
+                    Ok(SubmissionStart::Unavailable { reason }) => {
+                        eprintln!("submission unavailable: {reason:?}");
+                        std::process::exit(1);
                     }
                     Err(e) => {
                         eprintln!("{e}");
@@ -340,6 +345,7 @@ pub fn run() -> Result<()> {
 fn build_controller_no_root() -> Result<Controller> {
     let service = Service::new(
         Box::new(OnlineJudgeRegistryImpl::new()?),
+        crate::submission_impl::registry::build_starter_registry()?,
         Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SessionRepositoryImpl),
@@ -707,6 +713,7 @@ fn build_controller() -> Result<Controller> {
 
     let service = Service::new(
         Box::new(OnlineJudgeRegistryImpl::new()?),
+        crate::submission_impl::registry::build_starter_registry()?,
         Box::new(ContestRepositoryImpl::new(root.clone())),
         Box::new(SolutionRepositoryImpl::new(root.clone())),
         Box::new(SessionRepositoryImpl),

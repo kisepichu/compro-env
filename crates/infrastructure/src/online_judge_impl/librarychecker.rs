@@ -15,13 +15,10 @@
 use anyhow::{Context, Result};
 use domain::entity::{Language, OJKind, Problem, Sample, Session};
 use serde::Deserialize;
-use usecases::online_judge::{
-    ContestMeta, CredentialKind, Credentials, OnlineJudge, SubmitOutcome,
-};
+use usecases::online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge};
 
 const REST_BASE: &str = "https://v3.api.judge.yosupo.jp";
 const STORAGE_BASE: &str = "https://storage.googleapis.com/v2-prod-library-checker-data-public";
-const SUBMISSION_BASE: &str = "https://judge.yosupo.jp/submission";
 /// Public Firebase web API key (from the frontend's `.env.production`; not a secret).
 const FIREBASE_API_KEY: &str = "AIzaSyCmpkoMVbKRDm2H0MJHB0iZ43uQtSqiLV0";
 
@@ -235,38 +232,6 @@ impl OnlineJudge for LibraryChecker {
             constraints_raw,
         }])
     }
-
-    fn submit(
-        &self,
-        _contest_id: &str,
-        problem_id: &str,
-        lang_id: &str,
-        source: &str,
-        session: Option<&Session>,
-    ) -> Result<SubmitOutcome> {
-        let session = session.ok_or_else(|| {
-            anyhow::anyhow!(
-                "LibraryChecker submission requires login. Run `ce login librarychecker`."
-            )
-        })?;
-        let url = format!("{REST_BASE}/submit");
-        let payload = serde_json::json!({
-            "problem": problem_id,
-            "source": source,
-            "lang": lang_id,
-        });
-        let body = self
-            .send_authed(session, |token| {
-                self.client.post(&url).bearer_auth(token).json(&payload)
-            })?
-            .error_for_status()
-            .context("LibraryChecker submission failed")?
-            .text()?;
-        let id = parse_submit_id(&body)?;
-        Ok(SubmitOutcome::Submitted {
-            submission_url: format!("{SUBMISSION_BASE}/{id}"),
-        })
-    }
 }
 
 /// Extracts the Firebase (id_token, refresh_token) pair from a session.
@@ -470,14 +435,6 @@ fn parse_current_username(json: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("not logged in. Run `ce login librarychecker`."))
 }
 
-fn parse_submit_id(json: &str) -> Result<i64> {
-    let v: serde_json::Value =
-        serde_json::from_str(json).context("failed to parse submit response")?;
-    v.get("id")
-        .and_then(|id| id.as_i64())
-        .ok_or_else(|| anyhow::anyhow!("submit response missing `id`"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,12 +518,6 @@ mod tests {
     #[test]
     fn parse_current_username_errors_when_no_user() {
         assert!(parse_current_username("{}").is_err());
-    }
-
-    #[test]
-    fn parse_submit_id_reads_id() {
-        assert_eq!(parse_submit_id(r#"{"id":12345}"#).expect("parse"), 12345);
-        assert!(parse_submit_id("{}").is_err());
     }
 
     #[test]

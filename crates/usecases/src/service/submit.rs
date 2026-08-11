@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use domain::entity::{Language, OJKind, Solution};
 
 use super::Service;
-use crate::online_judge::SubmitOutcome;
+use crate::submission::{SubmissionRequest, SubmissionStart};
 
 /// Everything `submit` needs after source preparation (read file + preprocess hook).
 struct PreparedSubmission {
@@ -16,14 +16,15 @@ struct PreparedSubmission {
 impl Service {
     /// Submits a solution via the OJ recorded in `.ce.toml`.
     ///
-    /// Returns a `SubmitOutcome`: a browser URL to open (AtCoder) or a completed
-    /// submission's URL (OJs with direct submission). The shell layer acts on it.
+    /// Returns a [`SubmissionStart`]. The shell layer maps `UserActionRequired`
+    /// (AtCoder) to a browser open, `Trackable` (LibraryChecker) to a printed
+    /// submission URL, and `Unavailable` to a hard error.
     pub fn submit(
         &self,
         contest_id: &str,
         problem_code: &str,
         solution_name: &str,
-    ) -> Result<SubmitOutcome> {
+    ) -> Result<SubmissionStart> {
         // 0. Run the solution's test command before preparing submission.
         //
         // `Service::test` currently executes `test_command` via `sh -c`, so
@@ -41,18 +42,21 @@ impl Service {
 
         let prepared = self.prepare_submission(contest_id, problem_code, solution_name)?;
 
-        // Submit via the OJ recorded in .ce.toml. The OJ decides whether this is a
-        // direct submission or a browser URL, and enforces any OJ-specific size limits.
-        // Some OJs (e.g. LibraryChecker) require a session; pass it when available.
-        let oj = self.online_judge(&prepared.oj_kind)?;
+        // Delegate to the OJ's SubmissionStarter (spec §8). AtCoder returns
+        // `UserActionRequired`; LibraryChecker returns `Trackable`. Some OJs
+        // (LibraryChecker) require a session; pass it when available.
+        let starter = self.starter_registry.get(&prepared.oj_kind)?;
         let session = self.session_repo.get(&prepared.oj_kind)?;
-        oj.submit(
-            contest_id,
-            &prepared.problem_id,
-            &prepared.lang_id,
-            &prepared.source,
-            session.as_ref(),
-        )
+        let request = SubmissionRequest {
+            online_judge: prepared.oj_kind.clone(),
+            contest_id: contest_id.to_string(),
+            problem_id: prepared.problem_id,
+            lang_id: prepared.lang_id,
+            source: prepared.source,
+        };
+        starter
+            .start_submission(&request, session.as_ref())
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     /// Prepares the submission source and returns it WITHOUT contacting the OJ
@@ -253,13 +257,18 @@ mod tests {
         config::Config,
         online_judge::{
             ContestMeta, CredentialKind, Credentials, OnlineJudge, OnlineJudgeRegistry,
-            SingleOnlineJudge, SubmitOutcome,
+            SingleOnlineJudge,
         },
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
         },
         service::Service,
+        submission::{
+            RecoveryMode, ResultDetailLevel, StartSubmissionError, StarterRegistry,
+            SubmissionAdapterDescriptor, SubmissionHandle, SubmissionMode, SubmissionRequest,
+            SubmissionStart, SubmissionStarter,
+        },
         test_support::SpawningCommandRunner,
     };
     use anyhow::Result;
@@ -270,10 +279,7 @@ mod tests {
 
     // ── Stub helpers ─────────────────────────────────────────────────────────
 
-    struct StubOJ {
-        submit_url: String,
-        panic_on_submit: bool,
-    }
+    struct StubOJ;
     impl OnlineJudge for StubOJ {
         fn name(&self) -> &str {
             "stub"
@@ -298,21 +304,49 @@ mod tests {
         ) -> Result<Vec<Problem>> {
             todo!()
         }
-        fn submit(
+    }
+
+    /// Starter stub mirroring the old `StubOJ::submit`: returns `UserActionRequired`
+    /// with `submit_url`, or panics when `panic_on_submit` is set (used to verify that
+    /// the pre-submit gate short-circuits before the starter is reached).
+    struct StubStarter {
+        submit_url: String,
+        panic_on_submit: bool,
+    }
+    impl SubmissionStarter for StubStarter {
+        fn descriptor(&self) -> SubmissionAdapterDescriptor {
+            stub_descriptor()
+        }
+        fn start_submission(
             &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: Option<&Session>,
-        ) -> Result<SubmitOutcome> {
+            _request: &SubmissionRequest,
+            _session: Option<&Session>,
+        ) -> Result<SubmissionStart, StartSubmissionError> {
             if self.panic_on_submit {
-                panic!("submit must not be called");
+                panic!("start_submission must not be called");
             }
-            Ok(SubmitOutcome::OpenBrowser {
+            Ok(SubmissionStart::UserActionRequired {
                 url: self.submit_url.clone(),
             })
         }
+    }
+
+    fn stub_descriptor() -> SubmissionAdapterDescriptor {
+        SubmissionAdapterDescriptor {
+            name: "stub".to_string(),
+            version: "1".to_string(),
+            submission_mode: SubmissionMode::UnattendedTrackable,
+            result_detail: ResultDetailLevel::TestcaseDetails,
+            recovery_mode: RecoveryMode::BestEffort,
+        }
+    }
+
+    /// Builds a StarterRegistry containing a single starter registered for AtCoder
+    /// (matching `StubContestRepo::get_oj_kind`).
+    fn registry_with(starter: Box<dyn SubmissionStarter>) -> StarterRegistry {
+        let mut registry = StarterRegistry::new();
+        registry.register(OJKind::AtCoder, starter);
+        registry
     }
 
     struct StubSession {
@@ -423,11 +457,10 @@ mod tests {
         }
     }
 
-    /// OJ stub that exposes a configurable `default_lang_id` and records the `lang_id`
-    /// passed to `submit`, so tests can assert how submit resolves it.
+    /// OJ stub that exposes a configurable `default_lang_id`, so tests can assert how
+    /// submit resolves it.
     struct LangCapturingOJ {
         default_lang_id: Option<String>,
-        received_lang_id: Rc<RefCell<Option<String>>>,
     }
     impl OnlineJudge for LangCapturingOJ {
         fn name(&self) -> &str {
@@ -456,17 +489,31 @@ mod tests {
         ) -> Result<Vec<Problem>> {
             todo!()
         }
-        fn submit(
+    }
+
+    /// Starter that records the `lang_id` in the incoming `SubmissionRequest` and
+    /// returns a `Trackable` outcome.
+    struct LangCapturingStarter {
+        received_lang_id: Rc<RefCell<Option<String>>>,
+    }
+    impl SubmissionStarter for LangCapturingStarter {
+        fn descriptor(&self) -> SubmissionAdapterDescriptor {
+            stub_descriptor()
+        }
+        fn start_submission(
             &self,
-            _: &str,
-            _: &str,
-            lang_id: &str,
-            _: &str,
-            _: Option<&Session>,
-        ) -> Result<SubmitOutcome> {
-            *self.received_lang_id.borrow_mut() = Some(lang_id.to_string());
-            Ok(SubmitOutcome::Submitted {
-                submission_url: "https://example.test/submission/1".to_string(),
+            request: &SubmissionRequest,
+            _session: Option<&Session>,
+        ) -> Result<SubmissionStart, StartSubmissionError> {
+            *self.received_lang_id.borrow_mut() = Some(request.lang_id.clone());
+            Ok(SubmissionStart::Trackable {
+                handle: SubmissionHandle {
+                    online_judge: OJKind::AtCoder,
+                    submission_id: "1".to_string(),
+                    submission_url: "https://example.test/submission/1".to_string(),
+                    locator: None,
+                    submitted_at: chrono::Utc::now(),
+                },
             })
         }
     }
@@ -484,11 +531,14 @@ mod tests {
         )
         .unwrap();
         let received = Rc::new(RefCell::new(None));
+        let starter = Box::new(LangCapturingStarter {
+            received_lang_id: Rc::clone(&received),
+        });
         let service = Service::new(
             Box::new(SingleOnlineJudge::new(Box::new(LangCapturingOJ {
                 default_lang_id,
-                received_lang_id: Rc::clone(&received),
             }))),
+            registry_with(starter),
             Box::new(StubContestRepo {
                 problem: default_problem(),
             }),
@@ -540,10 +590,11 @@ mod tests {
         panic_on_submit: bool,
     ) -> Service {
         Service::new(
-            Box::new(SingleOnlineJudge::new(Box::new(StubOJ {
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ))),
+            registry_with(Box::new(StubStarter {
                 submit_url,
                 panic_on_submit,
-            }))),
+            })),
             Box::new(StubContestRepo {
                 problem: default_problem(),
             }),
@@ -586,6 +637,10 @@ mod tests {
 
     /// submit resolves the OnlineJudge using the OJKind recorded in .ce.toml
     /// (ContestRepository::get_oj_kind), not a fixed implementation.
+    ///
+    /// The submit code path calls `self.online_judge(&oj_kind)?` to resolve the OJ's
+    /// `default_lang_id` fallback, so the RecordingRegistry still observes the OJKind
+    /// resolved from `.ce.toml`.
     #[test]
     fn submit_resolves_online_judge_from_contest_oj_kind() {
         let dir = tempfile::tempdir().unwrap();
@@ -595,14 +650,16 @@ mod tests {
         )
         .unwrap();
         let requested = Rc::new(RefCell::new(vec![]));
+        let starter = Box::new(StubStarter {
+            submit_url: "https://atcoder.jp/contests/abc001/submit#ce=XXX".to_string(),
+            panic_on_submit: false,
+        });
         let service = Service::new(
             Box::new(RecordingRegistry {
-                oj: StubOJ {
-                    submit_url: "https://atcoder.jp/contests/abc001/submit#ce=XXX".to_string(),
-                    panic_on_submit: false,
-                },
+                oj: StubOJ,
                 requested: Rc::clone(&requested),
             }),
+            registry_with(starter),
             // StubContestRepo::get_oj_kind returns OJKind::AtCoder.
             Box::new(StubContestRepo {
                 problem: default_problem(),
@@ -628,7 +685,8 @@ mod tests {
         );
     }
 
-    /// Happy path: submit returns the OpenBrowser outcome with the URL from StubOJ.
+    /// Happy path: submit returns the `UserActionRequired` outcome with the URL from
+    /// the starter.
     #[test]
     fn submit_happy_path_returns_open_browser_outcome() {
         let dir = tempfile::tempdir().unwrap();
@@ -647,7 +705,10 @@ mod tests {
             false,
         );
         let result = service.submit("abc001", "a", "main").unwrap();
-        assert_eq!(result, SubmitOutcome::OpenBrowser { url: expected_url });
+        match result {
+            SubmissionStart::UserActionRequired { url } => assert_eq!(url, expected_url),
+            other => panic!("expected UserActionRequired, got {other:?}"),
+        }
     }
 
     /// A non-zero pre-submit test exits before source reading or URL generation.
@@ -759,55 +820,38 @@ mod tests {
 
     // ── preprocess hook tests (Unix-only: the hook runs via `sh -c`) ───────────
 
-    /// OJ stub that records the `source` passed to `submit`, so preprocess tests can
-    /// assert what was actually submitted.
+    /// Starter that records the `source` in the incoming `SubmissionRequest`, so
+    /// preprocess tests can assert what was actually submitted.
     #[cfg(unix)]
-    struct SourceCapturingOJ {
+    struct SourceCapturingStarter {
         received_source: Rc<RefCell<Option<String>>>,
     }
     #[cfg(unix)]
-    impl OnlineJudge for SourceCapturingOJ {
-        fn name(&self) -> &str {
-            "stub"
+    impl SubmissionStarter for SourceCapturingStarter {
+        fn descriptor(&self) -> SubmissionAdapterDescriptor {
+            stub_descriptor()
         }
-        fn credential_kind(&self) -> CredentialKind {
-            CredentialKind::Cookie
-        }
-        fn login(&self, _: &Credentials) -> Result<Session> {
-            todo!()
-        }
-        fn whoami(&self, _: &Session) -> Result<String> {
-            Ok(String::new())
-        }
-        fn get_contest_meta(&self, _: &str) -> Result<ContestMeta> {
-            todo!()
-        }
-        fn get_problems_detail(
+        fn start_submission(
             &self,
-            _: &str,
-            _: Option<&Session>,
-            _: &[(String, String)],
-        ) -> Result<Vec<Problem>> {
-            todo!()
-        }
-        fn submit(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            source: &str,
-            _: Option<&Session>,
-        ) -> Result<SubmitOutcome> {
-            *self.received_source.borrow_mut() = Some(source.to_string());
-            Ok(SubmitOutcome::Submitted {
-                submission_url: "https://example.test/submission/1".to_string(),
+            request: &SubmissionRequest,
+            _session: Option<&Session>,
+        ) -> Result<SubmissionStart, StartSubmissionError> {
+            *self.received_source.borrow_mut() = Some(request.source.clone());
+            Ok(SubmissionStart::Trackable {
+                handle: SubmissionHandle {
+                    online_judge: OJKind::AtCoder,
+                    submission_id: "1".to_string(),
+                    submission_url: "https://example.test/submission/1".to_string(),
+                    locator: None,
+                    submitted_at: chrono::Utc::now(),
+                },
             })
         }
     }
 
-    /// Builds a Service whose OJ records the submitted source and whose config carries
-    /// the given preprocess command and source. Returns the service, the captured-source
-    /// handle, and the TempDir (kept alive for the test).
+    /// Builds a Service whose starter records the submitted source and whose config
+    /// carries the given preprocess command and source. Returns the service, the
+    /// captured-source handle, and the TempDir (kept alive for the test).
     #[cfg(unix)]
     fn make_preprocess_service(
         preprocess: Option<String>,
@@ -820,10 +864,12 @@ mod tests {
         )
         .unwrap();
         let received = Rc::new(RefCell::new(None));
+        let starter = Box::new(SourceCapturingStarter {
+            received_source: Rc::clone(&received),
+        });
         let service = Service::new(
-            Box::new(SingleOnlineJudge::new(Box::new(SourceCapturingOJ {
-                received_source: Rc::clone(&received),
-            }))),
+            Box::new(SingleOnlineJudge::new(Box::new(StubOJ))),
+            registry_with(starter),
             Box::new(StubContestRepo {
                 problem: default_problem(),
             }),

@@ -10,6 +10,7 @@ use crate::{
         contest_repository::ContestRepository, session_repository::SessionRepository,
         solution_repository::SolutionRepository,
     },
+    submission::StarterRegistry,
 };
 
 pub mod init;
@@ -22,6 +23,7 @@ pub mod whoami;
 
 pub struct Service {
     pub(crate) oj_registry: Box<dyn OnlineJudgeRegistry>,
+    pub(crate) starter_registry: StarterRegistry,
     pub(crate) contest_repo: Box<dyn ContestRepository>,
     pub(crate) solution_repo: Box<dyn SolutionRepository>,
     pub(crate) session_repo: Box<dyn SessionRepository>,
@@ -32,6 +34,7 @@ pub struct Service {
 impl Service {
     pub fn new(
         oj_registry: Box<dyn OnlineJudgeRegistry>,
+        starter_registry: StarterRegistry,
         contest_repo: Box<dyn ContestRepository>,
         solution_repo: Box<dyn SolutionRepository>,
         session_repo: Box<dyn SessionRepository>,
@@ -40,6 +43,7 @@ impl Service {
     ) -> Self {
         Self {
             oj_registry,
+            starter_registry,
             contest_repo,
             solution_repo,
             session_repo,

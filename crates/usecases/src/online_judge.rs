@@ -61,31 +61,6 @@ pub trait OnlineJudge {
         session: Option<&Session>,
         problem_id_hints: &[(String, String)],
     ) -> Result<Vec<Problem>>;
-
-    /// Submits a solution.
-    ///
-    /// Returns a `SubmitOutcome`: OJs blocked from direct HTTP submission (AtCoder, due
-    /// to Cloudflare Turnstile) return a browser URL to open; OJs with an open submission
-    /// API (LibraryChecker) submit directly and return the resulting submission URL.
-    /// `session` is required by OJs whose submission needs authentication.
-    fn submit(
-        &self,
-        contest_id: &str,
-        problem_id: &str,
-        lang_id: &str,
-        source: &str,
-        session: Option<&Session>,
-    ) -> Result<SubmitOutcome>;
-}
-
-/// The result of `OnlineJudge::submit`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SubmitOutcome {
-    /// The caller should open this URL in the browser to complete submission
-    /// (e.g. AtCoder + Tampermonkey userscript; see docs/userscript.md).
-    OpenBrowser { url: String },
-    /// The solution was submitted directly; this is the submission's page URL.
-    Submitted { submission_url: String },
 }
 
 /// Resolves the `OnlineJudge` implementation for a given `OJKind`.

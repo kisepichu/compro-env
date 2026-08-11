@@ -4,9 +4,7 @@ mod tests {
     use chrono::{DateTime, TimeZone, Utc};
     use domain::entity::{Problem, Session};
 
-    use crate::online_judge::{
-        ContestMeta, CredentialKind, Credentials, OnlineJudge, SubmitOutcome,
-    };
+    use crate::online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge};
 
     /// Stub implementation of OnlineJudge used only in these tests.
     struct MockOJ {
@@ -44,17 +42,6 @@ mod tests {
             _problem_id_hints: &[(String, String)],
         ) -> Result<Vec<Problem>> {
             Ok(vec![])
-        }
-
-        fn submit(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: Option<&Session>,
-        ) -> Result<SubmitOutcome> {
-            todo!()
         }
     }
 
