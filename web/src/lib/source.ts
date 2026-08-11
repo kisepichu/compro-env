@@ -26,6 +26,7 @@ import type { ThemedToken } from "@shikijs/types";
 import { createHighlighter, type BundledLanguage, type Highlighter } from "shiki";
 
 import { escapeAttribute, escapeHtml } from "./pages/escape.ts";
+import { sanitizeExternalUrl } from "./safe-url.ts";
 
 // ---- Errors ----
 
@@ -136,10 +137,6 @@ function utf8ByteLength(input: string): number {
   return Buffer.byteLength(input, "utf8");
 }
 
-function renderTokensFallback(lines: readonly string[]): string[] {
-  return lines.map((line) => escapeHtml(line));
-}
-
 function renderTokensShiki(tokens: readonly ThemedToken[]): string {
   return tokens
     .map((t) => {
@@ -172,17 +169,18 @@ function renderLine(
 function renderToolbar(opts: RenderSourceOptions): string {
   const langLabel = `<span class="language">${escapeHtml(opts.syntaxHighlight)}</span>`;
   const pathLabel = `<code class="path">${escapeHtml(opts.sourcePath)}</code>`;
+  const safeRepoBase = sanitizeExternalUrl(opts.repositoryUrl, {
+    stripTrailingSlash: true,
+  });
   let repoLink = "";
   if (
-    opts.repositoryUrl !== null &&
-    opts.repositoryUrl !== undefined &&
-    opts.repositoryUrl.length > 0 &&
+    safeRepoBase !== null &&
     opts.commitSha !== null &&
     opts.commitSha !== undefined &&
     opts.commitSha.length > 0
   ) {
     const url =
-      `${opts.repositoryUrl}/blob/${encodeURIComponent(opts.commitSha)}/` +
+      `${safeRepoBase}/blob/${encodeURIComponent(opts.commitSha)}/` +
       opts.sourcePath
         .split("/")
         .filter((p) => p.length > 0)
@@ -260,10 +258,6 @@ export async function renderSource(
     }
     return renderTokensShiki(tokens);
   });
-  // If Shiki returned zero tokens for a non-empty line (should not
-  // happen for a properly loaded grammar) we already fell back per-line
-  // above via `renderTokensFallback` — so we don't need it separately.
-  void renderTokensFallback;
 
   const lineHtmls: string[] = contentHtmls.map((c, i) => renderLine(i + 1, c));
 
