@@ -1,0 +1,15 @@
+---
+/**
+ * Static search shell (spec §12.10, handoff §10). Client-side search UI
+ * lands in plan 053; for now the page is a semantic stub so the header
+ * `Search` link and global search form have a valid destination.
+ */
+import { loadSiteData } from "@/lib/site-data.ts";
+import { renderSearchPage } from "@/lib/pages/search.ts";
+import { resolveUrlConfig } from "@/lib/pages/config.ts";
+
+const config = resolveUrlConfig();
+const siteData = loadSiteData();
+const html = renderSearchPage(config, siteData);
+---
+<Fragment set:html={html} />
