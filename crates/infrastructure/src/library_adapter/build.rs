@@ -120,13 +120,14 @@ pub enum BuildError {
         source: AdapterRunError,
     },
     #[error(
-        "handshake for {language:?} reported language {actual:?}; \
-         expected {expected:?}"
+        "handshake for {language:?} returned a non-empty response \
+         ({libraries} libraries, {solutions} solutions); empty analysis is \
+         required for the handshake smoke test"
     )]
-    HandshakeLanguageMismatch {
-        expected: String,
-        actual: String,
+    HandshakeNonEmptyResponse {
         language: String,
+        libraries: usize,
+        solutions: usize,
     },
     #[error(
         "handshake for {language:?} reported adapter identity {actual_name:?} \
@@ -274,11 +275,12 @@ pub fn build_adapters(
 
     let final_dir = builds_dir.join(build_id.as_str());
     if final_dir.exists() {
-        // Spec §6.9: never delete an existing build set; the caller already
-        // asked to (re)publish this exact id. Two possibilities here: the old
-        // set is intact and safe to reuse, or it is inconsistent and we
-        // should not clobber it. Fall through to validation via
-        // `inspect_build_state`.
+        // Spec §6.9: never delete an existing build set. We do NOT try to
+        // reuse it either — the caller should have skipped the build by
+        // observing the current `bin` symlink through `inspect_build_state`.
+        // If control reaches here the on-disk state disagrees with what
+        // `inspect_build_state` reported before this driver ran, so fail
+        // fast and leave the operator to reconcile it manually.
         drop_staging(&staging_dir);
         return Err(BuildError::Cleanup {
             path: final_dir.display().to_string(),
@@ -323,14 +325,21 @@ pub fn build_adapters(
     // 11. Re-validate the published set with the same code path analysis will
     //     run before invoking adapters. This guarantees the driver never
     //     succeeds unless the resulting state is `UsableBuildSet`-valid.
+    //     Spec §6.9 requires the marker to survive any failure, so if this
+    //     final check trips we restore the marker before returning.
     let expected = ExpectedBuild {
         input_digest: request.input_digest.clone(),
         target_platform: request.target_platform.clone(),
         build_profile: request.build_profile.clone(),
         protocol_version: request.protocol_version,
     };
-    let set = inspect_build_state(&request.analyzer_root, &expected)?;
-    Ok(set)
+    match inspect_build_state(&request.analyzer_root, &expected) {
+        Ok(set) => Ok(set),
+        Err(err) => {
+            let _ = write_and_fsync(&marker_path, marker_body().as_bytes());
+            Err(err.into())
+        }
+    }
 }
 
 fn drop_staging(staging_dir: &Path) {
@@ -512,19 +521,14 @@ pub fn handshake_adapter(
             language: language.to_string(),
             source,
         })?;
-    // Response schema/version is enforced by the runner; we only assert that
-    // the handshake did not emit libraries or solutions and that the reported
-    // language matches. (The response type does not carry `language` — that
-    // is validated by the runner's own schema check.)
+    // Response schema/version is enforced by the runner; the handshake is
+    // spec §6.9's empty-request smoke test, so `libraries` and `solutions`
+    // must both be empty. (`language` itself is not echoed in the response.)
     if !response.libraries.is_empty() || !response.solutions.is_empty() {
-        return Err(BuildError::HandshakeLanguageMismatch {
+        return Err(BuildError::HandshakeNonEmptyResponse {
             language: language.to_string(),
-            expected: "empty analysis".into(),
-            actual: format!(
-                "{} libraries, {} solutions",
-                response.libraries.len(),
-                response.solutions.len()
-            ),
+            libraries: response.libraries.len(),
+            solutions: response.solutions.len(),
         });
     }
     Ok(response.adapter)

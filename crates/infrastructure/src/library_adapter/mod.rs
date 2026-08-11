@@ -4,6 +4,9 @@
 //! can stay platform-agnostic.
 
 pub mod archive;
+// `build` uses POSIX-only APIs (`std::os::unix::fs::symlink`, `PermissionsExt`,
+// `ExitStatusExt`); gate the module the same way we gate the process runner.
+#[cfg(unix)]
 pub mod build;
 pub mod build_state;
 pub mod download;
