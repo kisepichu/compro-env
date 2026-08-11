@@ -91,6 +91,13 @@ class Parser {
                         "unsupported string escape (only \\\\ and \\\" are recognized)");
                 }
             } else {
+                // JSON forbids unescaped control characters (U+0000..U+001F)
+                // in string literals; reject them so the strict adapter never
+                // silently swallows malformed input.
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    throw ProtocolError(
+                        "unescaped control character in string");
+                }
                 out.push_back(c);
             }
         }

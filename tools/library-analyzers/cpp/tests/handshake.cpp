@@ -121,6 +121,14 @@ void test_reject_non_empty_libraries() {
     CE_EXPECT_THROWS(ce_cpp::parse_request(bad), ce_cpp::ProtocolError);
 }
 
+void test_reject_unescaped_control_character() {
+    // A literal newline (0x0A) inside a string is not permitted by JSON. The
+    // strict parser must surface a ProtocolError instead of quietly accepting
+    // the byte.
+    std::string bad = "{\"schema_version\": 1, \"repository_root\": \"a\nb\", \"language\": \"cpp\", \"libraries\": [], \"solutions\": []}";
+    CE_EXPECT_THROWS(ce_cpp::parse_request(bad), ce_cpp::ProtocolError);
+}
+
 void test_roundtrip_response() {
     ce_cpp::AnalysisResponse resp;
     resp.schema_version = ce_cpp::SCHEMA_VERSION;
@@ -153,6 +161,7 @@ int main() {
     test_reject_wrong_schema_version();
     test_reject_missing_required_key();
     test_reject_non_empty_libraries();
+    test_reject_unescaped_control_character();
     test_roundtrip_response();
     if (failures > 0) {
         std::cerr << failures << " C++ handshake assertions failed" << std::endl;

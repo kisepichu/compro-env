@@ -158,35 +158,45 @@ fn extract_tar_entries<R: Read>(
                 })?;
             }
             EntryType::Symlink => {
-                let target = destination.join(&relative);
-                enforce_within(&target, destination, &display)?;
-                if !seen.insert(relative.clone()) {
-                    return Err(ArchiveError::Duplicate {
-                        entry: display.clone(),
-                    });
-                }
-                let link_target = entry
-                    .link_name()
-                    .map_err(|source| ArchiveError::Invalid { source })?
-                    .ok_or(ArchiveError::UnsafeEntry {
-                        entry: display.clone(),
-                        reason: "symlink is missing a target",
-                    })?
-                    .into_owned();
-                let relative_dir = relative.parent().unwrap_or(Path::new(""));
-                check_symlink_target(relative_dir, &link_target, destination, &display)?;
-                if let Some(parent) = target.parent() {
-                    fs::create_dir_all(parent).map_err(|source| ArchiveError::Write {
-                        path: parent.display().to_string(),
-                        source,
+                #[cfg(unix)]
+                {
+                    let target = destination.join(&relative);
+                    enforce_within(&target, destination, &display)?;
+                    if !seen.insert(relative.clone()) {
+                        return Err(ArchiveError::Duplicate {
+                            entry: display.clone(),
+                        });
+                    }
+                    let link_target = entry
+                        .link_name()
+                        .map_err(|source| ArchiveError::Invalid { source })?
+                        .ok_or(ArchiveError::UnsafeEntry {
+                            entry: display.clone(),
+                            reason: "symlink is missing a target",
+                        })?
+                        .into_owned();
+                    let relative_dir = relative.parent().unwrap_or(Path::new(""));
+                    check_symlink_target(relative_dir, &link_target, destination, &display)?;
+                    if let Some(parent) = target.parent() {
+                        fs::create_dir_all(parent).map_err(|source| ArchiveError::Write {
+                            path: parent.display().to_string(),
+                            source,
+                        })?;
+                    }
+                    std::os::unix::fs::symlink(&link_target, &target).map_err(|source| {
+                        ArchiveError::Write {
+                            path: target.display().to_string(),
+                            source,
+                        }
                     })?;
                 }
-                std::os::unix::fs::symlink(&link_target, &target).map_err(|source| {
-                    ArchiveError::Write {
-                        path: target.display().to_string(),
-                        source,
-                    }
-                })?;
+                #[cfg(not(unix))]
+                {
+                    return Err(ArchiveError::UnsafeEntry {
+                        entry: display,
+                        reason: "symlinks are only supported on Unix targets",
+                    });
+                }
             }
             EntryType::Link => {
                 return Err(ArchiveError::UnsafeEntry {
@@ -462,6 +472,7 @@ mod tests {
         gz.finish().expect("finish gz")
     }
 
+    #[cfg(unix)]
     #[test]
     fn extract_tar_gz_allows_safe_relative_symlink() {
         let bytes = build_tar_gz_with_symlink("bin/real", b"binary\n", "bin/alias", "real");

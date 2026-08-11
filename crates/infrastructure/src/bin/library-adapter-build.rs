@@ -15,7 +15,7 @@ use domain::adapter_build::{ExpectedBuild, TargetPlatform};
 use domain::adapter_prepare::ExpectedPreparedSet;
 use infrastructure::library_adapter::build::{BuildRequest, build_adapters};
 use infrastructure::library_adapter::build_state::{BuildStateError, inspect_build_state};
-use infrastructure::library_adapter::cpp_toolchain::select_cpp_toolchain;
+use infrastructure::library_adapter::cpp_toolchain::{CppToolchainError, select_cpp_toolchain};
 use infrastructure::library_adapter::inputs::{calculate_input_digest, load_build_inputs};
 use infrastructure::library_adapter::language_plans::{
     cpp_build_plan, rust_build_plan, sanitized_language_env,
@@ -160,18 +160,31 @@ fn run(args: Args) -> anyhow::Result<()> {
     let git_commit_sha = read_git_commit_sha(&repository_root)?;
 
     let mut language_plans = vec![rust_build_plan(&repository_root)];
-    // Plan 045 Task 2: attach the C++ plan when the current target is one of
-    // the three officially supported LLVM 22.1.0 triples AND the prepared set
-    // actually has that install unpacked. `cpp_build_plan` returns
-    // `PreparedInstallMissing` in the interim between `prepare` and `build`
-    // when the operator is on an unsupported host — treat both as "skip C++"
-    // rather than a hard error so a Rust-only rebuild still works.
+    // Plan 045 Task 2 wiring for the C++ adapter.
+    //
+    // - Unsupported target platform → silently skip. `select_cpp_toolchain`
+    //   already rejects any triple outside {linux/x86_64, linux/aarch64,
+    //   macos/aarch64}, and we deliberately do NOT fall back to Apple Clang,
+    //   Homebrew, or `/usr/bin/clang` (spec §6.7). A Rust-only build is the
+    //   correct outcome on those hosts.
+    // - Supported target, prepared LLVM install not on disk → warn and skip.
+    //   This is the interim between `prepare` and `build`; forcing a hard
+    //   error here would block a Rust-only rebuild the operator ran on
+    //   purpose.
+    // - Any other cpp_build_plan error → propagate. Layout / version failures
+    //   must not be swallowed because they mean the prepared set is corrupt
+    //   or the wrong LLVM revision was published.
     if select_cpp_toolchain(&target_platform).is_ok() {
         match cpp_build_plan(&repository_root, &target_platform, &prepared_set) {
             Ok(plan) => language_plans.push(plan),
-            Err(err) => {
-                eprintln!("library-adapter-build: skipping C++ adapter: {err}");
+            Err(CppToolchainError::PreparedInstallMissing { archive_name, path }) => {
+                eprintln!(
+                    "library-adapter-build: skipping C++ adapter: prepared LLVM \
+                     install {archive_name:?} not on disk at {path}. Run \
+                     `tools/library-analyzers/prepare` first to build ce-cpp."
+                );
             }
+            Err(err) => return Err(err.into()),
         }
     }
 
