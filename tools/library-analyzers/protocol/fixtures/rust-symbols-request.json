@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "repository_root": "<REPOSITORY_ROOT>",
+  "language": "rust",
+  "libraries": [
+    { "path": "libraries/rust/symbols/basic.rs" },
+    { "path": "libraries/rust/symbols/nested.rs" },
+    { "path": "libraries/rust/symbols/unicode.rs" },
+    { "path": "libraries/rust/symbols/macros.rs" }
+  ],
+  "solutions": []
+}

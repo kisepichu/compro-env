@@ -1,0 +1,683 @@
+{
+  "libraries": [
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "display": "item-level macro invocation may hide use / mod statements",
+            "key": "macro:macro_rules",
+            "kind": "unresolved",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 54
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 1,
+                "line": 50
+              }
+            }
+          }
+        ],
+        "state": "partial"
+      },
+      "diagnostics": [],
+      "path": "libraries/rust/symbols/basic.rs",
+      "symbol_analysis": {
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "struct",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 4
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            },
+            "name": "Point",
+            "search_names": [
+              "Point"
+            ]
+          },
+          {
+            "kind": "enum",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 9
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 1,
+                "line": 5
+              }
+            },
+            "name": "Color",
+            "search_names": [
+              "Color"
+            ]
+          },
+          {
+            "kind": "enum_variant",
+            "location": {
+              "end": {
+                "column": 8,
+                "line": 6
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 6
+              }
+            },
+            "name": "Red",
+            "qualified_name": "Color::Red",
+            "search_names": [
+              "Red",
+              "Color::Red"
+            ]
+          },
+          {
+            "kind": "enum_variant",
+            "location": {
+              "end": {
+                "column": 10,
+                "line": 7
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 7
+              }
+            },
+            "name": "Green",
+            "qualified_name": "Color::Green",
+            "search_names": [
+              "Green",
+              "Color::Green"
+            ]
+          },
+          {
+            "kind": "enum_variant",
+            "location": {
+              "end": {
+                "column": 9,
+                "line": 8
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 8
+              }
+            },
+            "name": "Blue",
+            "qualified_name": "Color::Blue",
+            "search_names": [
+              "Blue",
+              "Color::Blue"
+            ]
+          },
+          {
+            "kind": "union",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 13
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 1,
+                "line": 10
+              }
+            },
+            "name": "Bytes",
+            "search_names": [
+              "Bytes"
+            ]
+          },
+          {
+            "kind": "trait",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 19
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 1,
+                "line": 14
+              }
+            },
+            "name": "Monoid",
+            "search_names": [
+              "Monoid"
+            ]
+          },
+          {
+            "kind": "type",
+            "location": {
+              "end": {
+                "column": 15,
+                "line": 15
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 15
+              }
+            },
+            "name": "Item",
+            "qualified_name": "Monoid::Item",
+            "search_names": [
+              "Item",
+              "Monoid::Item"
+            ]
+          },
+          {
+            "kind": "const",
+            "location": {
+              "end": {
+                "column": 30,
+                "line": 16
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 16
+              }
+            },
+            "name": "NAME",
+            "qualified_name": "Monoid::NAME",
+            "search_names": [
+              "NAME",
+              "Monoid::NAME"
+            ]
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 27,
+                "line": 17
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 17
+              }
+            },
+            "name": "identity",
+            "qualified_name": "Monoid::identity",
+            "search_names": [
+              "identity",
+              "Monoid::identity"
+            ]
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 43,
+                "line": 18
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 18
+              }
+            },
+            "name": "combine",
+            "qualified_name": "Monoid::combine",
+            "search_names": [
+              "combine",
+              "Monoid::combine"
+            ]
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 6,
+                "line": 23
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 21
+              }
+            },
+            "name": "origin",
+            "qualified_name": "Point::origin",
+            "search_names": [
+              "origin",
+              "Point::origin"
+            ]
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 6,
+                "line": 29
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 24
+              }
+            },
+            "name": "shifted",
+            "qualified_name": "Point::shifted",
+            "search_names": [
+              "shifted",
+              "Point::shifted"
+            ]
+          },
+          {
+            "kind": "type",
+            "location": {
+              "end": {
+                "column": 21,
+                "line": 32
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 32
+              }
+            },
+            "name": "Item",
+            "qualified_name": "Point::Item",
+            "search_names": [
+              "Item",
+              "Point::Item"
+            ]
+          },
+          {
+            "kind": "const",
+            "location": {
+              "end": {
+                "column": 40,
+                "line": 33
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 33
+              }
+            },
+            "name": "NAME",
+            "qualified_name": "Point::NAME",
+            "search_names": [
+              "NAME",
+              "Point::NAME"
+            ]
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 6,
+                "line": 36
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 34
+              }
+            },
+            "name": "identity",
+            "qualified_name": "Point::identity",
+            "search_names": [
+              "identity",
+              "Point::identity"
+            ]
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 6,
+                "line": 42
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 5,
+                "line": 37
+              }
+            },
+            "name": "combine",
+            "qualified_name": "Point::combine",
+            "search_names": [
+              "combine",
+              "Point::combine"
+            ]
+          },
+          {
+            "kind": "fn",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 46
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 1,
+                "line": 44
+              }
+            },
+            "name": "zero",
+            "search_names": [
+              "zero"
+            ]
+          },
+          {
+            "kind": "type",
+            "location": {
+              "end": {
+                "column": 29,
+                "line": 47
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 1,
+                "line": 47
+              }
+            },
+            "name": "Coord",
+            "search_names": [
+              "Coord"
+            ]
+          },
+          {
+            "kind": "const",
+            "location": {
+              "end": {
+                "column": 26,
+                "line": 48
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 1,
+                "line": 48
+              }
+            },
+            "name": "PI",
+            "search_names": [
+              "PI"
+            ]
+          },
+          {
+            "kind": "static",
+            "location": {
+              "end": {
+                "column": 33,
+                "line": 49
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 1,
+                "line": 49
+              }
+            },
+            "name": "NAME",
+            "search_names": [
+              "NAME"
+            ]
+          },
+          {
+            "kind": "macro",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 54
+              },
+              "path": "libraries/rust/symbols/basic.rs",
+              "start": {
+                "column": 1,
+                "line": 50
+              }
+            },
+            "name": "shout",
+            "search_names": [
+              "shout"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/rust/symbols/nested.rs",
+      "symbol_analysis": {
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "mod",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 7
+              },
+              "path": "libraries/rust/symbols/nested.rs",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            },
+            "name": "outer",
+            "search_names": [
+              "outer"
+            ]
+          },
+          {
+            "kind": "struct",
+            "location": {
+              "end": {
+                "column": 22,
+                "line": 2
+              },
+              "path": "libraries/rust/symbols/nested.rs",
+              "start": {
+                "column": 5,
+                "line": 2
+              }
+            },
+            "name": "Outer",
+            "qualified_name": "outer::Outer",
+            "search_names": [
+              "Outer",
+              "outer::Outer"
+            ]
+          },
+          {
+            "kind": "mod",
+            "location": {
+              "end": {
+                "column": 6,
+                "line": 6
+              },
+              "path": "libraries/rust/symbols/nested.rs",
+              "start": {
+                "column": 5,
+                "line": 3
+              }
+            },
+            "name": "inner",
+            "qualified_name": "outer::inner",
+            "search_names": [
+              "inner",
+              "outer::inner"
+            ]
+          },
+          {
+            "kind": "struct",
+            "location": {
+              "end": {
+                "column": 26,
+                "line": 4
+              },
+              "path": "libraries/rust/symbols/nested.rs",
+              "start": {
+                "column": 9,
+                "line": 4
+              }
+            },
+            "name": "Inner",
+            "qualified_name": "outer::inner::Inner",
+            "search_names": [
+              "Inner",
+              "outer::inner::Inner"
+            ]
+          },
+          {
+            "kind": "fn",
+            "location": {
+              "end": {
+                "column": 25,
+                "line": 5
+              },
+              "path": "libraries/rust/symbols/nested.rs",
+              "start": {
+                "column": 9,
+                "line": 5
+              }
+            },
+            "name": "deep",
+            "qualified_name": "outer::inner::deep",
+            "search_names": [
+              "deep",
+              "outer::inner::deep"
+            ]
+          },
+          {
+            "kind": "fn",
+            "location": {
+              "end": {
+                "column": 16,
+                "line": 8
+              },
+              "path": "libraries/rust/symbols/nested.rs",
+              "start": {
+                "column": 1,
+                "line": 8
+              }
+            },
+            "name": "top",
+            "search_names": [
+              "top"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/rust/symbols/unicode.rs",
+      "symbol_analysis": {
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "struct",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 4
+              },
+              "path": "libraries/rust/symbols/unicode.rs",
+              "start": {
+                "column": 1,
+                "line": 2
+              }
+            },
+            "name": "東京",
+            "search_names": [
+              "東京"
+            ]
+          },
+          {
+            "kind": "fn",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 7
+              },
+              "path": "libraries/rust/symbols/unicode.rs",
+              "start": {
+                "column": 1,
+                "line": 5
+              }
+            },
+            "name": "hello",
+            "search_names": [
+              "hello"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "display": "item-level macro invocation may hide use / mod statements",
+            "key": "macro:lazy_static::lazy_static",
+            "kind": "unresolved",
+            "location": {
+              "end": {
+                "column": 54,
+                "line": 1
+              },
+              "path": "libraries/rust/symbols/macros.rs",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            }
+          }
+        ],
+        "state": "partial"
+      },
+      "diagnostics": [],
+      "path": "libraries/rust/symbols/macros.rs",
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": [
+          {
+            "kind": "struct",
+            "location": {
+              "end": {
+                "column": 19,
+                "line": 2
+              },
+              "path": "libraries/rust/symbols/macros.rs",
+              "start": {
+                "column": 1,
+                "line": 2
+              }
+            },
+            "name": "Public",
+            "search_names": [
+              "Public"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "solutions": []
+}
