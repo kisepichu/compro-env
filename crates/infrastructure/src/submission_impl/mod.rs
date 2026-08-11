@@ -7,7 +7,11 @@
 //!
 //! Only starters live here today; pollers and recovery adapters land with
 //! plan 058 (LibraryChecker lifecycle).
+//!
+//! LibraryChecker's starter lives in `online_judge_impl::librarychecker::submission`
+//! alongside the polling and recovery adapters (plan 058 Task 1 split).
 
 pub mod atcoder;
-pub mod librarychecker;
+pub mod poller;
+pub mod recovery;
 pub mod registry;

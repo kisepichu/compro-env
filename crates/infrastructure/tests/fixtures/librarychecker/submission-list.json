@@ -1,0 +1,29 @@
+{
+  "submissions": [
+    {
+      "id": 1234,
+      "problem_name": "aplusb",
+      "problem_title": "A + B",
+      "user_name": "alice",
+      "lang": "rust",
+      "is_latest": true,
+      "status": "AC",
+      "time": 12.5,
+      "memory": 4096,
+      "submission_time": "2024-01-15T10:00:00Z"
+    },
+    {
+      "id": 1235,
+      "problem_name": "aplusb",
+      "problem_title": "A + B",
+      "user_name": "alice",
+      "lang": "rust",
+      "is_latest": false,
+      "status": "WA",
+      "time": 15.0,
+      "memory": 4096,
+      "submission_time": "2024-01-15T09:55:00Z"
+    }
+  ],
+  "count": 2
+}

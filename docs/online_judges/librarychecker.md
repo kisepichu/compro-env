@@ -42,11 +42,18 @@ LibraryChecker は段階的に追加する。Phase ごとの完了時状態と�
 - **Phase E (TASK-037)**: config (lang_id) / session は D で実装済みのため、E はクローズ作業として
   仕様ドリフトの解消 (本ドキュメント・README・spec.md の同期) と LC 固有の lang_id 解決テスト追加を
   行った。**実装済み。**
+- **Phase F (PLAN-058 Task 1)**: `online_judge_impl/librarychecker.rs` を `librarychecker/` ディレクトリに
+  分割 (`mod.rs`, `auth.rs`, `problem.rs`, `submission.rs`, `schema.rs`)。`LibraryCheckerStarter` を
+  `submission_impl/librarychecker.rs` から `online_judge_impl/librarychecker/submission.rs` へ移動し、
+  ポーリング・リカバリアダプター (Task 2-3) の置き場を確保した。OpenAPI コミット `9a9ee40f` を記録し、
+  サニタイズ済みフィクスチャ (`submission-list.json`, `submission-pending.json`, `submission-accepted.json`)
+  と `schema.rs` のパーステストを追加した。**実装済み。**
 
 ## エンドポイント (調査結果)
 
 REST API ベース URL: `https://v3.api.judge.yosupo.jp` (旧 gRPC から REST へ移行済み)。
 定義元: `yosupo06/library-checker-judge` の `restapi/openapi/openapi.yaml`。
+ピン留めコミット (plan 058 Task 1 時点): `9a9ee40f4b284e56615f123fa69f06943d0b710c`。
 
 | 用途 | メソッド | パス | 認証 |
 | --- | --- | --- | --- |

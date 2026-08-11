@@ -5,7 +5,8 @@ use anyhow::Result;
 use domain::entity::OJKind;
 use usecases::submission::StarterRegistry;
 
-use crate::submission_impl::{atcoder::AtCoderStarter, librarychecker::LibraryCheckerStarter};
+use crate::online_judge_impl::librarychecker::submission::LibraryCheckerStarter;
+use crate::submission_impl::atcoder::AtCoderStarter;
 
 /// Builds a `StarterRegistry` with every supported OJ's starter registered.
 pub fn build_starter_registry() -> Result<StarterRegistry> {
