@@ -120,14 +120,13 @@ fn read_test_timeout_seconds(table: &toml::Table, ce_toml_path: &std::path::Path
 mod tests {
     use crate::{
         config::Config,
-        online_judge::{
-            ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge, SubmitOutcome,
-        },
+        online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge},
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
         },
         service::Service,
+        submission::StarterRegistry,
         test_support::SpawningCommandRunner,
     };
     use anyhow::Result;
@@ -159,16 +158,6 @@ mod tests {
             _: Option<&Session>,
             _: &[(String, String)],
         ) -> Result<Vec<Problem>> {
-            todo!()
-        }
-        fn submit(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: Option<&Session>,
-        ) -> Result<SubmitOutcome> {
             todo!()
         }
     }
@@ -262,6 +251,7 @@ mod tests {
     fn make_service(solution_dir: PathBuf, testcases_dir: PathBuf) -> Service {
         Service::new(
             Box::new(SingleOnlineJudge::new(Box::new(StubOJ))),
+            StarterRegistry::new(),
             Box::new(StubContestRepo { testcases_dir }),
             Box::new(StubSolutionRepo { solution_dir }),
             Box::new(StubSession),

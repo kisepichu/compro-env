@@ -2476,6 +2476,7 @@ dependencies = [
  "domain",
  "library-adapter-protocol",
  "mockall",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",

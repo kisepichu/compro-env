@@ -61,14 +61,13 @@ impl Service {
 mod tests {
     use crate::{
         config::Config,
-        online_judge::{
-            ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge, SubmitOutcome,
-        },
+        online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge},
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
         },
         service::Service,
+        submission::StarterRegistry,
         test_support::SpawningCommandRunner,
     };
     use anyhow::Result;
@@ -100,16 +99,6 @@ mod tests {
             _: Option<&Session>,
             _: &[(String, String)],
         ) -> Result<Vec<Problem>> {
-            todo!()
-        }
-        fn submit(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: Option<&Session>,
-        ) -> Result<SubmitOutcome> {
             todo!()
         }
     }
@@ -228,6 +217,7 @@ mod tests {
     ) -> Service {
         Service::new(
             Box::new(SingleOnlineJudge::new(Box::new(StubOJ))),
+            StarterRegistry::new(),
             Box::new(StubContestRepo {
                 contest_exists,
                 problem_codes: problem_codes.iter().map(|s| s.to_string()).collect(),

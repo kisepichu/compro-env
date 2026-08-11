@@ -217,14 +217,13 @@ mod tests {
 
     use crate::{
         config::Config,
-        online_judge::{
-            ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge, SubmitOutcome,
-        },
+        online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge, SingleOnlineJudge},
         repository::{
             contest_repository::ContestRepository, session_repository::SessionRepository,
             solution_repository::SolutionRepository,
         },
         service::Service,
+        submission::StarterRegistry,
         test_support::SpawningCommandRunner,
     };
 
@@ -282,17 +281,6 @@ mod tests {
             _problem_id_hints: &[(String, String)],
         ) -> Result<Vec<Problem>> {
             Ok(self.problems.clone())
-        }
-
-        fn submit(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: &str,
-            _: Option<&Session>,
-        ) -> Result<SubmitOutcome> {
-            todo!()
         }
     }
 
@@ -431,6 +419,7 @@ mod tests {
     ) -> Service {
         Service::new(
             Box::new(SingleOnlineJudge::new(Box::new(oj))),
+            StarterRegistry::new(),
             Box::new(contest_repo),
             Box::new(solution_repo),
             Box::new(StubSessionRepo { session }),
@@ -532,6 +521,7 @@ mod tests {
                 problems: vec![make_problem("a")],
                 start_time: None, // no start time known
             }))),
+            StarterRegistry::new(),
             Box::new(contest_repo),
             Box::new(StubSolutionRepo {
                 created: RefCell::new(vec![]),
@@ -609,6 +599,7 @@ mod tests {
                 problems: vec![make_problem("a")],
                 start_time: None,
             }))),
+            StarterRegistry::new(),
             Box::new(AlreadyExistsRepo),
             Box::new(StubSolutionRepo {
                 created: RefCell::new(vec![]),

@@ -1,10 +1,7 @@
 use anyhow::Result;
-use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use chrono::{DateTime, Utc};
 use domain::entity::{OJKind, Problem, Session};
-use usecases::online_judge::{
-    ContestMeta, CredentialKind, Credentials, OnlineJudge, SubmitOutcome,
-};
+use usecases::online_judge::{ContestMeta, CredentialKind, Credentials, OnlineJudge};
 
 pub struct AtCoder {
     client: reqwest::blocking::Client,
@@ -106,56 +103,6 @@ impl OnlineJudge for AtCoder {
         }
         let problems = parse_tasks_print_from_html(&html, contest_id, problem_id_hints);
         Ok(problems)
-    }
-
-    fn submit(
-        &self,
-        contest_id: &str,
-        problem_id: &str,
-        lang_id: &str,
-        source: &str,
-        _session: Option<&Session>,
-    ) -> Result<SubmitOutcome> {
-        // AtCoder cannot accept direct HTTP submissions (Cloudflare Turnstile), so the
-        // solution is carried in a URL fragment and submitted via the browser userscript.
-
-        // Encode {lang_id, source} as URL-safe base64 JSON and embed in the fragment.
-        // The Tampermonkey userscript reads this fragment and auto-fills the submit form.
-        // See docs/userscript.md for the full protocol.
-        let payload = serde_json::json!({
-            "lang_id": lang_id,
-            "source": source,
-        })
-        .to_string();
-        let fragment = format!("ce={}", URL_SAFE.encode(payload.as_bytes()));
-
-        // Guard against source files too large for a browser URL. Measure the actual
-        // encoded fragment rather than estimating: JSON escaping of control characters
-        // (`\u00XX`) can expand a byte up to 6×, so a source-length estimate is unsafe.
-        const MAX_FRAGMENT_BYTES: usize = 32 * 1024;
-        if fragment.len() > MAX_FRAGMENT_BYTES {
-            anyhow::bail!(
-                "source file is too large to submit via URL fragment \
-                 (fragment {} bytes, max {MAX_FRAGMENT_BYTES})",
-                fragment.len()
-            );
-        }
-
-        // Build the URL via reqwest::Url so that contest_id and problem_id are
-        // percent-encoded, producing a well-formed URL even if they contain
-        // URL-reserved characters.
-        let mut url = reqwest::Url::parse("https://atcoder.jp/").expect("base URL is valid");
-        url.path_segments_mut()
-            .expect("base URL is cannot-be-a-base")
-            .push("contests")
-            .push(contest_id)
-            .push("submit");
-        url.query_pairs_mut()
-            .append_pair("taskScreenName", problem_id);
-        url.set_fragment(Some(&fragment));
-        Ok(SubmitOutcome::OpenBrowser {
-            url: url.to_string(),
-        })
     }
 }
 
@@ -657,30 +604,6 @@ var userScreenName = "";
             .find(|p| p.code == "b")
             .expect("problem b not found");
         assert_eq!(b.id, "arc103_b", "expected problem_id from hints");
-    }
-
-    #[test]
-    fn submit_returns_open_browser_url_encoding_payload_in_fragment() {
-        use usecases::online_judge::{OnlineJudge as _, SubmitOutcome};
-        let oj = AtCoder::new().expect("AtCoder::new");
-        let outcome = oj
-            .submit("abc001", "abc001_a", "4026", "fn main() {}", None)
-            .expect("submit should build a browser URL");
-        let url = match outcome {
-            SubmitOutcome::OpenBrowser { url } => url,
-            other => panic!("expected OpenBrowser, got {other:?}"),
-        };
-        // URL structure: https://atcoder.jp/contests/abc001/submit?taskScreenName=abc001_a#ce=<base64>
-        assert!(url.starts_with("https://atcoder.jp/contests/abc001/submit?"));
-        assert!(url.contains("taskScreenName=abc001_a"));
-        let fragment = url.split('#').nth(1).expect("fragment present");
-        let encoded = fragment
-            .strip_prefix("ce=")
-            .expect("fragment starts with ce=");
-        let decoded = URL_SAFE.decode(encoded).expect("valid base64");
-        let payload: serde_json::Value = serde_json::from_slice(&decoded).expect("valid JSON");
-        assert_eq!(payload["lang_id"], "4026");
-        assert_eq!(payload["source"], "fn main() {}");
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub mod library_analysis;
 pub mod online_judge;
 pub mod repository;
 pub mod service;
+pub mod submission;
 pub mod verification;
 
 #[cfg(test)]
