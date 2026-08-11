@@ -50,11 +50,13 @@ pub enum InvalidTransition {
         event: &'static str,
     },
     #[error(
-        "event handle `{event_handle}` differs from the record's stored handle `{record_handle}`"
+        "event handle {event_oj}:{event_id} differs from the record's stored handle {record_oj}:{record_id}"
     )]
     HandleMismatch {
-        event_handle: String,
-        record_handle: String,
+        event_oj: String,
+        event_id: String,
+        record_oj: String,
+        record_id: String,
     },
 }
 
@@ -123,9 +125,9 @@ fn next_state(
             enforce_same_handle("Submitted", "PollCompleted", &prev.handle, &state.handle)?;
             Ok(VerificationState::Completed(state))
         }
-        (VerificationState::Submitted(_), VerificationEvent::InfrastructureError(state)) => {
-            Ok(VerificationState::InfrastructureFailure(state))
-        }
+        (VerificationState::Submitted(prev), VerificationEvent::InfrastructureError(state)) => Ok(
+            VerificationState::InfrastructureFailure(preserve_handle(state, &prev.handle)?),
+        ),
         (VerificationState::Submitted(_), VerificationEvent::UnavailableObserved(state)) => {
             Ok(VerificationState::Unavailable(state))
         }
@@ -143,9 +145,9 @@ fn next_state(
             enforce_same_handle("Queued", "PollCompleted", &prev.handle, &state.handle)?;
             Ok(VerificationState::Completed(state))
         }
-        (VerificationState::Queued(_), VerificationEvent::InfrastructureError(state)) => {
-            Ok(VerificationState::InfrastructureFailure(state))
-        }
+        (VerificationState::Queued(prev), VerificationEvent::InfrastructureError(state)) => Ok(
+            VerificationState::InfrastructureFailure(preserve_handle(state, &prev.handle)?),
+        ),
         (VerificationState::Queued(_), VerificationEvent::UnavailableObserved(state)) => {
             Ok(VerificationState::Unavailable(state))
         }
@@ -159,9 +161,9 @@ fn next_state(
             enforce_same_handle("Judging", "PollCompleted", &prev.handle, &state.handle)?;
             Ok(VerificationState::Completed(state))
         }
-        (VerificationState::Judging(_), VerificationEvent::InfrastructureError(state)) => {
-            Ok(VerificationState::InfrastructureFailure(state))
-        }
+        (VerificationState::Judging(prev), VerificationEvent::InfrastructureError(state)) => Ok(
+            VerificationState::InfrastructureFailure(preserve_handle(state, &prev.handle)?),
+        ),
         (VerificationState::Judging(_), VerificationEvent::UnavailableObserved(state)) => {
             Ok(VerificationState::Unavailable(state))
         }
@@ -250,10 +252,35 @@ fn enforce_same_handle(
         let _ = from;
         let _ = event;
         Err(InvalidTransition::HandleMismatch {
-            event_handle: incoming.submission_id.clone(),
-            record_handle: record.submission_id.clone(),
+            event_oj: incoming.oj.clone(),
+            event_id: incoming.submission_id.clone(),
+            record_oj: record.oj.clone(),
+            record_id: record.submission_id.clone(),
         })
     }
+}
+
+/// Carry the stored `handle` into the `InfrastructureFailure` event so a
+/// poll-time failure never loses the tracking identity (spec §8.3). If the
+/// event already carries a handle, it must match the record's.
+fn preserve_handle(
+    mut failure: InfrastructureFailure,
+    record_handle: &SubmissionHandle,
+) -> Result<InfrastructureFailure, InvalidTransition> {
+    match &failure.handle {
+        Some(existing) => {
+            enforce_same_handle(
+                "handle-preserving state",
+                "InfrastructureError",
+                record_handle,
+                existing,
+            )?;
+        }
+        None => {
+            failure.handle = Some(record_handle.clone());
+        }
+    }
+    Ok(failure)
 }
 
 fn enforce_prev_handle(
@@ -673,6 +700,55 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, InvalidTransition::HandleMismatch { .. }));
+    }
+
+    #[test]
+    fn infrastructure_error_from_submitted_preserves_handle() {
+        for record in [submitted("s1"), queued("s1"), judging("s1")] {
+            // Event without a handle: preserved from record.
+            let mut ev_no_handle = infra_state();
+            ev_no_handle.handle = None;
+            let next = apply_transition(
+                &record,
+                VerificationEvent::InfrastructureError(ev_no_handle),
+            )
+            .unwrap();
+            match next.state {
+                VerificationState::InfrastructureFailure(f) => {
+                    assert_eq!(
+                        f.handle.as_ref().map(|h| h.submission_id.as_str()),
+                        Some("s1"),
+                    );
+                }
+                _ => panic!("expected InfrastructureFailure"),
+            }
+
+            // Event carrying a different handle: rejected.
+            let mut ev_mismatch = infra_state();
+            ev_mismatch.handle = Some(handle("s2"));
+            let err =
+                apply_transition(&record, VerificationEvent::InfrastructureError(ev_mismatch))
+                    .unwrap_err();
+            assert!(matches!(err, InvalidTransition::HandleMismatch { .. }));
+        }
+    }
+
+    #[test]
+    fn handle_mismatch_error_includes_oj_and_ids() {
+        let q = queued("s1");
+        let mut other = handle("s2");
+        other.oj = "atcoder".into();
+        let err = apply_transition(
+            &q,
+            VerificationEvent::PollJudging(PendingState {
+                handle: other,
+                observed_at: now(3),
+            }),
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("atcoder:s2"), "message: {message}");
+        assert!(message.contains("librarychecker:s1"), "message: {message}");
     }
 
     #[test]

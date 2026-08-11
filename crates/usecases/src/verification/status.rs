@@ -55,15 +55,23 @@ pub fn classify_solution_status(
         return VerificationStatus::NotConfigured;
     }
 
-    // Fingerprint blocked → mirror stored terminal states iff they are still
-    // in-flight (resume targets) or fall back to stale/never per spec §11.
+    // Fingerprint blocked → still surface every in-flight record as a
+    // resume target (spec §8.1: saved Starting / AcceptanceUnknown / handle
+    // records must be picked up before new processing) and only fall back
+    // to `stale` / `never` for records with a terminal (`Completed` /
+    // `Unavailable`) state.
     match (current_fingerprint, saved) {
         (Err(_), None) => VerificationStatus::Never,
         (Err(_), Some(record)) => match &record.state {
             VerificationState::InfrastructureFailure(_) => VerificationStatus::InfrastructureError,
             VerificationState::Queued(_) => VerificationStatus::Pending,
             VerificationState::Judging(_) => VerificationStatus::Judging,
-            _ => VerificationStatus::Stale,
+            VerificationState::Starting(_)
+            | VerificationState::Submitted(_)
+            | VerificationState::AcceptanceUnknown(_) => VerificationStatus::Pending,
+            VerificationState::Completed(_) | VerificationState::Unavailable(_) => {
+                VerificationStatus::Stale
+            }
         },
         (Ok(current), None) => {
             let _ = current;
@@ -388,6 +396,68 @@ mod tests {
         let record = record_with(state, fp);
         assert_eq!(
             classify_solution_status(Some(&spec()), Err(&err), Some(&record)),
+            VerificationStatus::Pending,
+        );
+    }
+
+    #[test]
+    fn blocked_fingerprint_treats_pre_handle_states_as_resume_targets() {
+        let err = FingerprintError::SolutionDependencyBlocked {
+            solution: SolutionId::parse("abc999/a/main").unwrap(),
+            state: "partial",
+        };
+        let fp = fingerprint(13);
+        let starting = record_with(
+            VerificationState::Starting(domain::verification::StartingState {
+                plan_hash: ContentHash::parse(
+                    "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                )
+                .unwrap(),
+                submitted_source_hash: ContentHash::parse(
+                    "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+                )
+                .unwrap(),
+                language: language(),
+                started_at: DateTime::parse_from_rfc3339("2026-08-10T09:00:00+00:00").unwrap(),
+            }),
+            fp.clone(),
+        );
+        assert_eq!(
+            classify_solution_status(Some(&spec()), Err(&err), Some(&starting)),
+            VerificationStatus::Pending,
+        );
+
+        let submitted = record_with(
+            VerificationState::Submitted(domain::verification::SubmittedState {
+                handle: handle(),
+                submitted_at: DateTime::parse_from_rfc3339("2026-08-10T09:00:00+00:00").unwrap(),
+            }),
+            fp.clone(),
+        );
+        assert_eq!(
+            classify_solution_status(Some(&spec()), Err(&err), Some(&submitted)),
+            VerificationStatus::Pending,
+        );
+
+        let unknown = record_with(
+            VerificationState::AcceptanceUnknown(domain::verification::AcceptanceUnknownState {
+                plan_hash: ContentHash::parse(
+                    "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                )
+                .unwrap(),
+                submitted_source_hash: ContentHash::parse(
+                    "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+                )
+                .unwrap(),
+                language: language(),
+                started_at: DateTime::parse_from_rfc3339("2026-08-10T09:00:00+00:00").unwrap(),
+                observed_at: DateTime::parse_from_rfc3339("2026-08-10T09:30:00+00:00").unwrap(),
+                summary: "disconnect".into(),
+            }),
+            fp,
+        );
+        assert_eq!(
+            classify_solution_status(Some(&spec()), Err(&err), Some(&unknown)),
             VerificationStatus::Pending,
         );
     }

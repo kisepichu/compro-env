@@ -232,10 +232,14 @@ pub fn calculate_fingerprint(
     for (id, source) in &material.dependency_library_sources {
         library_hashes.insert(id.to_string(), source.hash().to_string());
     }
-    // Every library present in the closure must appear as a source so hashes
-    // stay per-input. Callers assemble the closure via
-    // `verification_closure`, then must attach the corresponding source
-    // bytes; if the anchor is missing the fingerprint would be unstable.
+    // Every direct verify target must have a matching entry in
+    // `dependency_library_sources` (the closure). The caller assembles the
+    // closure via `verification_closure`, then attaches the corresponding
+    // source bytes; if a direct verify target has no anchor, the aggregate
+    // fingerprint would ignore its source and the stale-reason report
+    // would be misleading. Additional closure entries beyond the direct
+    // verifiers stay in `library_hashes` above so transitive changes still
+    // shift the fingerprint.
     for lib in &material.verified_libraries {
         if !material.dependency_library_sources.contains_key(lib) {
             return Err(FingerprintError::MissingLibrarySource(lib.clone()));
