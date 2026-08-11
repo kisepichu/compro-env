@@ -31,11 +31,11 @@ pub fn inspect_build_state(root: &Path, expected: &ExpectedBuild)
 pub fn derive_build_id(manifest: &UnsignedBuildManifest) -> Result<BuildId, BuildStateError>;
 ```
 
-- [ ] Write failing tests for missing executable, wrong hash, stale input digest, marker with held/free lock,
+- [x] Write failing tests for missing executable, wrong hash, stale input digest, marker with held/free lock,
       bad symlink target, duplicate adapter identity, and deterministic build ID.
-- [ ] Implement manifest/hash/symlink validation and distinct `BuildRunning` versus `PreviousBuildFailed` errors.
-- [ ] Run `cargo test -p infrastructure --test adapter_build_state`; expect all cases to pass.
-- [ ] Invoke `/commit` with `feat: validate adapter build state`.
+- [x] Implement manifest/hash/symlink validation and distinct `BuildRunning` versus `PreviousBuildFailed` errors.
+- [x] Run `cargo test -p infrastructure --test adapter_build_state`; expect all cases to pass.
+- [x] Invoke `/commit` with `feat: validate adapter build state`.
 
 ### Task 2: Build, handshake, and publish atomically
 
@@ -57,18 +57,18 @@ pub fn handshake_adapter(
 ) -> Result<AdapterIdentity, BuildError>;
 ```
 
-- [ ] Write fake-adapter tests for stable language order, missing prepared set, sanitized environment,
+- [x] Write fake-adapter tests for stable language order, missing prepared set, sanitized environment,
       nonzero build, handshake mismatch, crash recovery, concurrent lock, and successful atomic switch.
-- [ ] Implement fail-fast `build.lock`, persistent `build-in-progress`, unique staging, offline environment,
+- [x] Implement fail-fast `build.lock`, persistent `build-in-progress`, unique staging, offline environment,
       executable hashing, manifest fsync, rename, and atomic relative symlink replacement.
-- [ ] Use the normal empty `AnalysisRequest`; do not introduce a second handshake schema.
-- [ ] Run `cargo test -p infrastructure --test adapter_build`; expect failure paths to retain marker and old set.
-- [ ] Invoke `/commit` with `feat: publish complete offline adapter builds`.
+- [x] Use the normal empty `AnalysisRequest`; do not introduce a second handshake schema.
+- [x] Run `cargo test -p infrastructure --test adapter_build`; expect failure paths to retain marker and old set.
+- [x] Invoke `/commit` with `feat: publish complete offline adapter builds`.
 
 ### Task 3: Deliver adapter build infrastructure
 
-- [ ] Run `cargo test -p infrastructure adapter_build` and `tools/library-analyzers/build --check`.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record adapter build completion` after checking plan progress.
+- [x] Run `cargo test -p infrastructure adapter_build` and `tools/library-analyzers/build --check`.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record adapter build completion` after checking plan progress.
 - [ ] Invoke `/pr --base main`; link plan 042 and state that it unblocks plan 043.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
