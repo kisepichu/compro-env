@@ -1,0 +1,13 @@
+---
+/**
+ * Libraries root (`/libraries/`) — spec §12.1 tail + handoff §5.
+ */
+import { loadSiteData } from "@/lib/site-data.ts";
+import { renderLibrariesRootPage } from "@/lib/pages/libraries.ts";
+import { resolveUrlConfig } from "@/lib/pages/config.ts";
+
+const config = resolveUrlConfig();
+const siteData = loadSiteData();
+const html = renderLibrariesRootPage(config, siteData);
+---
+<Fragment set:html={html} />

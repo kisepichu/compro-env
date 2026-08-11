@@ -1,0 +1,13 @@
+---
+/**
+ * Static 404 page (spec §12.1 tail, handoff §11).
+ */
+import { loadSiteData } from "@/lib/site-data.ts";
+import { renderNotFoundPage } from "@/lib/pages/notfound.ts";
+import { resolveUrlConfig } from "@/lib/pages/config.ts";
+
+const config = resolveUrlConfig();
+const siteData = loadSiteData();
+const html = renderNotFoundPage(config, siteData);
+---
+<Fragment set:html={html} />

@@ -1,0 +1,51 @@
+---
+/**
+ * Catch-all under `/libraries/` (spec §12.4, §12.5, handoff §6, §7).
+ *
+ * `getStaticPaths()` enumerates:
+ *   - one path per language with ≥1 public library
+ *   - one path per unique directory prefix under such a language
+ *   - one path per library detail (segments include the file name).
+ * Astro rejects any URL not in the enumeration, so old / renamed / private
+ * routes return the static 404 without an explicit redirect (spec §12.1).
+ */
+import { loadSiteData } from "@/lib/site-data.ts";
+import { resolveUrlConfig } from "@/lib/pages/config.ts";
+import {
+  listLibraryRoutes,
+  renderLibraryDetailPage,
+  renderLibraryDirectoryPage,
+  type LibraryRoute,
+} from "@/lib/pages/libraries.ts";
+import type { SiteData } from "@/lib/site-data-types.ts";
+import type { UrlConfig } from "@/lib/url.ts";
+
+interface RouteProps {
+  route: LibraryRoute;
+  config: UrlConfig;
+  siteData: SiteData;
+}
+
+export async function getStaticPaths() {
+  const siteData = loadSiteData();
+  const config = resolveUrlConfig();
+  return listLibraryRoutes(siteData).map((route) => ({
+    params: { path: route.segments.join("/") },
+    props: { route, config, siteData } satisfies RouteProps,
+  }));
+}
+
+const { route, config, siteData } = Astro.props as RouteProps;
+let html: string;
+if (route.kind === "detail") {
+  html = renderLibraryDetailPage(config, siteData, route.library!);
+} else {
+  html = renderLibraryDirectoryPage(
+    config,
+    siteData,
+    route.languageId!,
+    route.directoryParts ?? [],
+  );
+}
+---
+<Fragment set:html={html} />

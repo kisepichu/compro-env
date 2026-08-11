@@ -1,0 +1,12 @@
+---
+/**
+ * Site header + primary navigation + global search (spec §12.2, handoff §3).
+ * Delegates to the pure renderer so the semantic contract stays in one place.
+ */
+import { renderHeader, type HeaderOptions } from "@/lib/pages/document.ts";
+
+interface Props extends HeaderOptions {}
+
+const html = renderHeader(Astro.props);
+---
+<Fragment set:html={html} />

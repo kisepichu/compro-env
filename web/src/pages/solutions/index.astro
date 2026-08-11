@@ -1,0 +1,13 @@
+---
+/**
+ * Solutions root (`/solutions/`) — spec §12.6, handoff §8.1.
+ */
+import { loadSiteData } from "@/lib/site-data.ts";
+import { renderSolutionsRootPage } from "@/lib/pages/solutions.ts";
+import { resolveUrlConfig } from "@/lib/pages/config.ts";
+
+const config = resolveUrlConfig();
+const siteData = loadSiteData();
+const html = renderSolutionsRootPage(config, siteData);
+---
+<Fragment set:html={html} />

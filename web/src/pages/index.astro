@@ -1,0 +1,15 @@
+---
+/**
+ * Home page (spec §12.3, handoff §4). The pure `renderHomePage` returns
+ * the full HTML document so Vitest and the static build produce the same
+ * markup.
+ */
+import { loadSiteData } from "@/lib/site-data.ts";
+import { renderHomePage } from "@/lib/pages/home.ts";
+import { resolveUrlConfig } from "@/lib/pages/config.ts";
+
+const config = resolveUrlConfig();
+const siteData = loadSiteData();
+const html = renderHomePage(config, siteData);
+---
+<Fragment set:html={html} />
