@@ -640,6 +640,14 @@ pub fn poll_handle(
             }
             Err(PollSubmissionError::Infrastructure { kind, summary }) => {
                 let updated_at = ports.clock.now();
+                // Carry the handle explicitly so a crash between now and the
+                // next tick leaves an `InfrastructureFailure` that
+                // `resume_pending` can drive forward with `poll_handle`
+                // (spec §8.3 "handle 取得後の failure では handle と draft
+                // PR を残し、次回 poll で resume する"). Without this, the
+                // second retryable failure inside the same loop transitions
+                // `InfrastructureFailure -> InfrastructureFailure`, which
+                // replaces the state wholesale and drops the handle.
                 let failure = InfrastructureFailure {
                     stage: FailureStage::Poll,
                     error_kind: map_infra_kind(&kind),
@@ -649,7 +657,7 @@ pub fn poll_handle(
                     updated_at,
                     summary: sanitize_summary(&summary),
                     plan_hash: None,
-                    handle: None,
+                    handle: Some(domain_handle.clone()),
                 };
                 if is_retryable_kind(&kind) {
                     // Persist the infra failure snapshot for observability

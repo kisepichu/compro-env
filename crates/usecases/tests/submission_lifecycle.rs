@@ -1115,6 +1115,56 @@ fn poll_handle_infrastructure_error_backoff_caps_at_thirty_seconds() {
     assert!(sleeps.contains(&Duration::from_secs(30)));
 }
 
+/// Regression: a non-retryable poll-time infra failure MUST persist the
+/// current handle, so `resume_pending` can drive the record forward on the
+/// next tick (spec §8.3). Without the handle, resume would classify the
+/// failure as operator-only and never re-poll.
+#[test]
+fn poll_handle_non_retryable_infra_error_preserves_handle_for_resume() {
+    let log = Arc::new(RecordingLog::default());
+    let clock = Arc::new(FakeClock::new(fixed_offset_time(0)));
+    let repo = FakeRepo::new(Arc::clone(&log));
+    repo.seed(make_submitted(
+        &lc_solution(),
+        "attempt-1",
+        "librarychecker",
+        "42",
+    ));
+    let obs: Vec<Result<PollObservation, PollSubmissionError>> =
+        vec![Err(PollSubmissionError::Infrastructure {
+            kind: InfrastructureErrorKind::AuthenticationRejected,
+            summary: "credentials rejected".into(),
+        })];
+    let env = make_env(
+        Arc::clone(&log),
+        Arc::clone(&clock),
+        vec![],
+        obs,
+        None,
+        usecases::submission::RecoveryMode::BestEffort,
+        PollingPolicy::verify_defaults(),
+    );
+    let repos_bundle = repos(&repo, &[lc_solution()]);
+    let record = repo.load(&lc_solution()).unwrap().unwrap();
+    let ev = poll_handle(&repos_bundle, &env.ports(), &record).unwrap();
+    match ev {
+        PollEvent::InfrastructureError { record } => match record.state {
+            VerificationState::InfrastructureFailure(f) => {
+                assert!(
+                    f.handle.is_some(),
+                    "InfrastructureFailure must carry the handle so resume can re-poll"
+                );
+                assert_eq!(
+                    f.handle.as_ref().map(|h| h.submission_id.as_str()),
+                    Some("42"),
+                );
+            }
+            other => panic!("expected InfrastructureFailure, got {other:?}"),
+        },
+        other => panic!("expected PollEvent::InfrastructureError, got {other:?}"),
+    }
+}
+
 #[test]
 fn poll_handle_exhausts_15_minute_budget() {
     // Spec §8.3: hard 15-minute wall-clock budget. When exceeded, the record
