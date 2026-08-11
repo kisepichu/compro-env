@@ -142,6 +142,58 @@ pub struct BuildManifest {
     pub executables: Vec<AdapterExecutableRecord>,
 }
 
+/// Manifest without a `build-id` yet, used to derive one deterministically
+/// (spec §6.9). `git_commit_sha` is excluded on purpose: the `build-id` must
+/// depend only on inputs, target platform, profile, protocol version, and
+/// executable identities, so a repository rename or amend cannot change it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsignedBuildManifest {
+    pub input_digest: ContentDigest,
+    pub target_platform: TargetPlatform,
+    pub build_profile: String,
+    pub protocol_version: u32,
+    pub executables: Vec<AdapterExecutableRecord>,
+}
+
+impl From<&BuildManifest> for UnsignedBuildManifest {
+    fn from(m: &BuildManifest) -> Self {
+        Self {
+            input_digest: m.input_digest.clone(),
+            target_platform: m.target_platform.clone(),
+            build_profile: m.build_profile.clone(),
+            protocol_version: m.protocol_version,
+            executables: m.executables.clone(),
+        }
+    }
+}
+
+/// Content-addressed identifier for a build set (spec §6.9).
+///
+/// Derived from the normalized `UnsignedBuildManifest` so two byte-equivalent
+/// build sets always share the same directory name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BuildId(ContentDigest);
+
+impl BuildId {
+    pub fn new(digest: ContentDigest) -> Self {
+        Self(digest)
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn digest(&self) -> &ContentDigest {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for BuildId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.as_str())
+    }
+}
+
 /// Subset the pipeline recomputes before trusting a stored `BuildManifest`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpectedBuild {
@@ -172,6 +224,20 @@ pub enum BuildManifestError {
     BuildProfileMismatch { expected: String, actual: String },
     #[error("protocol version mismatch: expected {expected}, found {actual}")]
     ProtocolVersionMismatch { expected: u32, actual: u32 },
+    #[error("duplicate language ID in build manifest: {language:?}")]
+    DuplicateLanguage { language: String },
+    #[error(
+        "duplicate adapter identity in build manifest: {name:?} @ {version:?} \
+         appears for languages {first:?} and {second:?}"
+    )]
+    DuplicateAdapterIdentity {
+        name: String,
+        version: String,
+        first: String,
+        second: String,
+    },
+    #[error("duplicate executable file name in build manifest: {file_name:?}")]
+    DuplicateFileName { file_name: String },
 }
 
 /// Reject any stored manifest that would let the pipeline reuse a stale build set.
@@ -204,6 +270,42 @@ pub fn validate_build_manifest(
             expected: expected.input_digest.clone(),
             actual: actual.input_digest.clone(),
         });
+    }
+    Ok(())
+}
+
+// ─── validate_unsigned_manifest ─────────────────────────────────────────────
+
+/// Reject manifests whose executables cannot map to a stable build-id or a
+/// unique `bin/<file_name>` layout. Called by `derive_build_id` in
+/// `infrastructure` before hashing.
+pub fn validate_unsigned_manifest(
+    manifest: &UnsignedBuildManifest,
+) -> Result<(), BuildManifestError> {
+    let mut seen_langs: std::collections::BTreeSet<String> = Default::default();
+    let mut seen_files: std::collections::BTreeSet<String> = Default::default();
+    let mut seen_identities: std::collections::BTreeMap<(String, String), String> =
+        Default::default();
+    for e in &manifest.executables {
+        if !seen_langs.insert(e.language.clone()) {
+            return Err(BuildManifestError::DuplicateLanguage {
+                language: e.language.clone(),
+            });
+        }
+        if !seen_files.insert(e.file_name.clone()) {
+            return Err(BuildManifestError::DuplicateFileName {
+                file_name: e.file_name.clone(),
+            });
+        }
+        let identity = (e.adapter_name.clone(), e.adapter_version.clone());
+        if let Some(first) = seen_identities.insert(identity, e.language.clone()) {
+            return Err(BuildManifestError::DuplicateAdapterIdentity {
+                name: e.adapter_name.clone(),
+                version: e.adapter_version.clone(),
+                first,
+                second: e.language.clone(),
+            });
+        }
     }
     Ok(())
 }
@@ -327,6 +429,74 @@ mod tests {
         assert!(matches!(
             err,
             BuildManifestError::ProtocolVersionMismatch { .. }
+        ));
+    }
+
+    fn record(
+        language: &str,
+        file_name: &str,
+        name: &str,
+        version: &str,
+    ) -> AdapterExecutableRecord {
+        AdapterExecutableRecord {
+            language: language.into(),
+            file_name: file_name.into(),
+            sha256: digest(0),
+            adapter_name: name.into(),
+            adapter_version: version.into(),
+            toolchains: vec![],
+        }
+    }
+
+    fn unsigned(execs: Vec<AdapterExecutableRecord>) -> UnsignedBuildManifest {
+        UnsignedBuildManifest {
+            input_digest: digest(1),
+            target_platform: platform(),
+            build_profile: "release".into(),
+            protocol_version: 1,
+            executables: execs,
+        }
+    }
+
+    #[test]
+    fn validate_unsigned_accepts_distinct_executables() {
+        let m = unsigned(vec![
+            record("rust", "rust-analyzer", "rust-adapter", "1.0.0"),
+            record("cpp", "cpp-analyzer", "cpp-adapter", "1.0.0"),
+        ]);
+        assert!(validate_unsigned_manifest(&m).is_ok());
+    }
+
+    #[test]
+    fn validate_unsigned_rejects_duplicate_language() {
+        let m = unsigned(vec![
+            record("rust", "rust-analyzer", "rust-adapter", "1.0.0"),
+            record("rust", "other-analyzer", "other", "1.0.0"),
+        ]);
+        let err = validate_unsigned_manifest(&m).unwrap_err();
+        assert!(matches!(err, BuildManifestError::DuplicateLanguage { .. }));
+    }
+
+    #[test]
+    fn validate_unsigned_rejects_duplicate_file_name() {
+        let m = unsigned(vec![
+            record("rust", "shared-analyzer", "rust-adapter", "1.0.0"),
+            record("cpp", "shared-analyzer", "cpp-adapter", "1.0.0"),
+        ]);
+        let err = validate_unsigned_manifest(&m).unwrap_err();
+        assert!(matches!(err, BuildManifestError::DuplicateFileName { .. }));
+    }
+
+    #[test]
+    fn validate_unsigned_rejects_duplicate_adapter_identity() {
+        let m = unsigned(vec![
+            record("rust", "a-analyzer", "shared-adapter", "1.0.0"),
+            record("cpp", "b-analyzer", "shared-adapter", "1.0.0"),
+        ]);
+        let err = validate_unsigned_manifest(&m).unwrap_err();
+        assert!(matches!(
+            err,
+            BuildManifestError::DuplicateAdapterIdentity { .. }
         ));
     }
 }

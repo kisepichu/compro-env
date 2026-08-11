@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Launcher for `library-adapter-build` (spec §6.9, plan 042 Task 2).
+#
+# Locates the repository root, builds the driver under a locked Cargo
+# invocation, and forwards every argument. The driver is the only entry point
+# that knows how to acquire the build lock, run each language plan under a
+# sanitized environment, handshake each executable, and swap the current-bin
+# symlink atomically.
+
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "${script_dir}/../.." && pwd)"
+
+cd "${repo_root}"
+exec cargo run \
+  --quiet \
+  --locked \
+  --package infrastructure \
+  --bin library-adapter-build \
+  -- \
+  --repository-root "${repo_root}" \
+  "$@"

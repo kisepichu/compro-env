@@ -15,5 +15,8 @@ files = [
     "Cargo.toml",
     "Cargo.lock",
     "rust-toolchain.toml",
+    "tools/library-analyzers/build",
     "tools/library-analyzers/build-inputs.toml",
+    "tools/library-analyzers/dependencies.toml",
+    "tools/library-analyzers/prepare",
 ]
