@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "solution_id": "abc999/a/browser",
+  "attempt_id": "01931aae-3a48-7fb4-9c62-1f89a0a5f004",
+  "replaces_attempt_id": null,
+  "fingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "state": {
+    "kind": "unavailable",
+    "data": {
+      "reason": "interactive_untrackable",
+      "capabilities": {
+        "submission_mode": "interactive_untrackable",
+        "result_detail": "overall_only",
+        "recovery_mode": "none"
+      },
+      "observed_at": "2026-08-10T13:00:00+00:00",
+      "summary": "AtCoder browser submission is interactive; ce verify cannot run unattended."
+    }
+  }
+}

@@ -56,10 +56,10 @@ pub enum VerificationState {
 }
 ```
 
-- [ ] Write failing golden tests for every state/verdict, optional metrics, null versus empty test cases,
+- [x] Write failing golden tests for every state/verdict, optional metrics, null versus empty test cases,
       capability combinations, unknown raw verdict preservation, and public `extra` allowlist.
-- [ ] Implement validated ID/hash newtypes and strict versioned serde models.
-- [ ] Run `cargo test -p domain verification`; invoke `/commit` with `feat: model verification state lifecycle`.
+- [x] Implement validated ID/hash newtypes and strict versioned serde models.
+- [x] Run `cargo test -p domain verification`; invoke `/commit` with `feat: model verification state lifecycle`.
 
 ### Task 2: Persist records with atomic CAS
 
@@ -86,16 +86,16 @@ pub trait VerificationRepository {
 }
 ```
 
-- [ ] Write failing tests for canonical `verification/results/{contest}/{problem}/{solution}.json`,
+- [x] Write failing tests for canonical `verification/results/{contest}/{problem}/{solution}.json`,
       traversal, symlink, orphan/non-JSON rejection, initial/replace/conflict CAS, fsync/rename, and removal.
-- [ ] Implement same-directory temporary writes and compare current attempt to `replaces_attempt_id`.
-- [ ] Run `cargo test -p infrastructure --test verification_repository`.
-- [ ] Invoke `/commit` with `feat: persist latest verification records atomically`.
+- [x] Implement same-directory temporary writes and compare current attempt to `replaces_attempt_id`.
+- [x] Run `cargo test -p infrastructure --test verification_repository`.
+- [x] Invoke `/commit` with `feat: persist latest verification records atomically`.
 
 ### Task 3: Deliver verification state
 
-- [ ] Re-run golden/repository tests with reversed input creation order.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record verification state completion`.
+- [x] Re-run golden/repository tests with reversed input creation order.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record verification state completion`.
 - [ ] Invoke `/pr --base main`; link plan 055 and state that it unblocks plan 056.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.

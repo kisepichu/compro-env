@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "solution_id": "librarychecker-aplusb/aplusb/main",
+  "attempt_id": "01931aae-3a48-7fb4-9c62-1f89a0a5f005",
+  "replaces_attempt_id": "01931aae-3a48-7fb4-9c62-1f89a0a5f002",
+  "fingerprint": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "state": {
+    "kind": "infrastructure_failure",
+    "data": {
+      "stage": "poll",
+      "error_kind": "network",
+      "retryable": true,
+      "retry_count": 2,
+      "next_retry_at": "2026-08-10T15:00:00+00:00",
+      "updated_at": "2026-08-10T14:50:00+00:00",
+      "summary": "connection timed out while polling submission",
+      "plan_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "handle": {
+        "oj": "librarychecker",
+        "submission_id": "12348",
+        "submission_url": "https://judge.yosupo.jp/submission/12348",
+        "locator": null,
+        "submitted_at": "2026-08-10T14:00:00+00:00"
+      }
+    }
+  }
+}

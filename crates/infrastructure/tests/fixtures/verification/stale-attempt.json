@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "solution_id": "abc999/a/main",
+  "attempt_id": "attempt-002",
+  "replaces_attempt_id": "attempt-001",
+  "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "state": {
+    "kind": "completed",
+    "data": {
+      "verdict": {
+        "kind": "wrong_answer",
+        "raw": "WA"
+      },
+      "verified_libraries": [
+        "libraries/rust/algebra/monoid.rs"
+      ],
+      "language": {
+        "language_id": "rust",
+        "oj_language_id": "rust-1.75.0"
+      },
+      "verified_at": "2026-08-10T11:00:00+00:00",
+      "capabilities": {
+        "submission_mode": "unattended_trackable",
+        "result_detail": "testcase_details",
+        "recovery_mode": "best_effort"
+      },
+      "submitted_source_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "input_hashes": {
+        "libraries/rust/algebra/monoid.rs": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "solutions/abc999/a/main/src/main.rs": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "summary": {
+        "max_execution_time_ms": 30,
+        "max_memory_bytes": 4096
+      },
+      "test_cases": [
+        {
+          "name": "example_00",
+          "verdict": {
+            "kind": "wrong_answer",
+            "raw": "WA"
+          },
+          "execution_time_ms": 12,
+          "memory_bytes": 2048
+        }
+      ],
+      "handle": {
+        "oj": "librarychecker",
+        "submission_id": "12346",
+        "submission_url": "https://judge.yosupo.jp/submission/12346",
+        "locator": null,
+        "submitted_at": "2026-08-10T10:59:00+00:00"
+      },
+      "extra": {}
+    }
+  }
+}

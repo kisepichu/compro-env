@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "solution_id": "librarychecker-aplusb/aplusb/main",
+  "attempt_id": "01931aae-3a48-7fb4-9c62-1f89a0a5f003",
+  "replaces_attempt_id": null,
+  "fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "state": {
+    "kind": "queued",
+    "data": {
+      "handle": {
+        "oj": "librarychecker",
+        "submission_id": "12347",
+        "submission_url": "https://judge.yosupo.jp/submission/12347",
+        "locator": "queue-position:3",
+        "submitted_at": "2026-08-10T12:00:00+00:00"
+      },
+      "observed_at": "2026-08-10T12:00:03+00:00"
+    }
+  }
+}
