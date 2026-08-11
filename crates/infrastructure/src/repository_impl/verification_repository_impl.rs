@@ -97,16 +97,18 @@ impl VerificationRepositoryImpl {
             .join(format!("{}.json", id.solution_name()))
     }
 
-    /// Rejects any existing ancestor of `path` (up to and including
-    /// `results_root`) that is a symlink. Missing ancestors are tolerated; the
-    /// caller will create them.
+    /// Rejects any existing ancestor of `path` (up to and including the
+    /// configured `root`) that is a symlink. Missing ancestors are tolerated;
+    /// the caller will create them. Walking up to `root` (not just
+    /// `results_root`) closes the hole where `root/verification` itself is a
+    /// symlink pointing outside the caller's tree.
     fn reject_symlinked_ancestors(&self, path: &Path) -> Result<()> {
-        let results_root = self.results_root();
+        let root = self.root.as_path();
         let mut chain: Vec<PathBuf> = Vec::new();
         let mut cur: Option<&Path> = Some(path);
         while let Some(p) = cur {
             chain.push(p.to_path_buf());
-            if p == results_root.as_path() {
+            if p == root {
                 break;
             }
             cur = p.parent();
@@ -132,7 +134,9 @@ impl VerificationRepositoryImpl {
     }
 
     /// Reads a record if present. `Ok(None)` for a missing file, `Err` for a
-    /// symlink, unreadable file, or corrupt JSON.
+    /// symlink, unreadable file, or corrupt JSON. Does not validate the
+    /// record's stored `solution_id`; call [`Self::read_record_for`] when the
+    /// expected id is known so a mismatched id surfaces as [`VerificationRepositoryError::PathMismatch`].
     fn read_record(&self, path: &Path) -> Result<Option<VerificationRecord>> {
         match std::fs::symlink_metadata(path) {
             Ok(md) => {
@@ -151,6 +155,28 @@ impl VerificationRepositoryImpl {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e).with_context(|| format!("failed to stat {}", path.display())),
         }
+    }
+
+    /// Reads a record and rejects it when the stored `solution_id` disagrees
+    /// with `expected`. Guards single-id call sites (`load`, `compare_and_swap`,
+    /// `remove_if_attempt`) against corrupted or tampered files whose contents
+    /// no longer belong at their on-disk location.
+    fn read_record_for(
+        &self,
+        expected: &SolutionId,
+        path: &Path,
+    ) -> Result<Option<VerificationRecord>> {
+        let Some(record) = self.read_record(path)? else {
+            return Ok(None);
+        };
+        if record.solution_id != *expected {
+            return Err(VerificationRepositoryError::PathMismatch {
+                path: path.display().to_string(),
+                stored: record.solution_id,
+            }
+            .into());
+        }
+        Ok(Some(record))
     }
 
     /// Serializes `record` and writes it atomically to `path`. Fsyncs both the
@@ -196,7 +222,7 @@ impl VerificationRepository for VerificationRepositoryImpl {
     fn load(&self, id: &SolutionId) -> Result<Option<VerificationRecord>> {
         let path = self.record_path(id);
         self.reject_symlinked_ancestors(&path)?;
-        self.read_record(&path)
+        self.read_record_for(id, &path)
     }
 
     fn load_all(
@@ -204,18 +230,14 @@ impl VerificationRepository for VerificationRepositoryImpl {
         discovered: &BTreeSet<SolutionId>,
     ) -> Result<BTreeMap<SolutionId, VerificationRecord>> {
         let results_root = self.results_root();
+
+        // Reject symlinks anywhere between `self.root` and `results_root` before
+        // testing existence — `Path::exists` follows symlinks, so a symlinked
+        // `verification/` dir pointing outside the tree would otherwise appear
+        // empty here even when it is not.
+        self.reject_symlinked_ancestors(&results_root)?;
         if !results_root.exists() {
             return Ok(BTreeMap::new());
-        }
-
-        // Root itself must not be a symlink.
-        let root_md = std::fs::symlink_metadata(&results_root)
-            .with_context(|| format!("failed to stat {}", results_root.display()))?;
-        if root_md.file_type().is_symlink() {
-            return Err(VerificationRepositoryError::SymlinkNotAllowed {
-                path: results_root.display().to_string(),
-            }
-            .into());
         }
 
         let mut out = BTreeMap::new();
@@ -329,7 +351,7 @@ impl VerificationRepository for VerificationRepositoryImpl {
         let path = self.record_path(id);
         self.reject_symlinked_ancestors(&path)?;
 
-        let existing = self.read_record(&path)?;
+        let existing = self.read_record_for(id, &path)?;
 
         match (expected, existing.as_ref()) {
             (None, Some(_)) => {
@@ -367,7 +389,7 @@ impl VerificationRepository for VerificationRepositoryImpl {
         let path = self.record_path(id);
         self.reject_symlinked_ancestors(&path)?;
 
-        let Some(existing) = self.read_record(&path)? else {
+        let Some(existing) = self.read_record_for(id, &path)? else {
             return Err(VerificationRepositoryError::NotFound { id: id.clone() }.into());
         };
         if existing.attempt_id != *expected {

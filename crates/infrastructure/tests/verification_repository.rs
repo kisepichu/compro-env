@@ -502,6 +502,98 @@ fn failed_cas_leaves_previous_record_intact() {
     assert_eq!(loaded, first);
 }
 
+// ── 19. verification/ symlink pointing outside the tree is rejected ──────
+
+#[cfg(unix)]
+#[test]
+fn compare_and_swap_rejects_symlinked_verification_dir() {
+    // Regression: the earlier walk stopped at `results_root`, so a symlink at
+    // `root/verification` was invisible. Confirm every op now rejects it.
+    let dir = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("verification")).unwrap();
+
+    let repo = make_repo(&dir);
+    let record = load_fixture("accepted.json");
+    let id = record.solution_id.clone();
+
+    let err = expect_error(repo.compare_and_swap(&id, None, &record));
+    let downcast = err
+        .downcast_ref::<VerificationRepositoryError>()
+        .expect("must downcast");
+    assert!(
+        matches!(
+            downcast,
+            VerificationRepositoryError::SymlinkNotAllowed { .. }
+        ),
+        "expected SymlinkNotAllowed, got {downcast:?}",
+    );
+
+    // load and load_all should also refuse to descend through the symlink.
+    let err = expect_error(repo.load(&id));
+    assert!(
+        err.downcast_ref::<VerificationRepositoryError>()
+            .is_some_and(|e| matches!(e, VerificationRepositoryError::SymlinkNotAllowed { .. })),
+        "load: expected SymlinkNotAllowed, got {err:?}",
+    );
+
+    let mut discovered = BTreeSet::new();
+    discovered.insert(id.clone());
+    let err = expect_error(repo.load_all(&discovered));
+    assert!(
+        err.downcast_ref::<VerificationRepositoryError>()
+            .is_some_and(|e| matches!(e, VerificationRepositoryError::SymlinkNotAllowed { .. })),
+        "load_all: expected SymlinkNotAllowed, got {err:?}",
+    );
+}
+
+// ── 20. load / CAS / remove reject records whose stored id disagrees ─────
+
+#[test]
+fn single_id_ops_reject_path_id_mismatch() {
+    // Regression: `load`, `compare_and_swap`, and `remove_if_attempt` used to
+    // trust the on-disk `solution_id` field. Confirm each surfaces
+    // `PathMismatch` when the file's contents don't match the caller-supplied
+    // id.
+    let dir = TempDir::new().unwrap();
+    let repo = make_repo(&dir);
+
+    // Place accepted.json (solution_id = abc999/a/main) under
+    // abc999/a/other.json — the on-disk path derives id abc999/a/other but the
+    // JSON says abc999/a/main.
+    let victim_id = sid("abc999/a/other");
+    let raw = load_fixture_raw("accepted.json");
+    let victim_path = expected_json_path(dir.path(), &victim_id);
+    std::fs::create_dir_all(victim_path.parent().unwrap()).unwrap();
+    std::fs::write(&victim_path, raw).unwrap();
+
+    // load
+    let err = expect_error(repo.load(&victim_id));
+    assert!(
+        err.downcast_ref::<VerificationRepositoryError>()
+            .is_some_and(|e| matches!(e, VerificationRepositoryError::PathMismatch { .. })),
+        "load: expected PathMismatch, got {err:?}",
+    );
+
+    // compare_and_swap
+    let next = load_fixture("accepted.json");
+    let err = expect_error(repo.compare_and_swap(&victim_id, None, &next));
+    assert!(
+        err.downcast_ref::<VerificationRepositoryError>()
+            .is_some_and(|e| matches!(e, VerificationRepositoryError::PathMismatch { .. })),
+        "compare_and_swap: expected PathMismatch, got {err:?}",
+    );
+
+    // remove_if_attempt
+    let stored_attempt = load_fixture("accepted.json").attempt_id;
+    let err = expect_error(repo.remove_if_attempt(&victim_id, &stored_attempt));
+    assert!(
+        err.downcast_ref::<VerificationRepositoryError>()
+            .is_some_and(|e| matches!(e, VerificationRepositoryError::PathMismatch { .. })),
+        "remove_if_attempt: expected PathMismatch, got {err:?}",
+    );
+}
+
 // ── 18. successful CAS leaves no stray temp files ────────────────────────
 
 #[test]
