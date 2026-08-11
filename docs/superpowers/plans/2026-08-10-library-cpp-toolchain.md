@@ -29,12 +29,12 @@
 - Modify: `tools/library-analyzers/build-inputs.toml`
 - Create: `crates/infrastructure/tests/cpp_toolchain.rs`
 
-- [ ] Write failing selection tests for all three supported triples, unsupported triples, wrong archive digest,
+- [x] Write failing selection tests for all three supported triples, unsupported triples, wrong archive digest,
       missing `clang`, missing `llvm-config`, and reported version not exactly `22.1.0`.
-- [ ] Add the three official HTTPS URLs and digests to the dependency manifest.
-- [ ] Validate executable/library/header layout after safe extraction and record target plus version in manifest.
-- [ ] Run `cargo test -p infrastructure --test cpp_toolchain`.
-- [ ] Invoke `/commit` with `build: pin LLVM 22.1.0 for library analysis`.
+- [x] Add the three official HTTPS URLs and digests to the dependency manifest.
+- [x] Validate executable/library/header layout after safe extraction and record target plus version in manifest.
+- [x] Run `cargo test -p infrastructure --test cpp_toolchain`.
+- [x] Invoke `/commit` with `build: pin LLVM 22.1.0 for library analysis`.
 
 ### Task 2: Build a handshaking C++ adapter
 
@@ -46,17 +46,17 @@
 - Create: `tools/library-analyzers/cpp/tests/handshake.cpp`
 - Modify: `tools/library-analyzers/build-inputs.toml`
 
-- [ ] Write a failing empty-request test expecting adapter `ce-cpp`, protocol v1, toolchain
+- [x] Write a failing empty-request test expecting adapter `ce-cpp`, protocol v1, toolchain
       `clang=22.1.0`, and empty target arrays.
-- [ ] Configure CMake from prepared `LLVM_DIR`/`Clang_DIR`, compile with C++20, and link only required libraries.
-- [ ] Parse/serialize strict protocol fields and reject unknown/request version fields before analysis.
-- [ ] Run `tools/library-analyzers/prepare && tools/library-analyzers/build`; expect all handshakes to pass.
-- [ ] Invoke `/commit` with `feat: add C++ analyzer protocol executable`.
+- [x] Configure CMake from prepared `LLVM_DIR`/`Clang_DIR`, compile with C++20, and link only required libraries.
+- [x] Parse/serialize strict protocol fields and reject unknown/request version fields before analysis.
+- [x] Run `tools/library-analyzers/prepare && tools/library-analyzers/build`; expect all handshakes to pass.
+- [x] Invoke `/commit` with `feat: add C++ analyzer protocol executable`.
 
 ### Task 3: Deliver the C++ toolchain boundary
 
-- [ ] Run C++ unit tests and the generic adapter build/process suites.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record C++ toolchain completion`.
+- [x] Run C++ unit tests and the generic adapter build/process suites.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record C++ toolchain completion`.
 - [ ] Invoke `/pr --base main`; link plan 045 and state that it unblocks plan 046.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
