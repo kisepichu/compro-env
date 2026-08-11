@@ -784,6 +784,40 @@ fn monoid_has_private_dep_flag_and_public_direct_link() {
 }
 
 #[test]
+fn manual_override_edge_marks_link_as_manual() {
+    let fx = build_fixture();
+    let data = project_site_data(as_input(&fx)).unwrap();
+    // Fixture: manual override adds magma → monoid.
+    let magma = data
+        .libraries
+        .iter()
+        .find(|l| l.library_id == "libraries/rust/algebra/magma.rs")
+        .unwrap();
+    let link = magma
+        .dependency_analysis
+        .direct
+        .iter()
+        .find(|l| l.library_id == "libraries/rust/algebra/monoid.rs")
+        .expect("manual edge present");
+    assert!(link.manual, "manual override should mark direct link");
+
+    // Non-manual edges: monoid → magma is discovered by the analyzer, not
+    // manual, so its link stays `manual = false`.
+    let monoid = data
+        .libraries
+        .iter()
+        .find(|l| l.library_id == "libraries/rust/algebra/monoid.rs")
+        .unwrap();
+    let non_manual = monoid
+        .dependency_analysis
+        .direct
+        .iter()
+        .find(|l| l.library_id == "libraries/rust/algebra/magma.rs")
+        .unwrap();
+    assert!(!non_manual.manual);
+}
+
+#[test]
 fn cycle_between_magma_and_monoid_terminates() {
     let fx = build_fixture();
     let data = project_site_data(as_input(&fx)).unwrap();

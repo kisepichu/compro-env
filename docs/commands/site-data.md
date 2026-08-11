@@ -14,17 +14,22 @@ defined by the `site-schema` crate. The DTO round-trips against
 `web/schema/site-data-v1.schema.json`.
 
 - `--output <dir>` — target directory. Missing parents are created.
-- `--mode production|preview` — `production` (default) enforces a complete
-  `[library.site]` block; `preview` allows uncommitted trees and missing
-  optional metadata.
+- `--mode production|preview` — `production` (default) requires a fully
+  populated `[library.site]` block **and** a clean working tree; `preview`
+  allows the entire `[library.site]` block to be omitted (individual
+  fields are still all-or-nothing) and does not gate on uncommitted
+  changes.
 
 The command runs entirely offline: no Node, Astro, or Pagefind binary is
 invoked. Downstream tools consume the JSON directly.
 
 ## Behaviour
 
-- The projection is deterministic; two runs on the same repository state
-  produce byte-identical output.
+- The projection function is deterministic: given identical inputs it
+  produces byte-identical `SiteData`. The CLI's `site-data.json` will
+  differ across runs by the `build.generated_at` timestamp (`Utc::now()`
+  is captured on every run); every other field is stable when the
+  repository state has not changed.
 - Non-public libraries never appear in dependencies, reverse edges,
   relations, evidence links, or diagnostics.
 - Locations survive only when the reference points at the target's own

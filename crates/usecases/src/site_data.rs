@@ -422,10 +422,19 @@ fn project_library(
     })?;
 
     // Dependencies: direct → public only.
-    let direct = build_library_links_from_ids(
+    // `manual_targets` are the edges the caller added via
+    // `[library.dependency_overrides]`; every match flips `LibraryLink.manual`
+    // on the corresponding link (spec §5.1).
+    let empty_manual: BTreeSet<LibraryId> = BTreeSet::new();
+    let manual_targets = input
+        .manual_dependency_edges
+        .get(&library.id)
+        .unwrap_or(&empty_manual);
+    let direct = build_library_links_marked(
         input,
         ctx,
         ctx.effective_direct.get(&library.id).into_iter().flatten(),
+        manual_targets,
     );
     let has_private_direct = ctx
         .effective_direct
@@ -470,14 +479,13 @@ fn project_library(
             if !ctx.published.contains(&rel.target) {
                 return None;
             }
+            let manual_edge = input
+                .manual_dependency_edges
+                .get(&library.id)
+                .is_some_and(|set| set.contains(&rel.target));
             Some(RelationPublic {
                 kind: rel.kind.clone(),
-                target: build_library_link(
-                    input,
-                    ctx,
-                    &rel.target,
-                    is_manual_direct(ctx, &library.id, &rel.target),
-                )?,
+                target: build_library_link(input, ctx, &rel.target, manual_edge)?,
                 manual: rel.manual,
             })
         })
@@ -544,12 +552,6 @@ fn project_library(
         },
         diagnostics,
     })
-}
-
-fn is_manual_direct(ctx: &ProjectionContext<'_>, source: &LibraryId, target: &LibraryId) -> bool {
-    ctx.effective_direct
-        .get(source)
-        .is_some_and(|list| list.contains(target))
 }
 
 fn library_has_private_transitive_dep(ctx: &ProjectionContext<'_>, library: &LibraryId) -> bool {
@@ -1110,10 +1112,22 @@ fn build_library_links_from_ids<'a, I>(
 where
     I: IntoIterator<Item = &'a LibraryId>,
 {
+    build_library_links_marked(input, ctx, ids, &BTreeSet::new())
+}
+
+fn build_library_links_marked<'a, I>(
+    input: &PublicProjectionInput<'_>,
+    ctx: &ProjectionContext<'_>,
+    ids: I,
+    manual_targets: &BTreeSet<LibraryId>,
+) -> Vec<LibraryLink>
+where
+    I: IntoIterator<Item = &'a LibraryId>,
+{
     let mut out: Vec<LibraryLink> = ids
         .into_iter()
         .filter(|id| ctx.published.contains(id))
-        .filter_map(|id| build_library_link(input, ctx, id, false))
+        .filter_map(|id| build_library_link(input, ctx, id, manual_targets.contains(id)))
         .collect();
     out.sort_by(|a, b| a.library_id.cmp(&b.library_id));
     out.dedup_by(|a, b| a.library_id == b.library_id);

@@ -2,12 +2,21 @@
 //!
 //! The reader (web CI, preview server) sees either the previous version or
 //! the new version and never a partial mix. Staging happens inside the parent
-//! of `output_dir` so the final `rename` stays on the same filesystem and is
-//! atomic under POSIX semantics; the old directory, if any, is atomically
-//! swapped out and then cleaned up.
+//! of `output_dir` so the final `rename` stays on the same filesystem.
+//!
+//! When `output_dir` already exists, we prefer `renameat2(RENAME_EXCHANGE)`
+//! (Linux 3.15+) which swaps the two directories in a single kernel call so
+//! there is no visible window where `output_dir` is missing. On platforms
+//! without that syscall we fall back to a rename-aside-then-rename-into
+//! sequence, which still leaves the reader with either the old or new tree
+//! but is not swap-atomic; the fallback path is only taken when the swap
+//! call itself is unavailable (`ENOSYS`) or when the target does not yet
+//! exist.
 
+use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
@@ -55,51 +64,128 @@ impl SiteDataRepository for SiteDataRepositoryImpl {
         })?;
         write_site_data(staging.path(), data)?;
 
-        // Persist the staging directory into place: rename to output_dir.
-        // If output_dir already exists, swap by renaming it aside first, then
-        // renaming staging into place, then removing the old dir. On Linux
-        // `renameat2(RENAME_EXCHANGE)` would be preferable but is not portable,
-        // so we accept a brief window where the target does not exist.
         let staging_path = staging.keep();
-        let backup = backup_path(output_dir);
 
-        if output_dir.exists() {
-            if backup.exists() {
-                fs::remove_dir_all(&backup).with_context(|| {
-                    format!("failed to clean stale backup {}", backup.display())
-                })?;
-            }
-            fs::rename(output_dir, &backup).with_context(|| {
+        // If the target does not exist yet, a plain rename is already atomic.
+        if !output_dir.exists() {
+            fs::rename(&staging_path, output_dir).with_context(|| {
                 format!(
-                    "failed to move existing output {} aside to {}",
-                    output_dir.display(),
-                    backup.display()
+                    "failed to move staged site data into {}",
+                    output_dir.display()
                 )
             })?;
+            return Ok(());
         }
 
-        if let Err(err) = fs::rename(&staging_path, output_dir) {
-            // Restore the backup on failure so we don't leave the reader with
-            // no directory at all.
-            if backup.exists() {
-                let _ = fs::rename(&backup, output_dir);
+        // Preferred path (Linux): swap staging ⇄ output_dir with a single
+        // renameat2(RENAME_EXCHANGE) so no reader ever sees a missing target.
+        match try_exchange(&staging_path, output_dir) {
+            SwapOutcome::Exchanged => {
+                // staging_path now holds the OLD contents; remove them.
+                fs::remove_dir_all(&staging_path).with_context(|| {
+                    format!(
+                        "failed to remove replaced output directory at {}",
+                        staging_path.display()
+                    )
+                })?;
+                Ok(())
             }
-            // Cleanup staging leftovers.
-            let _ = fs::remove_dir_all(&staging_path);
-            return Err(anyhow::Error::new(err).context(format!(
-                "failed to move staged site data into {}",
-                output_dir.display()
-            )));
+            SwapOutcome::Unsupported => fallback_rename_swap(&staging_path, output_dir),
+            SwapOutcome::Failed(err) => Err(err),
         }
-
-        if backup.exists() {
-            fs::remove_dir_all(&backup).with_context(|| {
-                format!("failed to remove old output backup {}", backup.display())
-            })?;
-        }
-
-        Ok(())
     }
+}
+
+enum SwapOutcome {
+    /// `renameat2(RENAME_EXCHANGE)` succeeded.
+    Exchanged,
+    /// The kernel / libc lacks `renameat2` — fall back.
+    Unsupported,
+    /// The syscall failed for a real reason (permissions, ENOENT, …).
+    Failed(anyhow::Error),
+}
+
+#[cfg(target_os = "linux")]
+fn try_exchange(staging: &Path, target: &Path) -> SwapOutcome {
+    let staging_c = match CString::new(staging.as_os_str().as_bytes()) {
+        Ok(c) => c,
+        Err(err) => {
+            return SwapOutcome::Failed(anyhow::Error::from(err).context("staging path"));
+        }
+    };
+    let target_c = match CString::new(target.as_os_str().as_bytes()) {
+        Ok(c) => c,
+        Err(err) => {
+            return SwapOutcome::Failed(anyhow::Error::from(err).context("target path"));
+        }
+    };
+    // SAFETY: the two CStrings live for the duration of the call and are
+    // both derived from valid `&Path` sources. `renameat2` is a syscall
+    // wrapper with no memory-safety obligations beyond valid pointers.
+    let ret = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            staging_c.as_ptr(),
+            libc::AT_FDCWD,
+            target_c.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    };
+    if ret == 0 {
+        SwapOutcome::Exchanged
+    } else {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ENOSYS) || err.raw_os_error() == Some(libc::EINVAL) {
+            // ENOSYS: kernel lacks renameat2. EINVAL: filesystem does not
+            // support RENAME_EXCHANGE (older ext4 mount options, some FUSE
+            // filesystems). Both cases warrant the fallback.
+            SwapOutcome::Unsupported
+        } else {
+            SwapOutcome::Failed(anyhow::Error::new(err).context(format!(
+                "renameat2(RENAME_EXCHANGE) between {} and {} failed",
+                staging.display(),
+                target.display()
+            )))
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn try_exchange(_staging: &Path, _target: &Path) -> SwapOutcome {
+    SwapOutcome::Unsupported
+}
+
+/// Non-atomic fallback used when `renameat2(RENAME_EXCHANGE)` isn't
+/// available. The reader sees a brief window where the target is missing;
+/// this is documented in the module header.
+fn fallback_rename_swap(staging: &Path, target: &Path) -> Result<()> {
+    let backup = backup_path(target);
+    if backup.exists() {
+        fs::remove_dir_all(&backup)
+            .with_context(|| format!("failed to clean stale backup {}", backup.display()))?;
+    }
+    fs::rename(target, &backup).with_context(|| {
+        format!(
+            "failed to move existing output {} aside to {}",
+            target.display(),
+            backup.display()
+        )
+    })?;
+    if let Err(err) = fs::rename(staging, target) {
+        // Restore the backup on failure so we don't leave the reader with
+        // no directory at all.
+        let _ = fs::rename(&backup, target);
+        let _ = fs::remove_dir_all(staging);
+        return Err(anyhow::Error::new(err).context(format!(
+            "failed to move staged site data into {}",
+            target.display()
+        )));
+    }
+    if backup.exists() {
+        fs::remove_dir_all(&backup)
+            .with_context(|| format!("failed to remove old output backup {}", backup.display()))?;
+    }
+    Ok(())
 }
 
 fn write_site_data(target: &Path, data: &SiteData) -> Result<()> {
