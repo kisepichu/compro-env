@@ -371,6 +371,102 @@ pub fn run() -> Result<()> {
                 }
             }
         },
+        commands::Commands::Verify { solution } => {
+            let root = match find_project_root() {
+                Ok(root) => root,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            let config = match ProjectLibraryConfigLoader::load(&root) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("{e:#}");
+                    std::process::exit(1);
+                }
+            };
+            match verify_with_io(&root, &config, solution) {
+                Ok(exit) => std::process::exit(exit),
+                Err(e) => {
+                    eprintln!("{e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        commands::Commands::Internal { subcommand } => match subcommand {
+            commands::InternalSubcommand::VerifyPrepare { solution, plan_out } => {
+                let root = find_project_root()?;
+                let config = ProjectLibraryConfigLoader::load(&root)?;
+                let (manifest, snapshot) = build_analysis(&root, &config)?;
+                let controller = build_verify_controller(&root)?;
+                let path = controller.internal_verify_prepare(
+                    &commands::InternalVerifyPrepareCommand {
+                        solution: solution.clone(),
+                        plan_out: plan_out.clone(),
+                    },
+                    &root,
+                    &config,
+                    &manifest,
+                    &snapshot,
+                    &usecases::clock::SystemClock,
+                    &usecases::id_generator::MonotonicAttemptIdGenerator::new(),
+                    &usecases::submission_lifecycle::RealSleeper,
+                    &usecases::submission_lifecycle::NoRetryHint,
+                    usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
+                )?;
+                println!("wrote {}", path.display());
+                Ok(())
+            }
+            commands::InternalSubcommand::VerifyStart { plan_in } => {
+                let root = find_project_root()?;
+                let config = ProjectLibraryConfigLoader::load(&root)?;
+                let (manifest, snapshot) = build_analysis(&root, &config)?;
+                let controller = build_verify_controller(&root)?;
+                let event = controller.internal_verify_start(
+                    &commands::InternalVerifyStartCommand {
+                        plan_in: plan_in.clone(),
+                    },
+                    &root,
+                    &config,
+                    &manifest,
+                    &snapshot,
+                    &usecases::clock::SystemClock,
+                    &usecases::id_generator::MonotonicAttemptIdGenerator::new(),
+                    &usecases::submission_lifecycle::RealSleeper,
+                    &usecases::submission_lifecycle::NoRetryHint,
+                    usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
+                )?;
+                println!("{event:?}");
+                Ok(())
+            }
+            commands::InternalSubcommand::VerifyPoll { solution } => {
+                let root = find_project_root()?;
+                let config = ProjectLibraryConfigLoader::load(&root)?;
+                let (manifest, snapshot) = build_analysis(&root, &config)?;
+                let controller = build_verify_controller(&root)?;
+                let event = controller.internal_verify_poll(
+                    &commands::InternalVerifyPollCommand {
+                        solution: solution.clone(),
+                    },
+                    &root,
+                    &config,
+                    &manifest,
+                    &snapshot,
+                    &usecases::clock::SystemClock,
+                    &usecases::id_generator::MonotonicAttemptIdGenerator::new(),
+                    &usecases::submission_lifecycle::RealSleeper,
+                    &usecases::submission_lifecycle::NoRetryHint,
+                    usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
+                )?;
+                use usecases::submission_lifecycle::PollEvent;
+                let exit_code = match event {
+                    PollEvent::Completed { .. } => 0,
+                    _ => 1,
+                };
+                std::process::exit(exit_code);
+            }
+        },
         commands::Commands::Check { language } => {
             let root = match find_project_root() {
                 Ok(root) => root,
@@ -809,6 +905,132 @@ fn build_controller() -> Result<Controller> {
     );
 
     Ok(Controller::new(service))
+}
+
+/// Builds a `Controller` wired for the verify pipeline: real HTTP registries
+/// plus the filesystem verification repo. Kept separate from
+/// [`build_controller`] so login/whoami/... paths do not pay for the extra
+/// pipeline they never use.
+fn build_verify_controller(root: &std::path::Path) -> Result<Controller> {
+    let verification = usecases::service::VerificationServices {
+        pollers: crate::submission_impl::poller::build_poller_registry()?,
+        recovery: crate::submission_impl::recovery::build_recovery_registry()?,
+        verifications: Box::new(
+            crate::repository_impl::verification_repository_impl::VerificationRepositoryImpl::new(
+                root.to_path_buf(),
+            ),
+        ),
+    };
+    let service = Service::with_verification(
+        Box::new(OnlineJudgeRegistryImpl::new()?),
+        crate::submission_impl::registry::build_starter_registry()?,
+        Box::new(ContestRepositoryImpl::new(root.to_path_buf())),
+        Box::new(SolutionRepositoryImpl::new(root.to_path_buf())),
+        Box::new(SessionRepositoryImpl),
+        Box::new(ConfigImpl),
+        default_command_runner(),
+        verification,
+    );
+    Ok(Controller::new(service))
+}
+
+/// Runs the discovery + analyzer + normalization pipeline synchronously and
+/// returns a matched (`manifest`, `snapshot`) pair the verify controller can
+/// consume. Errors are surfaced verbatim.
+fn build_analysis(
+    root: &std::path::Path,
+    config: &domain::library::LibraryProjectConfig,
+) -> Result<(
+    domain::analysis::DiscoveryManifest,
+    domain::analysis::AnalysisSnapshot,
+)> {
+    use std::collections::BTreeMap;
+    use usecases::library_analyzer::LibraryAnalyzer;
+
+    let manifest = crate::library_project::discovery::LibraryDiscovery::discover(root, config)?;
+    let runner = crate::library_adapter::process::ProcessLibraryAdapterRunner::new(
+        root.to_path_buf(),
+        BTreeMap::new(),
+    );
+    let analyzer =
+        crate::library_analyzer_impl::ProcessLibraryAnalyzer::new(runner, config.clone());
+    let responses = analyzer.analyze_all(root, &manifest)?;
+
+    // Collect source bytes for every managed library file plus every
+    // published solution entry, since `normalize_analysis` requires full
+    // coverage of the manifest's referenced source paths.
+    let mut source_bytes: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for lib in &manifest.libraries {
+        let contents = std::fs::read(root.join(&lib.source_path))
+            .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", lib.source_path))?;
+        source_bytes.insert(lib.source_path.clone(), contents);
+    }
+    for sol in &manifest.solutions {
+        let mut key = sol.root.clone();
+        if !key.ends_with('/') {
+            key.push('/');
+        }
+        key.push_str(&sol.entry);
+        let contents = std::fs::read(root.join(&key))
+            .map_err(|e| anyhow::anyhow!("failed to read solution entry {key}: {e}"))?;
+        source_bytes.insert(key, contents);
+    }
+    let revision = "HEAD".to_string();
+    let snapshot = usecases::library_analysis::normalize_analysis(
+        &manifest,
+        responses,
+        &revision,
+        &source_bytes,
+    )?;
+    Ok((manifest, snapshot))
+}
+
+/// Runs the full `ce verify [solution-id]` pipeline and returns an exit code.
+///
+/// Kept as a free function so integration tests can drive the controller
+/// directly with fakes; the shell's `run()` calls this to compose real ports.
+pub fn verify_with_io(
+    root: &std::path::Path,
+    config: &domain::library::LibraryProjectConfig,
+    solution: Option<String>,
+) -> Result<i32> {
+    let (manifest, snapshot) = build_analysis(root, config)?;
+    let controller = build_verify_controller(root)?;
+    let outcome = controller.verify(
+        &commands::VerifyCommand { solution },
+        root,
+        config,
+        &manifest,
+        &snapshot,
+        &usecases::clock::SystemClock,
+        &usecases::id_generator::MonotonicAttemptIdGenerator::new(),
+        &usecases::submission_lifecycle::RealSleeper,
+        &usecases::submission_lifecycle::NoRetryHint,
+        usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
+    )?;
+    for line in &outcome.statuses {
+        println!("[{}] {}", line.solution_id, format_status(&line.status));
+    }
+    Ok(outcome.exit_code())
+}
+
+fn format_status(status: &usecases::service::verify::VerifyStatus) -> String {
+    use usecases::service::verify::VerifyStatus;
+    match status {
+        VerifyStatus::NotConfigured => "not configured; skipping".into(),
+        VerifyStatus::UnknownSolution => "unknown solution".into(),
+        VerifyStatus::AnalyzerBlocked { detail } => format!("analyzer blocked ({detail})"),
+        VerifyStatus::LanguageCheckFailed { language, detail } => {
+            format!("language check failed for {language} ({detail})")
+        }
+        VerifyStatus::TestFailed { detail } => format!("test failed ({detail})"),
+        VerifyStatus::Verified => "verified".into(),
+        VerifyStatus::Rejected { verdict, summary } => format!("rejected {verdict} ({summary})"),
+        VerifyStatus::Unavailable { summary } => format!("unavailable ({summary})"),
+        VerifyStatus::Pending { state, summary } => format!("pending [{state}] ({summary})"),
+        VerifyStatus::OjBlocked { oj } => format!("skipped: {oj} already has an in-flight attempt"),
+        VerifyStatus::InfraError { summary } => format!("infrastructure error ({summary})"),
+    }
 }
 
 /// Locates the project root by searching upward for the `templates/` directory.

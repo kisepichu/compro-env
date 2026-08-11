@@ -43,12 +43,12 @@ pub fn poll_handle(
 ) -> Result<PollEvent>;
 ```
 
-- [ ] Write fake-port tests for every resume state, recovery exact/inconclusive, persisted Starting before
+- [x] Write fake-port tests for every resume state, recovery exact/inconclusive, persisted Starting before
       connection, immediate handle persistence, 2-to-15-second polling, retry-after, 30-second error backoff,
       15-minute budget, terminal/error transitions, and no duplicated start.
-- [ ] Implement injectable clock/sleeper and transition persistence after every durable state.
-- [ ] Run `cargo test -p usecases --test submission_lifecycle`.
-- [ ] Invoke `/commit` with `feat: orchestrate resumable submission lifecycle`.
+- [x] Implement injectable clock/sleeper and transition persistence after every durable state.
+- [x] Run `cargo test -p usecases --test submission_lifecycle`.
+- [x] Invoke `/commit` with `feat: orchestrate resumable submission lifecycle`.
 
 ### Task 2: Add the public command and hidden CI boundary
 
@@ -62,18 +62,18 @@ pub fn poll_handle(
 - Create: `crates/infrastructure/tests/verify_command.rs`
 - Create: `docs/commands/verify.md`
 
-- [ ] Write failing CLI tests for all/one selection, stable solution order, resume-first, never/stale-only,
+- [x] Write failing CLI tests for all/one selection, stable solution order, resume-first, never/stale-only,
       one check per language, solution tests, check/test failure barrier, unavailable, rejected, and exit codes.
-- [ ] Implement `ce verify [solution-id]` with strict project config and explicit OJ language mapping.
-- [ ] Add hidden `internal verify-prepare/start/poll` argument schemas; keep them undocumented and constrained.
-- [ ] Ensure AtCoder verify writes unavailable and exits 1; credentials/network failures remain infrastructure errors.
-- [ ] Run `cargo test -p infrastructure --test verify_command`.
-- [ ] Invoke `/commit` with `feat: add resumable library verification command`.
+- [x] Implement `ce verify [solution-id]` with strict project config and explicit OJ language mapping.
+- [x] Add hidden `internal verify-prepare/start/poll` argument schemas; keep them undocumented and constrained.
+- [x] Ensure AtCoder verify writes unavailable and exits 1; credentials/network failures remain infrastructure errors.
+- [x] Run `cargo test -p infrastructure --test verify_command`.
+- [x] Invoke `/commit` with `feat: add resumable library verification command`.
 
 ### Task 3: Deliver `ce verify`
 
-- [ ] Run a fake mixed-OJ end-to-end fixture, including a timeout followed by resume to accepted.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record verify command completion`.
-- [ ] Invoke `/pr --base main`; link plan 059 and state that it satisfies the verify prerequisite of plan 060.
-- [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+- [x] Run a fake mixed-OJ end-to-end fixture, including a timeout followed by resume to accepted.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record verify command completion`.
+- [x] Invoke `/pr --base main`; link plan 059 and state that it satisfies the verify prerequisite of plan 060.
+- [x] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.

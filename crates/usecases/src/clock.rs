@@ -21,6 +21,15 @@ impl Clock for FixedClock {
     }
 }
 
+/// Production [`Clock`] backed by `chrono::Utc::now()`.
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> DateTime<FixedOffset> {
+        chrono::Utc::now().fixed_offset()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

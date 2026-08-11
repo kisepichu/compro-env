@@ -209,6 +209,7 @@ mod tests {
             replaces_attempt_id: None,
             fingerprint: fp,
             state,
+            plan_context: None,
         }
     }
 

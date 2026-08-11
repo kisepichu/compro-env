@@ -625,6 +625,7 @@ fn build_fixture() -> Fixture {
                 observed_at: DateTime::parse_from_rfc3339("2026-08-05T10:00:00+00:00").unwrap(),
                 summary: "interactive".into(),
             }),
+            plan_context: None,
         },
     );
     current_fingerprints.insert(unavail_id.clone(), Ok(unavail_fp));
@@ -702,6 +703,7 @@ fn make_completed_record(
             ),
             extra: BTreeMap::new(),
         }),
+        plan_context: None,
     }
 }
 
