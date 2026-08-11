@@ -191,8 +191,10 @@ fn macro_declaration_emits_but_macro_invocation_marks_partial() {
 
 #[test]
 fn unicode_columns_are_unicode_scalar_values() {
-    // `pub struct 東京 { ... }` — the identifier starts at USV column 12
-    // (0-based col 11, plus 1 for 1-based reporting).
+    // The `pub struct` item starts at column 1 — verify the walker uses
+    // `ItemStruct::span()` (item start) rather than the identifier position,
+    // and that the emitted column is 1-based even when the identifier itself
+    // is multi-byte Unicode.
     let src = "pub struct 東京 { pub 人口: u64 }";
     let analysis = analyze_symbols(src, "t.rs", &[]);
     let tokyo = analysis

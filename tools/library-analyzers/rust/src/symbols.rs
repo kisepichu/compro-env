@@ -6,11 +6,11 @@
 //! keeps dependency analysis on the module-graph resolver.
 //!
 //! Kinds are lowercase adapter tokens the core does not interpret:
-//! `mod`, `struct`, `enum`, `enum_variant`, `union`, `trait`, `impl`, `type`,
-//! `fn`, `method`, `const`, `static`, `macro`. Trait items become their
-//! declaration kind (`method`, `type`, `const`); impl items become `method`,
-//! `type`, `const`. Impl blocks are containers — no impl-level symbol is
-//! fabricated, per plan 044 Task 1.
+//! `mod`, `struct`, `enum`, `enum_variant`, `union`, `trait`, `type`, `fn`,
+//! `method`, `const`, `static`, `macro`. Trait items become their declaration
+//! kind (`method`, `type`, `const`); impl items become `method`, `type`,
+//! `const`. Impl blocks themselves are containers — no `impl` symbol is
+//! emitted, per plan 044 Task 1.
 //!
 //! Location fields follow the shared protocol: 1-based line/column in Unicode
 //! scalar values. `proc-macro2` with `span-locations` already reports
