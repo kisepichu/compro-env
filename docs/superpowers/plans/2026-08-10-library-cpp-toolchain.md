@@ -58,5 +58,5 @@
 - [x] Run C++ unit tests and the generic adapter build/process suites.
 - [x] Run rollout repository verification and `git diff --check`.
 - [x] Invoke `/commit` with `docs: record C++ toolchain completion`.
-- [ ] Invoke `/pr --base main`; link plan 045 and state that it unblocks plan 046.
-- [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+- [x] Invoke `/pr --base main`; link plan 045 and state that it unblocks plan 046.
+- [x] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
