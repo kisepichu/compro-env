@@ -12,4 +12,5 @@
 //! alongside the polling and recovery adapters (plan 058 Task 1 split).
 
 pub mod atcoder;
+pub mod poller;
 pub mod registry;

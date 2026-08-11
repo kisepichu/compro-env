@@ -1,0 +1,29 @@
+{
+  "overview": {
+    "id": 1237,
+    "problem_name": "aplusb",
+    "user_name": "alice",
+    "lang": "rust",
+    "is_latest": true,
+    "status": "WA",
+    "time": 15.0,
+    "memory": 8192,
+    "submission_time": "2024-01-15T10:10:00Z"
+  },
+  "source": "",
+  "can_rejudge": false,
+  "case_results": [
+    {
+      "case": "example_00",
+      "status": "AC",
+      "time": 10.0,
+      "memory": 4096
+    },
+    {
+      "case": "example_01",
+      "status": "WA",
+      "time": 15.0,
+      "memory": 8192
+    }
+  ]
+}

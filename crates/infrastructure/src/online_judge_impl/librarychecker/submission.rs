@@ -1,9 +1,7 @@
-//! LibraryChecker [`SubmissionStarter`] — posts the source to the LibraryChecker
-//! REST API and returns a trackable handle.
+//! LibraryChecker [`SubmissionStarter`] and [`SubmissionPoller`] — posts the
+//! source to the LibraryChecker REST API and polls for results.
 //!
 //! Spec § 9: LibraryChecker is `UnattendedTrackable / TestcaseDetails / BestEffort`.
-//! The pollers and recovery adapters land with plan 058; this starter's job is
-//! to enter `Trackable` state with the submission ID.
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -11,10 +9,13 @@ use domain::entity::{OJKind, Session};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use usecases::submission::{
-    InfrastructureErrorKind, RecoveryMode, ResultDetailLevel, StartSubmissionError,
-    SubmissionAdapterDescriptor, SubmissionHandle, SubmissionMode, SubmissionRequest,
-    SubmissionStart, SubmissionStarter,
+    InfrastructureErrorKind, JudgeResult, JudgeVerdict, PollObservation, PollSubmissionError,
+    RecoveryMode, ResultDetailLevel, StartSubmissionError, SubmissionAdapterDescriptor,
+    SubmissionHandle, SubmissionMode, SubmissionPoller, SubmissionRequest, SubmissionStart,
+    SubmissionStarter, TestcaseOutcome,
 };
+
+use super::schema;
 
 use super::auth::{FIREBASE_API_KEY, firebase_tokens};
 
@@ -187,6 +188,168 @@ impl SubmissionStarter for LibraryCheckerStarter {
         })
     }
 }
+
+// ─── SubmissionPoller ─────────────────────────────────────────────────────
+
+pub struct LibraryCheckerPoller {
+    client: reqwest::blocking::Client,
+    base_url: String,
+}
+
+impl LibraryCheckerPoller {
+    pub fn new() -> Result<Self> {
+        Self::with_base_url(REST_BASE.to_string())
+    }
+
+    /// Override the base URL — used in tests to point at a local fixture server.
+    pub fn with_base_url(base: String) -> Result<Self> {
+        Ok(Self {
+            client: reqwest::blocking::Client::builder().build()?,
+            base_url: base,
+        })
+    }
+}
+
+impl SubmissionPoller for LibraryCheckerPoller {
+    fn descriptor(&self) -> SubmissionAdapterDescriptor {
+        SubmissionAdapterDescriptor {
+            name: "librarychecker".to_string(),
+            version: "1".to_string(),
+            submission_mode: SubmissionMode::UnattendedTrackable,
+            result_detail: ResultDetailLevel::TestcaseDetails,
+            recovery_mode: RecoveryMode::BestEffort,
+        }
+    }
+
+    fn poll_submission(
+        &self,
+        handle: &SubmissionHandle,
+        // GET /submissions/{id} has no security requirement in the OpenAPI schema,
+        // so we do not send a bearer token and do not need to refresh credentials.
+        _session: Option<&Session>,
+    ) -> Result<PollObservation, PollSubmissionError> {
+        let url = format!("{}/submissions/{}", self.base_url, handle.submission_id);
+        let response =
+            self.client
+                .get(&url)
+                .send()
+                .map_err(|e| PollSubmissionError::Infrastructure {
+                    kind: InfrastructureErrorKind::Network,
+                    summary: sanitize(&format!("network error: {e}")),
+                })?;
+
+        let status = response.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err(PollSubmissionError::HandleNotFound {
+                summary: sanitize(&format!("submission {} not found", handle.submission_id)),
+            });
+        }
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok());
+            let summary = if let Some(secs) = retry_after {
+                sanitize(&format!("rate limited (retry-after: {secs})"))
+            } else {
+                sanitize("rate limited")
+            };
+            return Err(PollSubmissionError::Infrastructure {
+                kind: InfrastructureErrorKind::RateLimited,
+                summary,
+            });
+        }
+        if status.is_server_error() {
+            return Err(PollSubmissionError::Infrastructure {
+                kind: InfrastructureErrorKind::ServiceUnavailable,
+                summary: sanitize(&format!("LibraryChecker status={}", status.as_u16())),
+            });
+        }
+        if !status.is_success() {
+            return Err(PollSubmissionError::Infrastructure {
+                kind: InfrastructureErrorKind::InvalidResponse,
+                summary: sanitize(&format!(
+                    "unexpected client error status={}",
+                    status.as_u16()
+                )),
+            });
+        }
+
+        let body = response
+            .text()
+            .map_err(|e| PollSubmissionError::Infrastructure {
+                kind: InfrastructureErrorKind::Network,
+                summary: sanitize(&format!("network error: {e}")),
+            })?;
+
+        let info: schema::SubmissionInfoResponse =
+            serde_json::from_str(&body).map_err(|_| PollSubmissionError::Infrastructure {
+                kind: InfrastructureErrorKind::SchemaError,
+                summary: sanitize("malformed submission info response"),
+            })?;
+
+        map_observation(info)
+    }
+}
+
+fn map_verdict(status: &str) -> JudgeVerdict {
+    match status {
+        "AC" => JudgeVerdict::Accepted,
+        "WA" => JudgeVerdict::WrongAnswer,
+        "TLE" => JudgeVerdict::TimeLimitExceeded,
+        "MLE" => JudgeVerdict::MemoryLimitExceeded,
+        "RE" => JudgeVerdict::RuntimeError,
+        "CE" => JudgeVerdict::CompilationError,
+        "IE" => JudgeVerdict::InternalError,
+        other => JudgeVerdict::Other(other.to_string()),
+    }
+}
+
+/// Converts seconds (f32) to milliseconds, rounding up. Returns None for
+/// negative or non-finite values (LC sends -1 as a sentinel before judging).
+fn map_time_ms(time: f32) -> Option<u32> {
+    if !time.is_finite() || time < 0.0 {
+        return None;
+    }
+    Some((time * 1000.0_f32).ceil() as u32)
+}
+
+/// Converts bytes (i64) to KiB, rounding up. Returns None for negative values.
+fn map_memory_kib(memory: i64) -> Option<u32> {
+    if memory < 0 {
+        return None;
+    }
+    Some(((memory as f64) / 1024.0).ceil() as u32)
+}
+
+fn map_observation(
+    info: schema::SubmissionInfoResponse,
+) -> Result<PollObservation, PollSubmissionError> {
+    match info.overview.status.as_str() {
+        "WJ" => return Ok(PollObservation::Queued),
+        "Judging" | "J" => return Ok(PollObservation::Judging),
+        _ => {}
+    }
+    let verdict = map_verdict(&info.overview.status);
+    let testcases = info
+        .case_results
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| TestcaseOutcome {
+            name: c.case,
+            verdict: map_verdict(&c.status),
+            time_ms: map_time_ms(c.time),
+            memory_kib: map_memory_kib(c.memory),
+        })
+        .collect();
+    Ok(PollObservation::Completed(JudgeResult {
+        verdict,
+        testcases,
+    }))
+}
+
+// ─── URL helpers ──────────────────────────────────────────────────────────
 
 fn submission_url(id: i64) -> String {
     format!("{SUBMISSION_BASE}/{id}")
