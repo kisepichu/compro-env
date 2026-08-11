@@ -3,3 +3,7 @@ target/
 tmp/
 .claude/settings.local.json
 .worktrees/
+node_modules/
+web/dist/
+web/.astro/
+
