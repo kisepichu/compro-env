@@ -48,11 +48,14 @@ fn workspace_root() -> &'static Path {
     })
 }
 
-/// Minimal env allowlist for running the analyzer binary. The C++ adapter
-/// links no LLVM shared libraries, so `LD_LIBRARY_PATH` is not required.
+/// Minimal env allowlist for running the analyzer binary. Plan 046 links
+/// `libclang-cpp.so` into the executable, whose transitive `libz.so.1` /
+/// `libstdc++.so.6` deps the loader still resolves through the host
+/// environment — hence `LD_LIBRARY_PATH` is forwarded here alongside the
+/// base allowlist.
 fn sanitized_env() -> BTreeMap<String, String> {
     let mut env = BTreeMap::new();
-    for key in ["PATH", "HOME", "USER", "LOGNAME"] {
+    for key in ["PATH", "HOME", "USER", "LOGNAME", "LD_LIBRARY_PATH"] {
         if let Ok(v) = std::env::var(key) {
             env.insert(key.into(), v);
         }

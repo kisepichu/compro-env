@@ -40,6 +40,13 @@ pub const CPP_ADAPTER_VERSION: &str = "0.1.0";
 /// not in the returned map does not reach the child. `RUSTUP_TOOLCHAIN` is
 /// deliberately excluded so ambient host settings cannot override the
 /// pinned `rust-toolchain.toml`.
+///
+/// `LIBRARY_PATH`, `LD_LIBRARY_PATH`, and `C_INCLUDE_PATH` are forwarded so
+/// the C++ adapter build (plan 046) can locate host-provided libraries the
+/// pinned LLVM tarball still links against — notably `libz`, which
+/// `libclang-cpp.so` needs at both link and run time. Nix-based hosts
+/// already publish those variables; systems where they are unset simply
+/// fall through to the compiler/linker defaults.
 pub fn sanitized_language_env() -> BTreeMap<String, String> {
     const FORWARD: &[&str] = &[
         "PATH",
@@ -48,6 +55,10 @@ pub fn sanitized_language_env() -> BTreeMap<String, String> {
         "LOGNAME",
         "CARGO_HOME",
         "RUSTUP_HOME",
+        "LIBRARY_PATH",
+        "LD_LIBRARY_PATH",
+        "C_INCLUDE_PATH",
+        "CPLUS_INCLUDE_PATH",
     ];
     let mut env = BTreeMap::new();
     for key in FORWARD {
@@ -108,8 +119,10 @@ pub fn rust_build_plan(repository_root: &Path) -> LanguageBuildPlan {
 /// — left unset here so the build driver defaults it to the staging directory.
 ///
 /// The handshake runs the freshly built executable against the empty
-/// `AnalysisRequest`; no LLVM shared library is linked, so
-/// `handshake_environment` does not need `LD_LIBRARY_PATH`.
+/// `AnalysisRequest`. Plan 046 links `libclang-cpp.so` into the binary, so
+/// the handshake env forwards `LIBRARY_PATH`/`LD_LIBRARY_PATH` (see
+/// `sanitized_language_env`) alongside the RPATH that `CMakeLists.txt`
+/// bakes in.
 pub fn cpp_build_plan(
     repository_root: &Path,
     platform: &TargetPlatform,
