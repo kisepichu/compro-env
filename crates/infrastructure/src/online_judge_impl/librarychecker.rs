@@ -361,10 +361,8 @@ fn section_after_heading(md: &str, heading_marker: &str) -> Option<String> {
     let pos = md.find(heading_marker)?;
     let after = &md[pos + heading_marker.len()..];
     // Skip the rest of the heading line.
-    let body = match after.find('\n') {
-        Some(nl) => &after[nl + 1..],
-        None => return None,
-    };
+    let nl = after.find('\n')?;
+    let body = &after[nl + 1..];
     let end = body.find("\n##").unwrap_or(body.len());
     Some(body[..end].to_string())
 }

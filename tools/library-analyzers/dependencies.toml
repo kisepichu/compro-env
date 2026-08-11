@@ -1,0 +1,16 @@
+# Deterministic dependency pins for language adapters (spec §6.9, plan 041).
+#
+# `tools/library-analyzers/prepare` reads this manifest and downloads the
+# declared archives, Git commits, and toolchains into
+# `target/library-analyzers/prepared/<dependency-id>/`. The dependency id is
+# derived from the normalized manifest below plus the target platform, so a
+# fresh checkout on the same platform always resolves to the same cache entry.
+#
+# Language-specific pins (rust registry mirrors, clang / Lean toolchains) are
+# added by the follow-up plans 043–050. This initial manifest ships empty so
+# the mechanism and `prepare --check` invariants ship first.
+
+archives = []
+git = []
+locals = []
+toolchains = []
