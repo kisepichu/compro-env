@@ -15,10 +15,11 @@
 import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import { JSDOM } from "jsdom";
 
-const repoRoot = resolve(new URL("..", import.meta.url).pathname);
+const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 const FIXTURE = join(repoRoot, "web/tests/fixtures/site-data.json");
 const ORIGIN = "https://example.test";

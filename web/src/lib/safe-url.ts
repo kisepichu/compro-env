@@ -23,8 +23,9 @@ function containsControlChars(input: string): boolean {
  * Return a trusted, http(s)-only URL string, or `null` when the input is
  * not a safe external URL.
  *
- * `optionsForRepository=true` strips a trailing `/` before returning so
- * callers building `{base}/blob/{sha}/{path}` never emit `//blob/…`.
+ * Pass `{ stripTrailingSlash: true }` when building a base URL that will
+ * later be composed as `{base}/blob/{sha}/{path}` — the trailing `/` is
+ * removed so the result never contains `//blob/…`.
  */
 export function sanitizeExternalUrl(
   input: string | null | undefined,
