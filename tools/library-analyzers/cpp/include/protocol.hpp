@@ -119,10 +119,23 @@ struct DependencyAnalysis {
     std::vector<Dependency> dependencies;
 };
 
+/// One extracted declaration (spec §§6.3, 6.7).
+///
+/// `search_names` mirrors the Rust adapter's convention: at minimum the bare
+/// name, plus the qualified name when it differs. Callers may append more
+/// alias forms; the serializer preserves order.
+struct Symbol {
+    std::string name;
+    std::string kind;
+    std::optional<std::string> qualified_name;
+    std::vector<std::string> search_names;
+    std::optional<std::string> signature;
+    std::optional<Location> location;
+};
+
 struct SymbolAnalysis {
-    AnalysisState state = AnalysisState::Partial;
-    // Symbols land in plan 047; the C++ adapter always emits an empty list
-    // for now with a `partial` state.
+    AnalysisState state = AnalysisState::Complete;
+    std::vector<Symbol> symbols;
 };
 
 enum class Severity {

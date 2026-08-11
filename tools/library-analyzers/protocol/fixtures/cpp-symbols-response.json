@@ -1,0 +1,760 @@
+{
+  "adapter": {
+    "name": "ce-cpp",
+    "toolchains": [
+      {
+        "name": "clang",
+        "target": "x86_64-unknown-linux-gnu",
+        "version": "22.1.0"
+      }
+    ],
+    "version": "0.1.0"
+  },
+  "libraries": [
+    {
+      "dependency_analysis": {
+        "dependencies": [],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/cpp/symbols/basic.hpp",
+      "symbol_analysis": {
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "type",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 38
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 3
+              }
+            },
+            "name": "algebra",
+            "search_names": [
+              "algebra"
+            ]
+          },
+          {
+            "kind": "class",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 13
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 4
+              }
+            },
+            "name": "Point",
+            "qualified_name": "algebra::Point",
+            "search_names": [
+              "Point",
+              "algebra::Point"
+            ]
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 13,
+                "line": 7
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 5,
+                "line": 7
+              }
+            },
+            "name": "Point",
+            "qualified_name": "algebra::Point::Point",
+            "search_names": [
+              "Point",
+              "algebra::Point::Point"
+            ],
+            "signature": "()"
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 39,
+                "line": 8
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 5,
+                "line": 8
+              }
+            },
+            "name": "Point",
+            "qualified_name": "algebra::Point::Point",
+            "search_names": [
+              "Point",
+              "algebra::Point::Point"
+            ],
+            "signature": "(long long, long long)"
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 14,
+                "line": 9
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 5,
+                "line": 9
+              }
+            },
+            "name": "~Point",
+            "qualified_name": "algebra::Point::~Point",
+            "search_names": [
+              "~Point",
+              "algebra::Point::~Point"
+            ],
+            "signature": "()"
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 40,
+                "line": 10
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 5,
+                "line": 10
+              }
+            },
+            "name": "shifted",
+            "qualified_name": "algebra::Point::shifted",
+            "search_names": [
+              "shifted",
+              "algebra::Point::shifted"
+            ],
+            "signature": "(long long)"
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 27,
+                "line": 11
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 5,
+                "line": 11
+              }
+            },
+            "name": "origin",
+            "qualified_name": "algebra::Point::origin",
+            "search_names": [
+              "origin",
+              "algebra::Point::origin"
+            ],
+            "signature": "()"
+          },
+          {
+            "kind": "method",
+            "location": {
+              "end": {
+                "column": 49,
+                "line": 12
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 5,
+                "line": 12
+              }
+            },
+            "name": "operator+",
+            "qualified_name": "algebra::Point::operator+",
+            "search_names": [
+              "operator+",
+              "algebra::Point::operator+"
+            ],
+            "signature": "(const class algebra::Point &)"
+          },
+          {
+            "kind": "class",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 18
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 14
+              }
+            },
+            "name": "Color",
+            "qualified_name": "algebra::Color",
+            "search_names": [
+              "Color",
+              "algebra::Color"
+            ]
+          },
+          {
+            "kind": "type",
+            "location": {
+              "end": {
+                "column": 35,
+                "line": 16
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 5,
+                "line": 16
+              }
+            },
+            "name": "Kind",
+            "qualified_name": "algebra::Color::Kind",
+            "search_names": [
+              "Kind",
+              "algebra::Color::Kind"
+            ]
+          },
+          {
+            "kind": "value",
+            "location": {
+              "end": {
+                "column": 20,
+                "line": 16
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 17,
+                "line": 16
+              }
+            },
+            "name": "Red",
+            "qualified_name": "algebra::Color::Red",
+            "search_names": [
+              "Red",
+              "algebra::Color::Red"
+            ]
+          },
+          {
+            "kind": "value",
+            "location": {
+              "end": {
+                "column": 27,
+                "line": 16
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 22,
+                "line": 16
+              }
+            },
+            "name": "Green",
+            "qualified_name": "algebra::Color::Green",
+            "search_names": [
+              "Green",
+              "algebra::Color::Green"
+            ]
+          },
+          {
+            "kind": "value",
+            "location": {
+              "end": {
+                "column": 33,
+                "line": 16
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 29,
+                "line": 16
+              }
+            },
+            "name": "Blue",
+            "qualified_name": "algebra::Color::Blue",
+            "search_names": [
+              "Blue",
+              "algebra::Color::Blue"
+            ]
+          },
+          {
+            "kind": "class",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 22
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 19
+              }
+            },
+            "name": "Bytes",
+            "qualified_name": "algebra::Bytes",
+            "search_names": [
+              "Bytes",
+              "algebra::Bytes"
+            ]
+          },
+          {
+            "kind": "type",
+            "location": {
+              "end": {
+                "column": 33,
+                "line": 23
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 23
+              }
+            },
+            "name": "Signal",
+            "qualified_name": "algebra::Signal",
+            "search_names": [
+              "Signal",
+              "algebra::Signal"
+            ]
+          },
+          {
+            "kind": "value",
+            "location": {
+              "end": {
+                "column": 24,
+                "line": 23
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 21,
+                "line": 23
+              }
+            },
+            "name": "Low",
+            "qualified_name": "algebra::Signal::Low",
+            "search_names": [
+              "Low",
+              "algebra::Signal::Low"
+            ]
+          },
+          {
+            "kind": "value",
+            "location": {
+              "end": {
+                "column": 30,
+                "line": 23
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 26,
+                "line": 23
+              }
+            },
+            "name": "High",
+            "qualified_name": "algebra::Signal::High",
+            "search_names": [
+              "High",
+              "algebra::Signal::High"
+            ]
+          },
+          {
+            "kind": "type",
+            "location": {
+              "end": {
+                "column": 25,
+                "line": 24
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 24
+              }
+            },
+            "name": "Coord",
+            "qualified_name": "algebra::Coord",
+            "search_names": [
+              "Coord",
+              "algebra::Coord"
+            ]
+          },
+          {
+            "kind": "type",
+            "location": {
+              "end": {
+                "column": 26,
+                "line": 25
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 25
+              }
+            },
+            "name": "Weight",
+            "qualified_name": "algebra::Weight",
+            "search_names": [
+              "Weight",
+              "algebra::Weight"
+            ]
+          },
+          {
+            "kind": "concept",
+            "location": {
+              "end": {
+                "column": 50,
+                "line": 27
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 26
+              }
+            },
+            "name": "Addable",
+            "qualified_name": "algebra::Addable",
+            "search_names": [
+              "Addable",
+              "algebra::Addable"
+            ]
+          },
+          {
+            "kind": "class",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 32
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 28
+              }
+            },
+            "name": "Optional",
+            "qualified_name": "algebra::Optional",
+            "search_names": [
+              "Optional",
+              "algebra::Optional"
+            ]
+          },
+          {
+            "kind": "function",
+            "location": {
+              "end": {
+                "column": 14,
+                "line": 34
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 33
+              }
+            },
+            "name": "identity",
+            "qualified_name": "algebra::identity",
+            "search_names": [
+              "identity",
+              "algebra::identity"
+            ],
+            "signature": "()"
+          },
+          {
+            "kind": "function",
+            "location": {
+              "end": {
+                "column": 17,
+                "line": 35
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 35
+              }
+            },
+            "name": "zero",
+            "qualified_name": "algebra::zero",
+            "search_names": [
+              "zero",
+              "algebra::zero"
+            ],
+            "signature": "()"
+          },
+          {
+            "kind": "function",
+            "location": {
+              "end": {
+                "column": 20,
+                "line": 36
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 36
+              }
+            },
+            "name": "zero",
+            "qualified_name": "algebra::zero",
+            "search_names": [
+              "zero",
+              "algebra::zero"
+            ],
+            "signature": "(int)"
+          },
+          {
+            "kind": "value",
+            "location": {
+              "end": {
+                "column": 27,
+                "line": 37
+              },
+              "path": "libraries/cpp/symbols/basic.hpp",
+              "start": {
+                "column": 1,
+                "line": 37
+              }
+            },
+            "name": "PI",
+            "qualified_name": "algebra::PI",
+            "search_names": [
+              "PI",
+              "algebra::PI"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/cpp/symbols/nested.hpp",
+      "symbol_analysis": {
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "type",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 17
+              },
+              "path": "libraries/cpp/symbols/nested.hpp",
+              "start": {
+                "column": 1,
+                "line": 3
+              }
+            },
+            "name": "outer",
+            "search_names": [
+              "outer"
+            ]
+          },
+          {
+            "kind": "class",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 6
+              },
+              "path": "libraries/cpp/symbols/nested.hpp",
+              "start": {
+                "column": 1,
+                "line": 4
+              }
+            },
+            "name": "Outer",
+            "qualified_name": "outer::Outer",
+            "search_names": [
+              "Outer",
+              "outer::Outer"
+            ]
+          },
+          {
+            "kind": "type",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 11
+              },
+              "path": "libraries/cpp/symbols/nested.hpp",
+              "start": {
+                "column": 1,
+                "line": 7
+              }
+            },
+            "name": "inner",
+            "qualified_name": "outer::inner",
+            "search_names": [
+              "inner",
+              "outer::inner"
+            ]
+          },
+          {
+            "kind": "class",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 10
+              },
+              "path": "libraries/cpp/symbols/nested.hpp",
+              "start": {
+                "column": 1,
+                "line": 8
+              }
+            },
+            "name": "Inner",
+            "qualified_name": "outer::inner::Inner",
+            "search_names": [
+              "Inner",
+              "outer::inner::Inner"
+            ]
+          },
+          {
+            "kind": "function",
+            "location": {
+              "end": {
+                "column": 18,
+                "line": 11
+              },
+              "path": "libraries/cpp/symbols/nested.hpp",
+              "start": {
+                "column": 1,
+                "line": 11
+              }
+            },
+            "name": "deep",
+            "qualified_name": "outer::inner::deep",
+            "search_names": [
+              "deep",
+              "outer::inner::deep"
+            ],
+            "signature": "()"
+          },
+          {
+            "kind": "class",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 15
+              },
+              "path": "libraries/cpp/symbols/nested.hpp",
+              "start": {
+                "column": 1,
+                "line": 13
+              }
+            },
+            "name": "Hidden",
+            "qualified_name": "outer::(anonymous namespace)::Hidden",
+            "search_names": [
+              "Hidden",
+              "outer::(anonymous namespace)::Hidden"
+            ]
+          },
+          {
+            "kind": "function",
+            "location": {
+              "end": {
+                "column": 12,
+                "line": 18
+              },
+              "path": "libraries/cpp/symbols/nested.hpp",
+              "start": {
+                "column": 1,
+                "line": 18
+              }
+            },
+            "name": "top",
+            "search_names": [
+              "top"
+            ],
+            "signature": "()"
+          }
+        ]
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/cpp/symbols/unicode.hpp",
+      "symbol_analysis": {
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "type",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 8
+              },
+              "path": "libraries/cpp/symbols/unicode.hpp",
+              "start": {
+                "column": 1,
+                "line": 3
+              }
+            },
+            "name": "東京",
+            "search_names": [
+              "東京"
+            ]
+          },
+          {
+            "kind": "class",
+            "location": {
+              "end": {
+                "column": 2,
+                "line": 6
+              },
+              "path": "libraries/cpp/symbols/unicode.hpp",
+              "start": {
+                "column": 1,
+                "line": 4
+              }
+            },
+            "name": "街",
+            "qualified_name": "東京::街",
+            "search_names": [
+              "街",
+              "東京::街"
+            ]
+          },
+          {
+            "kind": "function",
+            "location": {
+              "end": {
+                "column": 21,
+                "line": 7
+              },
+              "path": "libraries/cpp/symbols/unicode.hpp",
+              "start": {
+                "column": 1,
+                "line": 7
+              }
+            },
+            "name": "こんにちは",
+            "qualified_name": "東京::こんにちは",
+            "search_names": [
+              "こんにちは",
+              "東京::こんにちは"
+            ],
+            "signature": "()"
+          }
+        ]
+      }
+    }
+  ],
+  "schema_version": 1,
+  "solutions": []
+}

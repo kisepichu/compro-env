@@ -461,16 +461,42 @@ DependencyAnalysis parse_dependency_analysis(const JsonValue& v) {
     return out;
 }
 
+Symbol parse_symbol(const JsonValue& v) {
+    const auto& obj = as_object(v, "symbol");
+    assert_no_unknown_keys(
+        obj,
+        {"name", "kind", "qualified_name", "search_names", "signature", "location"},
+        "symbol");
+    Symbol s;
+    s.name = as_string(require(obj, "name", "symbol"), "symbol.name");
+    s.kind = as_string(require(obj, "kind", "symbol"), "symbol.kind");
+    if (const JsonValue* q = find(obj, "qualified_name"); q != nullptr) {
+        if (q->kind() != JsonValue::Kind::Null) {
+            s.qualified_name = as_string(*q, "symbol.qualified_name");
+        }
+    }
+    if (const JsonValue* sn = find(obj, "search_names"); sn != nullptr) {
+        for (const auto& e : as_array(*sn, "symbol.search_names")) {
+            s.search_names.push_back(as_string(*e, "symbol.search_names[]"));
+        }
+    }
+    if (const JsonValue* sig = find(obj, "signature"); sig != nullptr) {
+        if (sig->kind() != JsonValue::Kind::Null) {
+            s.signature = as_string(*sig, "symbol.signature");
+        }
+    }
+    s.location = parse_optional_location(obj, "location", "symbol");
+    return s;
+}
+
 SymbolAnalysis parse_symbol_analysis(const JsonValue& v) {
     const auto& obj = as_object(v, "symbol_analysis");
     assert_no_unknown_keys(obj, {"state", "symbols"}, "symbol_analysis");
     SymbolAnalysis out;
     out.state = parse_state(require(obj, "state", "symbol_analysis"), "symbol_analysis.state");
     if (const JsonValue* syms = find(obj, "symbols"); syms != nullptr) {
-        const auto& arr = as_array(*syms, "symbol_analysis.symbols");
-        if (!arr.empty()) {
-            throw ProtocolError(
-                "symbol_analysis.symbols must be empty for the C++ adapter (plan 047)");
+        for (const auto& s : as_array(*syms, "symbol_analysis.symbols")) {
+            out.symbols.push_back(parse_symbol(*s));
         }
     }
     return out;
@@ -768,6 +794,43 @@ void write_dependency_analysis(Writer& w, const DependencyAnalysis& da) {
     w.end_object(false);
 }
 
+void write_symbol(Writer& w, const Symbol& s) {
+    w.begin_object();
+    // Alphabetical: kind, location, name, qualified_name, search_names, signature.
+    w.field_prefix();
+    w.write_field_name("kind");
+    w.write_json_string(s.kind);
+    if (s.location.has_value()) {
+        w.field_prefix();
+        w.write_field_name("location");
+        write_location(w, *s.location);
+    }
+    w.field_prefix();
+    w.write_field_name("name");
+    w.write_json_string(s.name);
+    if (s.qualified_name.has_value()) {
+        w.field_prefix();
+        w.write_field_name("qualified_name");
+        w.write_json_string(*s.qualified_name);
+    }
+    if (!s.search_names.empty()) {
+        w.field_prefix();
+        w.write_field_name("search_names");
+        w.begin_array();
+        for (const auto& n : s.search_names) {
+            w.element_prefix();
+            w.write_json_string(n);
+        }
+        w.end_array(false);
+    }
+    if (s.signature.has_value()) {
+        w.field_prefix();
+        w.write_field_name("signature");
+        w.write_json_string(*s.signature);
+    }
+    w.end_object(false);
+}
+
 void write_symbol_analysis(Writer& w, const SymbolAnalysis& sa) {
     w.begin_object();
     w.field_prefix();
@@ -775,8 +838,17 @@ void write_symbol_analysis(Writer& w, const SymbolAnalysis& sa) {
     w.write_json_string(state_to_str(sa.state));
     w.field_prefix();
     w.write_field_name("symbols");
-    w.begin_array();
-    w.end_array(true);
+    if (sa.symbols.empty()) {
+        w.begin_array();
+        w.end_array(true);
+    } else {
+        w.begin_array();
+        for (const auto& s : sa.symbols) {
+            w.element_prefix();
+            write_symbol(w, s);
+        }
+        w.end_array(false);
+    }
     w.end_object(false);
 }
 

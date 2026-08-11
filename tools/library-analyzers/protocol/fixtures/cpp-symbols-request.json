@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "repository_root": "<REPOSITORY_ROOT>",
+  "language": "cpp",
+  "libraries": [
+    { "path": "libraries/cpp/symbols/basic.hpp" },
+    { "path": "libraries/cpp/symbols/nested.hpp" },
+    { "path": "libraries/cpp/symbols/unicode.hpp" }
+  ],
+  "solutions": []
+}
