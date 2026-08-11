@@ -33,11 +33,11 @@ CompileProfile loadCompileProfile(const std::filesystem::path& repositoryRoot);
 std::vector<std::string> buildClangArguments(const CompileProfile&, const Target&);
 ```
 
-- [ ] Write failing tests for C++ standard, defines, include roots, duplicate/missing keys, repository escape,
+- [x] Write failing tests for C++ standard, defines, include roots, duplicate/missing keys, repository escape,
       symlink include root, environment independence, and deterministic argv.
-- [ ] Implement strict TOML parsing and repository-relative normalized paths.
-- [ ] Run the C++ compile-profile test binary; expect all cases to pass.
-- [ ] Invoke `/commit` with `build: define deterministic C++ analysis profile`.
+- [x] Implement strict TOML parsing and repository-relative normalized paths.
+- [x] Run the C++ compile-profile test binary; expect all cases to pass.
+- [x] Invoke `/commit` with `build: define deterministic C++ analysis profile`.
 
 ### Task 2: Emit direct include dependencies
 
@@ -48,17 +48,17 @@ std::vector<std::string> buildClangArguments(const CompileProfile&, const Target
 - Create: `tools/library-analyzers/protocol/fixtures/cpp-dependencies-request.json`
 - Create: `tools/library-analyzers/protocol/fixtures/cpp-dependencies-response.json`
 
-- [ ] Write failing fixtures for quoted/angle includes, macro includes, inactive branches, nested transitive
+- [x] Write failing fixtures for quoted/angle includes, macro includes, inactive branches, nested transitive
       includes, cycles, missing headers, duplicate includes, Unicode paths, and one-based include locations.
-- [ ] Use preprocessing callbacks and the manifest path set to classify each active direct include.
-- [ ] Mark dependency state `partial` for active macro/missing ambiguity and preserve a stable diagnostic key.
-- [ ] Run C++ tests and compare the protocol response fixture byte-for-byte.
-- [ ] Invoke `/commit` with `feat: analyze direct C++ library dependencies`.
+- [x] Use preprocessing callbacks and the manifest path set to classify each active direct include.
+- [x] Mark dependency state `partial` for active macro/missing ambiguity and preserve a stable diagnostic key.
+- [x] Run C++ tests and compare the protocol response fixture byte-for-byte.
+- [x] Invoke `/commit` with `feat: analyze direct C++ library dependencies`.
 
 ### Task 3: Deliver C++ dependencies
 
-- [ ] Run handshake, compile-profile, dependency fixture, and normalized snapshot tests.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record C++ dependency adapter completion`.
+- [x] Run handshake, compile-profile, dependency fixture, and normalized snapshot tests.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record C++ dependency adapter completion`.
 - [ ] Invoke `/pr --base main`; link plan 046 and state that it unblocks plan 047.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
