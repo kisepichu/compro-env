@@ -80,7 +80,7 @@ pub enum Commands {
         #[command(subcommand)]
         subcommand: SiteDataSubcommand,
     },
-    /// Resumably verify library solutions against their configured OJ.
+    /// Resumable verify of library solutions against their configured OJ.
     Verify {
         /// Optional solution id (e.g. `librarychecker-aplusb/aplusb/main`).
         /// Defaults to walking the entire discovery manifest.
@@ -96,7 +96,9 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum InternalSubcommand {
-    /// Freeze a submission plan and persist the `Starting` record.
+    /// Freeze a submission plan JSON so a later `verify-start` can dispatch it.
+    /// Writes only the canonical plan bytes; the `Starting` record is persisted
+    /// by `verify-start` before it contacts the OJ.
     #[command(hide = true)]
     VerifyPrepare {
         #[arg(long)]

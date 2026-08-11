@@ -194,8 +194,9 @@ impl Controller {
         run_verify(inputs, ports)
     }
 
-    /// Hidden `internal verify-prepare`: freeze a submission plan, persist the
-    /// `Starting` record, and write the plan JSON to `--plan-out`.
+    /// Hidden `internal verify-prepare`: freeze a submission plan and write the
+    /// canonical plan JSON to `--plan-out`. The `Starting` record is persisted
+    /// by `verify-start` before OJ contact, not here.
     #[allow(clippy::too_many_arguments)]
     pub fn internal_verify_prepare(
         &self,

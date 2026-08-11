@@ -207,10 +207,10 @@ pub enum StartEvent {
 pub enum PollEvent {
     /// Terminal successful/rejected judgement (spec §10 verified/rejected).
     Completed { record: VerificationRecord },
-    /// Terminal capability failure (spec §10 unavailable). Only reachable
-    /// when a poller adapter surfaces an unavailable observation via a
-    /// `HandleNotFound` style signal that this module maps to
-    /// `AcceptanceUnknown` (see below).
+    /// Terminal capability failure (spec §10 unavailable). Reserved for
+    /// callers that construct `Unavailable` records outside `poll_handle`
+    /// (e.g. `start_plan` when an OJ declares unsupported); `poll_handle`
+    /// itself never emits this variant today.
     Unavailable { record: VerificationRecord },
     /// The 15-minute wall-clock budget elapsed; the record was persisted at
     /// its last observed pending state and will resume on the next tick.
@@ -218,7 +218,8 @@ pub enum PollEvent {
     /// Operational failure at the poll stage (spec §8.3).
     InfrastructureError { record: VerificationRecord },
     /// The OJ reports the handle no longer exists. Spec §8.3 defensive path:
-    /// map to `AcceptanceUnknown` so operator confirms before any re-plan.
+    /// the record is persisted as `InfrastructureFailure` (stage=poll,
+    /// non-retryable) so an operator confirms before any re-plan.
     HandleLost { record: VerificationRecord },
 }
 
@@ -610,17 +611,13 @@ pub fn poll_handle(
                 return Ok(PollEvent::Completed { record: next });
             }
             Err(PollSubmissionError::HandleNotFound { summary }) => {
-                // Spec §8.3 defensive path: treat as AcceptanceUnknown so an
-                // operator can confirm before any re-plan. We fabricate a
-                // synthetic AcceptanceUnknown from the last known handle
-                // context; the record's fingerprint and attempt_id are
-                // preserved by apply_transition.
+                // Spec §8.3 defensive path: persist a non-retryable
+                // InfrastructureFailure at stage=Poll so an operator confirms
+                // before any re-plan. AcceptanceUnknown would be a cleaner
+                // fit semantically, but the state machine only reaches that
+                // variant from Starting, so we use InfrastructureFailure
+                // instead and surface the intent via PollEvent::HandleLost.
                 let observed_at = ports.clock.now();
-                // Move Submitted/Queued/Judging → InfrastructureFailure with
-                // a clear operator-attention summary. The state machine
-                // allows this; we choose it over faking a fresh
-                // AcceptanceUnknown because AcceptanceUnknown is only
-                // reachable from Starting.
                 let failure = InfrastructureFailure {
                     stage: FailureStage::Poll,
                     error_kind: ErrorKind::InvalidResponse,

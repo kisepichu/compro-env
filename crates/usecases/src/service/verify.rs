@@ -536,8 +536,9 @@ pub fn run_verify(inputs: VerifyInputs<'_>, ports: VerifyPorts<'_>) -> Result<Ve
     })
 }
 
-/// Prepare a single solution up to (and including) the persisted `Starting`
-/// record and return the frozen plan. Used by `internal verify-prepare`.
+/// Freeze the submission plan for a single solution and return it. Used by
+/// `internal verify-prepare`. This does NOT persist the `Starting` record;
+/// `start_plan` owns the Starting-before-OJ-contact invariant (spec §8.2).
 pub fn prepare_solution(
     inputs: &VerifyInputs<'_>,
     ports: &VerifyPorts<'_>,

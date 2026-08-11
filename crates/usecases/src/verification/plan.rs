@@ -408,8 +408,11 @@ fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
             return Err(anyhow!("invalid base64 character"));
         }
         out.push((b0 << 2) | (b1 >> 4));
+        // Padding is only valid in the final quartet; any `=` before the last
+        // group means the payload had a run of ignored bytes after it.
+        let is_last_quartet = i + 4 == bytes.len();
         if c2 == b'=' {
-            if c3 != b'=' {
+            if c3 != b'=' || !is_last_quartet {
                 return Err(anyhow!("misplaced base64 padding"));
             }
             break;
@@ -420,6 +423,9 @@ fn base64_decode(input: &str) -> anyhow::Result<Vec<u8>> {
         }
         out.push(((b1 & 0x0f) << 4) | (b2 >> 2));
         if c3 == b'=' {
+            if !is_last_quartet {
+                return Err(anyhow!("misplaced base64 padding"));
+            }
             break;
         }
         let b3 = lookup[c3 as usize];
@@ -627,5 +633,18 @@ mod tests {
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
         assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn base64_decode_rejects_padding_before_final_quartet() {
+        // Padding is only legal in the last quartet — `TQ==AAAA` used to be
+        // accepted and silently drop the `AAAA` tail. Regression guard.
+        assert!(base64_decode("TQ==AAAA").is_err());
+        assert!(base64_decode("Zm8=Zm8=").is_err());
+        // Valid inputs still round-trip.
+        assert_eq!(base64_decode("Zg==").unwrap(), b"f");
+        assert_eq!(base64_decode("Zm8=").unwrap(), b"fo");
+        assert_eq!(base64_decode("Zm9v").unwrap(), b"foo");
+        assert_eq!(base64_decode("Zm9vYmFy").unwrap(), b"foobar");
     }
 }
