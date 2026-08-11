@@ -33,12 +33,12 @@ SymbolAnalysis analyzeSymbols(
     const std::filesystem::path& managedSource);
 ```
 
-- [ ] Write failing fixtures for namespace, class/struct, enum/enumerator, alias, concept, function,
+- [x] Write failing fixtures for namespace, class/struct, enum/enumerator, alias, concept, function,
       variable, constructor, method, template, overload, nested name, operator, and anonymous namespace.
-- [ ] Implement spelling-location filtering, source-order sorting, qualified names, and deduplicated search names.
-- [ ] Use stable kind tokens (`class`, `function`, `method`, `concept`, `type`, `value`) without core changes.
-- [ ] Run the C++ symbol test and compare JSON fixture exactly.
-- [ ] Invoke `/commit` with `feat: extract C++ library symbols`.
+- [x] Implement spelling-location filtering, source-order sorting, qualified names, and deduplicated search names.
+- [x] Use stable kind tokens (`class`, `function`, `method`, `concept`, `type`, `value`) without core changes.
+- [x] Run the C++ symbol test and compare JSON fixture exactly.
+- [x] Invoke `/commit` with `feat: extract C++ library symbols`.
 
 ### Task 2: Lock source-location and recovery semantics
 
@@ -47,17 +47,17 @@ SymbolAnalysis analyzeSymbols(
 - Modify: `tools/library-analyzers/cpp/tests/symbols.cpp`
 - Modify: `crates/usecases/tests/library_analysis.rs`
 
-- [ ] Add failing cases for macro spelling/expansion, CRLF, Unicode, invalid source ranges, parse recovery,
+- [x] Add failing cases for macro spelling/expansion, CRLF, Unicode, invalid source ranges, parse recovery,
       duplicate declarations, forward declarations, and symbols from included headers.
-- [ ] Prefer spelling locations in the target; omit invalid locations and mark symbol analysis `partial` on recovery.
-- [ ] Prove dependency completeness is retained when AST symbol extraction is partial.
-- [ ] Run C++ tests and `cargo test -p usecases library_analysis`.
-- [ ] Invoke `/commit` with `test: lock C++ symbol location behavior`.
+- [x] Prefer spelling locations in the target; omit invalid locations and mark symbol analysis `partial` on recovery.
+- [x] Prove dependency completeness is retained when AST symbol extraction is partial.
+- [x] Run C++ tests and `cargo test -p usecases library_analysis`.
+- [x] Invoke `/commit` with `test: lock C++ symbol location behavior`.
 
 ### Task 3: Deliver C++ symbols
 
-- [ ] Run all C++ fixtures through the generic adapter build and snapshot normalization.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record C++ symbol adapter completion`.
+- [x] Run all C++ fixtures through the generic adapter build and snapshot normalization.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record C++ symbol adapter completion`.
 - [ ] Invoke `/pr --base main`; link plan 047 and state that it unblocks plan 048.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
