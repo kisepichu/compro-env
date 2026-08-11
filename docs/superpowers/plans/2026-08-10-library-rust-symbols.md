@@ -36,12 +36,12 @@ pub fn analyze_symbols(
 ) -> SymbolAnalysis;
 ```
 
-- [ ] Write failing fixtures for modules, structs, enums/variants, traits, trait methods, impl methods,
+- [x] Write failing fixtures for modules, structs, enums/variants, traits, trait methods, impl methods,
       functions, type aliases, constants/statics, macros, nested declarations, and Unicode before spans.
-- [ ] Run `cargo test -p ce-library-rust-analyzer symbols`; observe missing symbol analysis.
-- [ ] Implement stable source-order traversal and language-neutral kinds such as `trait`, `method`, and `type`.
-- [ ] Emit qualified names from lexical/module ownership and deduplicated exact search names.
-- [ ] Invoke `/commit` with `feat: extract Rust library symbols`.
+- [x] Run `cargo test -p ce-library-rust-analyzer symbols`; observe missing symbol analysis.
+- [x] Implement stable source-order traversal and language-neutral kinds such as `trait`, `method`, and `type`.
+- [x] Emit qualified names from lexical/module ownership and deduplicated exact search names.
+- [x] Invoke `/commit` with `feat: extract Rust library symbols`.
 
 ### Task 2: Validate locations and partial states
 
@@ -50,17 +50,17 @@ pub fn analyze_symbols(
 - Modify: `tools/library-analyzers/rust/tests/symbols.rs`
 - Modify: `crates/usecases/tests/library_analysis.rs`
 
-- [ ] Add failing cases for one-based bounds, CRLF input, duplicate names, generated/no span, malformed syntax,
+- [x] Add failing cases for one-based bounds, CRLF input, duplicate names, generated/no span, malformed syntax,
       public/private visibility, and symbols outside the requested target.
-- [ ] Reject invalid spans before serialization; retain valid symbols and mark `partial` for recoverable syntax gaps.
-- [ ] Prove a symbol-only failure leaves dependency analysis complete and does not block verification fingerprinting.
-- [ ] Run `cargo test -p ce-library-rust-analyzer && cargo test -p usecases library_analysis`.
-- [ ] Invoke `/commit` with `test: lock Rust symbol location behavior`.
+- [x] Reject invalid spans before serialization; retain valid symbols and mark `partial` for recoverable syntax gaps.
+- [x] Prove a symbol-only failure leaves dependency analysis complete and does not block verification fingerprinting.
+- [x] Run `cargo test -p ce-library-rust-analyzer && cargo test -p usecases library_analysis`.
+- [x] Invoke `/commit` with `test: lock Rust symbol location behavior`.
 
 ### Task 3: Deliver Rust symbols
 
-- [ ] Run handshake, Rust dependency fixture, Rust symbol fixture, and normalized snapshot tests.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record Rust symbol adapter completion`.
+- [x] Run handshake, Rust dependency fixture, Rust symbol fixture, and normalized snapshot tests.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record Rust symbol adapter completion`.
 - [ ] Invoke `/pr --base main`; link plan 044 and state that it unblocks plan 045.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
