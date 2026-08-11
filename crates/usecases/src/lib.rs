@@ -1,6 +1,8 @@
 pub mod check;
+pub mod clock;
 pub mod command_runner;
 pub mod config;
+pub mod id_generator;
 pub mod input_format;
 pub mod library_adapter;
 pub mod library_analysis;

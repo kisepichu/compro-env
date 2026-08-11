@@ -10,10 +10,17 @@
 //! [`VerificationRecord`]: domain::verification::VerificationRecord
 
 pub mod fingerprint;
+pub mod plan;
 pub mod status;
+pub mod transition;
 
 pub use fingerprint::{
     FINGERPRINT_SCHEMA_VERSION, FingerprintError, FingerprintMaterial, FingerprintSource,
     OjBinding, calculate_fingerprint, verification_closure,
 };
+pub use plan::{
+    PLAN_SCHEMA_VERSION, PlanError, PrepareVerificationInput, SubmissionPlan, SubmissionPlanBody,
+    build_submission_plan,
+};
 pub use status::{VerificationStatus, classify_library_status, classify_solution_status};
+pub use transition::{InvalidTransition, VerificationEvent, apply_transition};
