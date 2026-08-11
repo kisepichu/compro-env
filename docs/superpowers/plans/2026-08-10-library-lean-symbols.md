@@ -31,12 +31,12 @@ def elaborateTargets
     (moduleMap : ModuleMap) : IO (Array ElaboratedTarget)
 ```
 
-- [ ] Write failing tests for topological ordering, cycles, independent modules, same name in namespaces,
+- [x] Write failing tests for topological ordering, cycles, independent modules, same name in namespaces,
       theorem errors, missing imports, no user-global search path, and repeatable output.
-- [ ] Build a fresh search path from the prepared toolchain/packages and request roots.
-- [ ] Elaborate in stable strongly-connected-component order and capture target-scoped diagnostics.
-- [ ] Run `lake env lean Tests/Elaboration.lean` twice and compare normalized output.
-- [ ] Invoke `/commit` with `feat: elaborate Lean library targets deterministically`.
+- [x] Build a fresh search path from the prepared toolchain/packages and request roots.
+- [x] Elaborate in stable strongly-connected-component order and capture target-scoped diagnostics.
+- [x] Run `lake env lean Tests/Elaboration.lean` twice and compare normalized output.
+- [x] Invoke `/commit` with `feat: elaborate Lean library targets deterministically`.
 
 ### Task 2: Project declarations and locations
 
@@ -47,17 +47,17 @@ def elaborateTargets
 - Create: `tools/library-analyzers/protocol/fixtures/lean-symbols-request.json`
 - Create: `tools/library-analyzers/protocol/fixtures/lean-symbols-response.json`
 
-- [ ] Write failing fixtures for definition, theorem, axiom, structure, class, inductive/constructors,
+- [x] Write failing fixtures for definition, theorem, axiom, structure, class, inductive/constructors,
       instance, notation, namespace qualification, generated declaration, and Unicode source spans.
-- [ ] Diff environments per target, use declaration ranges when valid, sort by location/name, and deduplicate.
-- [ ] Emit stable kind strings and search names; mark recoverable elaboration errors as symbol `partial`.
-- [ ] Run Lean symbol tests and compare checked-in protocol JSON exactly.
-- [ ] Invoke `/commit` with `feat: extract Lean library symbols`.
+- [x] Diff environments per target, use declaration ranges when valid, sort by location/name, and deduplicate.
+- [x] Emit stable kind strings and search names; mark recoverable elaboration errors as symbol `partial`.
+- [x] Run Lean symbol tests and compare checked-in protocol JSON exactly.
+- [x] Invoke `/commit` with `feat: extract Lean library symbols`.
 
 ### Task 3: Deliver Lean symbols
 
-- [ ] Run all three language fixtures through build, handshake, normalization, and toolchain identity checks.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record Lean symbol adapter completion`.
-- [ ] Invoke `/pr --base main`; link plan 050 and state that it satisfies the language prerequisite of plan 060.
-- [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+- [x] Run all three language fixtures through build, handshake, normalization, and toolchain identity checks.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record Lean symbol adapter completion`.
+- [x] Invoke `/pr --base main`; link plan 050 and state that it satisfies the language prerequisite of plan 060.
+- [x] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
