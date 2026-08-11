@@ -9,18 +9,18 @@
 // result. Transitive/nested includes never surface here — a strict guarantee
 // spec §6.7 relies on.
 //
-// Classification (matching `dependencies.hpp`):
+// Classification (matching `dependencies.hpp`) is driven by the header the
+// preprocessor actually resolves, regardless of whether the filename came
+// from a literal `"..."`/`<...>` token or from macro expansion. Once Clang
+// hands us a resolved `FileEntry` we treat both spellings identically:
 //
-//   * If the include name came from macro expansion (source text between
-//     the filename delimiters is not `"..."` or `<...>`) we mark
-//     `unresolved` with key `macro:<display>` regardless of resolution.
-//   * Missing headers (`File` is `nullopt`) become `unresolved` with key
-//     `include:<name>`.
-//   * Resolved system headers or headers outside the repository become
-//     `external` with `name = <spelled filename>`.
-//   * Resolved paths inside the repository:
-//       - present in the manifest set → `internal` with the manifest-normalized path
-//       - inside the repo but non-managed → `unresolved` (`include:<name>`)
+//   * Missing header (`File` is `nullopt`) → `unresolved` with key
+//     `include:<name>` (the post-expansion filename).
+//   * Resolved outside the repository root → `external` with
+//     `name = <post-expansion filename>`.
+//   * Resolved inside the repository:
+//       - present in the manifest set → `internal` with the manifest path;
+//       - inside the repo but non-managed → `unresolved` (`include:<name>`).
 //
 // Any `unresolved` edge flips the overall state to `partial`, per spec §6.7.
 

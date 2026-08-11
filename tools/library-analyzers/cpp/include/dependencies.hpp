@@ -5,17 +5,19 @@
 // target under the compile profile from plan 046 Task 1. It inspects the
 // preprocessor's `InclusionDirective` callback, filters to includes issued
 // directly from the target's main file (so nested/transitive includes do not
-// become direct edges), and classifies each one:
+// become direct edges), and classifies each one by the header the
+// preprocessor resolves — literal `"..."`/`<...>` and macro-expanded
+// `#include INC_D` are treated identically once Clang hands us a resolved
+// `FileEntry`:
 //
 //   * `internal`   — resolves to a repository-relative path present in the
 //                    manifest set the caller passes in;
-//   * `external`   — resolves outside the repository (system header) or
-//                    inside the repository but never as a managed source
-//                    (which would fall through to `unresolved`);
-//   * `unresolved` — missing header, macro-expanded include name, or a
-//                    resolved path inside the repository that is not part
-//                    of the manifest set. `state = partial` fires whenever
-//                    at least one unresolved edge exists.
+//   * `external`   — resolves outside the repository root (e.g., system
+//                    headers on `-I`-provided paths);
+//   * `unresolved` — missing header, or a resolved path inside the
+//                    repository that is not part of the manifest set.
+//                    `state = partial` fires whenever at least one
+//                    unresolved edge exists.
 //
 // The public interface only exposes a `TargetOutcome`; the caller (main
 // binary or test) then folds that into a `LibraryAnalysis` or
