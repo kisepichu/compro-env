@@ -32,11 +32,11 @@
 - Create: `crates/infrastructure/tests/fixtures/librarychecker/submission-accepted.json`
 - Modify: `docs/online_judges/librarychecker.md`
 
-- [ ] Record the pinned OpenAPI commit in docs and write parsing tests for list/detail/current user.
-- [ ] Move existing auth/problem/start logic without semantic changes and retain all old tests.
-- [ ] Strip raw source, compile output, case stderr/checker output from domain errors/logs.
-- [ ] Run `cargo test -p infrastructure online_judge_impl::librarychecker`.
-- [ ] Invoke `/commit` with `refactor: split LibraryChecker API concerns`.
+- [x] Record the pinned OpenAPI commit in docs and write parsing tests for list/detail/current user.
+- [x] Move existing auth/problem/start logic without semantic changes and retain all old tests.
+- [x] Strip raw source, compile output, case stderr/checker output from domain errors/logs.
+- [x] Run `cargo test -p infrastructure online_judge_impl::librarychecker`.
+- [x] Invoke `/commit` with `refactor: split LibraryChecker API concerns`.
 
 ### Task 2: Poll and normalize results
 
@@ -46,12 +46,12 @@
 - Create: `crates/infrastructure/tests/fixtures/librarychecker/submission-rejected.json`
 - Create: `crates/infrastructure/tests/fixtures/librarychecker/submission-unknown-verdict.json`
 
-- [ ] Write local-server tests for queued/judging, every known verdict, unknown raw verdict, metrics,
+- [x] Write local-server tests for queued/judging, every known verdict, unknown raw verdict, metrics,
       null/empty case details, retry-after, 401 refresh, 429/5xx, malformed response, and rounding units.
-- [ ] Implement `GET /submissions/{id}` mapping and retain exact submission ID/URL in the handle.
-- [ ] Apply the public extra allowlist and sanitize every error summary.
-- [ ] Run `cargo test -p infrastructure --test librarychecker_submission`.
-- [ ] Invoke `/commit` with `feat: poll LibraryChecker submission results`.
+- [x] Implement `GET /submissions/{id}` mapping and retain exact submission ID/URL in the handle.
+- [x] Apply the public extra allowlist and sanitize every error summary.
+- [x] Run `cargo test -p infrastructure --test librarychecker_submission`.
+- [x] Invoke `/commit` with `feat: poll LibraryChecker submission results`.
 
 ### Task 3: Recover only a unique exact candidate
 
@@ -59,17 +59,17 @@
 - Modify: `crates/infrastructure/src/online_judge_impl/librarychecker/submission.rs`
 - Modify: `crates/infrastructure/tests/librarychecker_submission.rs`
 
-- [ ] Write failing tests for one/zero/multiple candidates, wrong problem/language/user/source/time,
+- [x] Write failing tests for one/zero/multiple candidates, wrong problem/language/user/source/time,
       pagination limit, list/detail failure, duplicate IDs, and ambiguous POST disconnect.
-- [ ] Query list newest-first with problem/language/user, bound pages to the attempt window, fetch details,
+- [x] Query list newest-first with problem/language/user, bound pages to the attempt window, fetch details,
       compare raw source SHA-256 and timestamp, and recover only one exact match.
-- [ ] Return `Inconclusive` for every inability to prove uniqueness; never auto-resubmit.
-- [ ] Run the focused suite and invoke `/commit` with `feat: recover LibraryChecker submissions conservatively`.
+- [x] Return `Inconclusive` for every inability to prove uniqueness; never auto-resubmit.
+- [x] Run the focused suite and invoke `/commit` with `feat: recover LibraryChecker submissions conservatively`.
 
 ### Task 4: Deliver LibraryChecker lifecycle
 
-- [ ] Run all old/new LibraryChecker tests with a configurable local base URL only.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record LibraryChecker lifecycle completion`.
+- [x] Run all old/new LibraryChecker tests with a configurable local base URL only.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record LibraryChecker lifecycle completion`.
 - [ ] Invoke `/pr --base main`; link plan 058 and state that it unblocks plan 059.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
