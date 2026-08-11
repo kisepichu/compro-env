@@ -5,6 +5,12 @@
 # `target/library-analyzers/builds/`. Adapter source directories are added by
 # later plans (043–050) alongside their `prepare` / `build` scripts and
 # toolchain pins.
+#
+# `tools/library-analyzers/cpp/` also holds the checked-in
+# `compile-profile.toml` (plan 046). It is picked up by the recursive
+# directory hash so any change to the C++ compile flags forces a fresh
+# `build-id`, keeping the cached `cpp-analyzer` in lockstep with the profile
+# it is expected to read.
 
 directories = [
     "crates/library-adapter-protocol",

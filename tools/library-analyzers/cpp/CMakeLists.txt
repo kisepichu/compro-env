@@ -46,9 +46,13 @@ add_library(ce_cpp_protocol STATIC src/protocol.cpp)
 target_include_directories(ce_cpp_protocol
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+add_library(ce_cpp_compile_profile STATIC src/compile_profile.cpp)
+target_include_directories(ce_cpp_compile_profile
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 add_executable(cpp-analyzer src/main.cpp)
 target_include_directories(cpp-analyzer PRIVATE ${LLVM_INCLUDE_DIRS})
-target_link_libraries(cpp-analyzer PRIVATE ce_cpp_protocol)
+target_link_libraries(cpp-analyzer PRIVATE ce_cpp_protocol ce_cpp_compile_profile)
 
 # ─── Tests ──────────────────────────────────────────────────────────────────
 
@@ -60,3 +64,8 @@ target_compile_definitions(handshake_test PRIVATE
     CE_CPP_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../protocol/fixtures")
 
 add_test(NAME handshake COMMAND handshake_test)
+
+add_executable(compile_profile_test tests/compile_profile.cpp)
+target_link_libraries(compile_profile_test PRIVATE ce_cpp_compile_profile)
+
+add_test(NAME compile_profile COMMAND compile_profile_test)

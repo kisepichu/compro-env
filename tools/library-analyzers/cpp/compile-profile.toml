@@ -1,0 +1,14 @@
+# Checked-in compile profile for the ce-cpp analyzer (spec §6.7; plan 046
+# Task 1).
+#
+# `analyzer.command` (Clang LibTooling) and `check_command` (the language's
+# compile/test driver) both read this file so the observed toolchain matches
+# what a solution author sees locally. Only these three keys are accepted;
+# strict parsing rejects unknown or duplicate keys (`compile_profile.cpp`).
+#
+# Paths are repository-relative and must resolve inside the repository root;
+# absolute paths and `..` escapes are rejected.
+
+cxx_standard = "c++20"
+defines = ["CE_LIBRARY_ANALYSIS=1"]
+include_roots = ["libraries/cpp"]
