@@ -31,11 +31,11 @@
 - Create: `web/tests/site-data.test.ts`
 - Modify: `.gitignore`
 
-- [ ] Write failing tests for schema version mismatch, root/project base URLs, segment encoding, trailing slash,
+- [x] Write failing tests for schema version mismatch, root/project base URLs, segment encoding, trailing slash,
       repository escape, and private-field fixture rejection.
-- [ ] Pin every direct package to an exact version and load `CE_SITE_ORIGIN`, `CE_SITE_BASE`, and site-data path.
-- [ ] Validate JSON before route generation and centralize all internal/canonical/asset URL construction.
-- [ ] Run `npm ci && npm test`; invoke `/commit` with `build: bootstrap static library web package`.
+- [x] Pin every direct package to an exact version and load `CE_SITE_ORIGIN`, `CE_SITE_BASE`, and site-data path.
+- [x] Validate JSON before route generation and centralize all internal/canonical/asset URL construction.
+- [x] Run `npm ci && npm test`; invoke `/commit` with `build: bootstrap static library web package`.
 
 ### Task 2: Render shared layout, browse routes, and 404
 
@@ -53,11 +53,11 @@
 - Create: `web/src/pages/404.astro`
 - Create: `web/tests/semantic-pages.test.ts`
 
-- [ ] Write failing DOM tests for every route, empty lists, stable ordering, one `h1`, landmarks, breadcrumbs,
+- [x] Write failing DOM tests for every route, empty lists, stable ordering, one `h1`, landmarks, breadcrumbs,
       navigation, status text, detail-only indexing, and static 404/noindex behavior.
-- [ ] Implement route generation from public DTOs with minimal reusable components and no design-only wrappers.
-- [ ] Use canonical page ID `library:*` or `solution:*` on detail articles for later result deduplication.
-- [ ] Run `npm test -- semantic-pages`; invoke `/commit` with `feat: render semantic library site routes`.
+- [x] Implement route generation from public DTOs with minimal reusable components and no design-only wrappers.
+- [x] Use canonical page ID `library:*` or `solution:*` on detail articles for later result deduplication.
+- [x] Run `npm test -- semantic-pages`; invoke `/commit` with `feat: render semantic library site routes`.
 
 ### Task 3: Render safe Markdown and line-addressable source
 
@@ -70,16 +70,16 @@
 - Create: `web/tests/content-rendering.test.ts`
 - Create: `web/tests/fixtures/site-data.json`
 
-- [ ] Write failing tests for heading rules/hash IDs, raw HTML stripping, GFM, unknown language fallback,
+- [x] Write failing tests for heading rules/hash IDs, raw HTML stripping, GFM, unknown language fallback,
       text-only source, CRLF/Unicode, `L1` anchors, permalink base, source limits, and unsafe Markdown links.
-- [ ] Implement the spec's SHA-256 heading algorithm and allowlist sanitation.
-- [ ] Render Shiki at build time, adding stable line IDs/permalinks without trusting source as HTML.
-- [ ] Run `npm test -- content-rendering`; invoke `/commit` with `feat: render safe documentation and source`.
+- [x] Implement the spec's SHA-256 heading algorithm and allowlist sanitation.
+- [x] Render Shiki at build time, adding stable line IDs/permalinks without trusting source as HTML.
+- [x] Run `npm test -- content-rendering`; invoke `/commit` with `feat: render safe documentation and source`.
 
 ### Task 4: Deliver static Web
 
-- [ ] Run root and `/compro-env/` builds plus internal-link/HTML semantic checks.
-- [ ] Run `npm ci`, all Web tests, rollout Rust verification, and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record static web completion`.
-- [ ] Invoke `/pr --base main`; link plan 052 and state that it unblocks plan 053.
-- [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+- [x] Run root and `/compro-env/` builds plus internal-link/HTML semantic checks.
+- [x] Run `npm ci`, all Web tests, rollout Rust verification, and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record static web completion`.
+- [x] Invoke `/pr --base main`; link plan 052 and state that it unblocks plan 053.
+- [x] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.

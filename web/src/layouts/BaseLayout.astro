@@ -1,0 +1,17 @@
+---
+/**
+ * Base layout: renders the entire HTML document from the given
+ * `DocumentOptions`. The layout composes the pure `renderDocument`
+ * function so tests exercise the same code as the static build.
+ *
+ * Page files construct the `mainInnerHtml` string using their
+ * per-route renderer (see `web/src/lib/pages/`) and pass the whole
+ * option bag to this layout.
+ */
+import { renderDocument, type DocumentOptions } from "@/lib/pages/document.ts";
+
+interface Props extends DocumentOptions {}
+
+const html = renderDocument(Astro.props);
+---
+<Fragment set:html={html} />

@@ -1,0 +1,12 @@
+---
+/**
+ * Site footer with repository link and build source commit SHA
+ * (spec §12.2, handoff §3).
+ */
+import { renderFooter, type FooterOptions } from "@/lib/pages/document.ts";
+
+interface Props extends FooterOptions {}
+
+const html = renderFooter(Astro.props);
+---
+<Fragment set:html={html} />

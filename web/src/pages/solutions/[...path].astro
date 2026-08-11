@@ -1,0 +1,45 @@
+---
+/**
+ * Catch-all under `/solutions/` (spec §12.6, §12.7, handoff §8, §9).
+ *
+ * `getStaticPaths()` enumerates every contest / problem / solution present
+ * in `siteData.solutions`. Astro rejects any URL not in the enumeration.
+ */
+import { loadSiteData } from "@/lib/site-data.ts";
+import { resolveUrlConfig } from "@/lib/pages/config.ts";
+import {
+  listSolutionRoutes,
+  renderContestPage,
+  renderProblemPage,
+  renderSolutionDetailPage,
+  type SolutionRoute,
+} from "@/lib/pages/solutions.ts";
+import type { SiteData } from "@/lib/site-data-types.ts";
+import type { UrlConfig } from "@/lib/url.ts";
+
+interface RouteProps {
+  route: SolutionRoute;
+  config: UrlConfig;
+  siteData: SiteData;
+}
+
+export async function getStaticPaths() {
+  const siteData = loadSiteData();
+  const config = resolveUrlConfig();
+  return listSolutionRoutes(siteData).map((route) => ({
+    params: { path: route.segments.join("/") },
+    props: { route, config, siteData } satisfies RouteProps,
+  }));
+}
+
+const { route, config, siteData } = Astro.props as RouteProps;
+let html: string;
+if (route.kind === "contest") {
+  html = renderContestPage(config, siteData, route.contestId!);
+} else if (route.kind === "problem") {
+  html = renderProblemPage(config, siteData, route.contestId!, route.problemCode!);
+} else {
+  html = await renderSolutionDetailPage(config, siteData, route.solution!);
+}
+---
+<Fragment set:html={html} />

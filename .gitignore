@@ -3,3 +3,8 @@ target/
 tmp/
 .claude/settings.local.json
 .worktrees/
+node_modules/
+web/dist/
+web/dist-root/
+web/dist-compro-env/
+web/.astro/

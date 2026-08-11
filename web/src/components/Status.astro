@@ -1,0 +1,16 @@
+---
+/**
+ * Status badge (spec §12.8). Delegates to the pure renderer so tests and
+ * Astro pages produce identical HTML.
+ */
+import { renderStatus, type StatusValue, type StatusVariant } from "@/lib/pages/status.ts";
+
+interface Props {
+  variant: StatusVariant;
+  value: StatusValue;
+}
+
+const { variant, value } = Astro.props;
+const html = renderStatus(variant, value);
+---
+<Fragment set:html={html} />

@@ -1,0 +1,16 @@
+---
+/**
+ * Breadcrumb navigation (spec §12.2, handoff §3). Home has no breadcrumb;
+ * all other pages start with a Home link, and the final item is a plain
+ * `<li>` (no `<a>`) marking the current page.
+ */
+import { renderBreadcrumb, type BreadcrumbItem } from "@/lib/pages/document.ts";
+
+interface Props {
+  items: readonly BreadcrumbItem[];
+}
+
+const { items } = Astro.props;
+const html = renderBreadcrumb(items);
+---
+<Fragment set:html={html} />

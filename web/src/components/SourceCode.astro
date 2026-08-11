@@ -1,0 +1,23 @@
+---
+/**
+ * Source code block for library & solution detail pages
+ * (spec §12.5, §12.7, §12.11). Thin wrapper around the pure
+ * Shiki-backed renderer.
+ *
+ * Warnings collected by `renderSource` are logged to stderr — full
+ * enforcement lives at the Rust build-orchestrator layer.
+ */
+import { renderSource, type RenderSourceOptions } from "@/lib/source.ts";
+
+interface Props extends RenderSourceOptions {}
+
+const result = await renderSource(Astro.props);
+if (result.warnings.length > 0) {
+  for (const w of result.warnings) {
+    // eslint-disable-next-line no-console
+    console.warn(`[source] ${w}`);
+  }
+}
+const html = result.html;
+---
+<Fragment set:html={html} />
