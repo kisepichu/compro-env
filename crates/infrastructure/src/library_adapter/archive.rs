@@ -157,10 +157,41 @@ fn extract_tar_entries<R: Read>(
                     source,
                 })?;
             }
-            EntryType::Symlink | EntryType::Link => {
+            EntryType::Symlink => {
+                let target = destination.join(&relative);
+                enforce_within(&target, destination, &display)?;
+                if !seen.insert(relative.clone()) {
+                    return Err(ArchiveError::Duplicate {
+                        entry: display.clone(),
+                    });
+                }
+                let link_target = entry
+                    .link_name()
+                    .map_err(|source| ArchiveError::Invalid { source })?
+                    .ok_or(ArchiveError::UnsafeEntry {
+                        entry: display.clone(),
+                        reason: "symlink is missing a target",
+                    })?
+                    .into_owned();
+                let relative_dir = relative.parent().unwrap_or(Path::new(""));
+                check_symlink_target(relative_dir, &link_target, destination, &display)?;
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent).map_err(|source| ArchiveError::Write {
+                        path: parent.display().to_string(),
+                        source,
+                    })?;
+                }
+                std::os::unix::fs::symlink(&link_target, &target).map_err(|source| {
+                    ArchiveError::Write {
+                        path: target.display().to_string(),
+                        source,
+                    }
+                })?;
+            }
+            EntryType::Link => {
                 return Err(ArchiveError::UnsafeEntry {
                     entry: display,
-                    reason: "symlinks and hard links are not permitted",
+                    reason: "hard links are not permitted",
                 });
             }
             EntryType::Char | EntryType::Block | EntryType::Fifo => {
@@ -316,6 +347,50 @@ fn enforce_within(target: &Path, destination: &Path, display: &str) -> Result<()
     Ok(())
 }
 
+/// Reject symlinks whose resolved target escapes the destination. Absolute
+/// targets are forbidden outright; relative targets are joined onto the
+/// symlink's parent directory (relative to the destination root) and then
+/// normalized so `..` cannot climb above the destination root. Only the
+/// resolved *path* is checked — we never follow the link, so a broken target
+/// that would resolve inside the destination is still accepted (the archive
+/// itself supplies the real file elsewhere).
+fn check_symlink_target(
+    symlink_relative_dir: &Path,
+    link_target: &Path,
+    destination: &Path,
+    display: &str,
+) -> Result<(), ArchiveError> {
+    if link_target.is_absolute() {
+        return Err(ArchiveError::UnsafeEntry {
+            entry: display.to_string(),
+            reason: "symlink target must be relative",
+        });
+    }
+    let joined = symlink_relative_dir.join(link_target);
+    let mut normalized = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(ArchiveError::Escape {
+                        entry: display.to_string(),
+                        destination: destination.display().to_string(),
+                    });
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(ArchiveError::UnsafeEntry {
+                    entry: display.to_string(),
+                    reason: "symlink target must not be absolute",
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -351,5 +426,79 @@ mod tests {
         extract_archive(&archive_path, ArchiveFormat::TarXz, dest.path()).unwrap();
         let extracted = fs::read(dest.path().join("greeting.txt")).unwrap();
         assert_eq!(extracted, b"hello xz\n");
+    }
+
+    fn build_tar_gz_with_symlink(
+        file_name: &str,
+        file_contents: &[u8],
+        symlink_name: &str,
+        symlink_target: &str,
+    ) -> Vec<u8> {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        {
+            let mut builder = tar::Builder::new(&mut gz);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(file_contents.len() as u64);
+            header.set_mode(0o644);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, file_name, file_contents)
+                .expect("append tar file");
+            let mut sym = tar::Header::new_gnu();
+            sym.set_size(0);
+            sym.set_mode(0o777);
+            sym.set_entry_type(tar::EntryType::Symlink);
+            sym.set_link_name(symlink_target)
+                .expect("symlink target fits");
+            sym.set_cksum();
+            builder
+                .append_data(&mut sym, symlink_name, std::io::empty())
+                .expect("append tar symlink");
+            builder.finish().expect("finish tar");
+        }
+        gz.finish().expect("finish gz")
+    }
+
+    #[test]
+    fn extract_tar_gz_allows_safe_relative_symlink() {
+        let bytes = build_tar_gz_with_symlink("bin/real", b"binary\n", "bin/alias", "real");
+        let archive_dir = TempDir::new().unwrap();
+        let archive_path = archive_dir.path().join("safe.tar.gz");
+        fs::write(&archive_path, &bytes).unwrap();
+        let dest = TempDir::new().unwrap();
+        extract_archive(&archive_path, ArchiveFormat::TarGz, dest.path()).unwrap();
+        let alias = dest.path().join("bin/alias");
+        let meta = fs::symlink_metadata(&alias).unwrap();
+        assert!(meta.file_type().is_symlink(), "alias must be a symlink");
+        let read = fs::read_link(&alias).unwrap();
+        assert_eq!(read, PathBuf::from("real"));
+    }
+
+    #[test]
+    fn extract_tar_gz_rejects_escape_symlink() {
+        let bytes = build_tar_gz_with_symlink("bin/real", b"x", "bin/evil", "../../etc/passwd");
+        let archive_dir = TempDir::new().unwrap();
+        let archive_path = archive_dir.path().join("escape.tar.gz");
+        fs::write(&archive_path, &bytes).unwrap();
+        let dest = TempDir::new().unwrap();
+        let err = extract_archive(&archive_path, ArchiveFormat::TarGz, dest.path()).unwrap_err();
+        assert!(matches!(err, ArchiveError::Escape { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn extract_tar_gz_rejects_absolute_symlink() {
+        let bytes = build_tar_gz_with_symlink("bin/real", b"x", "bin/evil", "/etc/passwd");
+        let archive_dir = TempDir::new().unwrap();
+        let archive_path = archive_dir.path().join("absolute.tar.gz");
+        fs::write(&archive_path, &bytes).unwrap();
+        let dest = TempDir::new().unwrap();
+        let err = extract_archive(&archive_path, ArchiveFormat::TarGz, dest.path()).unwrap_err();
+        assert!(
+            matches!(err, ArchiveError::UnsafeEntry { reason, .. } if reason.contains("relative")),
+            "{err:?}"
+        );
     }
 }
