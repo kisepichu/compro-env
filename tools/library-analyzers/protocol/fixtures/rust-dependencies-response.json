@@ -1,0 +1,312 @@
+{
+  "libraries": [
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 7,
+                "line": 1
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            },
+            "path": "libraries/rust/a/b.rs"
+          },
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 12,
+                "line": 3
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 2
+              }
+            },
+            "path": "libraries/rust/custom/where.rs"
+          },
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 22,
+                "line": 4
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 4
+              }
+            },
+            "path": "libraries/rust/a/b.rs"
+          },
+          {
+            "display": "use crate::b::*",
+            "key": "glob:crate::b::*",
+            "kind": "unresolved",
+            "location": {
+              "end": {
+                "column": 17,
+                "line": 5
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 5
+              }
+            }
+          },
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 36,
+                "line": 6
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 6
+              }
+            },
+            "path": "libraries/rust/a/b.rs"
+          },
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 49,
+                "line": 7
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 7
+              }
+            },
+            "name": "std::collections::HashMap"
+          },
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 49,
+                "line": 7
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 7
+              }
+            },
+            "name": "std::collections::BTreeMap"
+          },
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 24,
+                "line": 8
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 8
+              }
+            },
+            "name": "serde::Deserialize"
+          },
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 20,
+                "line": 9
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 9
+              }
+            },
+            "name": "serde"
+          },
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 39,
+                "line": 11
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 10
+              }
+            },
+            "name": "std::os::unix::fs::PermissionsExt"
+          },
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 24,
+                "line": 13
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 12
+              }
+            },
+            "name": "std::path::PathBuf"
+          },
+          {
+            "display": "item-level macro invocation may hide use / mod statements",
+            "key": "macro:include",
+            "kind": "unresolved",
+            "location": {
+              "end": {
+                "column": 34,
+                "line": 14
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 14
+              }
+            }
+          }
+        ],
+        "state": "partial"
+      },
+      "diagnostics": [],
+      "path": "libraries/rust/a.rs",
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": []
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "display": "use super::helper",
+            "key": "internal:super::helper",
+            "kind": "unresolved",
+            "location": {
+              "end": {
+                "column": 24,
+                "line": 1
+              },
+              "path": "libraries/rust/a/b.rs",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            }
+          },
+          {
+            "display": "use crate::b",
+            "key": "internal:crate::b",
+            "kind": "unresolved",
+            "location": {
+              "end": {
+                "column": 19,
+                "line": 2
+              },
+              "path": "libraries/rust/a/b.rs",
+              "start": {
+                "column": 1,
+                "line": 2
+              }
+            }
+          }
+        ],
+        "state": "partial"
+      },
+      "diagnostics": [],
+      "path": "libraries/rust/a/b.rs",
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": []
+      }
+    },
+    {
+      "dependency_analysis": {
+        "dependencies": [],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "path": "libraries/rust/custom/where.rs",
+      "symbol_analysis": {
+        "state": "partial",
+        "symbols": []
+      }
+    }
+  ],
+  "solutions": [
+    {
+      "dependency_analysis": {
+        "dependencies": [
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 11,
+                "line": 2
+              },
+              "path": "solutions/abc/A/main/src/main.rs",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            },
+            "path": "libraries/rust/a.rs"
+          },
+          {
+            "kind": "internal",
+            "location": {
+              "end": {
+                "column": 31,
+                "line": 4
+              },
+              "path": "solutions/abc/A/main/src/main.rs",
+              "start": {
+                "column": 1,
+                "line": 4
+              }
+            },
+            "path": "libraries/rust/a.rs"
+          },
+          {
+            "kind": "external",
+            "location": {
+              "end": {
+                "column": 20,
+                "line": 6
+              },
+              "path": "solutions/abc/A/main/src/main.rs",
+              "start": {
+                "column": 1,
+                "line": 6
+              }
+            },
+            "name": "std::io::Write"
+          }
+        ],
+        "state": "complete"
+      },
+      "diagnostics": [],
+      "id": "abc/A/main"
+    }
+  ]
+}

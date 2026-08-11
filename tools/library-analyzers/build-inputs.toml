@@ -9,6 +9,7 @@
 directories = [
     "crates/library-adapter-protocol",
     "tools/library-analyzers/protocol",
+    "tools/library-analyzers/rust",
 ]
 
 files = [

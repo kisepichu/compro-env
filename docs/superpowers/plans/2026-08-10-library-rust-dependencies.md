@@ -29,12 +29,12 @@
 - Modify: `tools/library-analyzers/build-inputs.toml`
 - Modify: `tools/library-analyzers/dependencies.toml`
 
-- [ ] Write a process fixture test that sends an empty Rust request and expects protocol v1, adapter
+- [x] Write a process fixture test that sends an empty Rust request and expects protocol v1, adapter
       identity `ce-rust`, toolchain `rustc=1.92.0`, and empty target arrays.
-- [ ] Run `cargo test -p infrastructure rust_adapter_handshake`; observe missing executable/build input.
-- [ ] Implement stdin JSON parsing, strict request validation, exact `rustc -Vv` normalization, and stdout JSON.
-- [ ] Run `tools/library-analyzers/prepare`, then `tools/library-analyzers/build`; expect handshake success.
-- [ ] Invoke `/commit` with `feat: add Rust analyzer protocol executable`.
+- [x] Run `cargo test -p infrastructure rust_adapter_handshake`; observe missing executable/build input.
+- [x] Implement stdin JSON parsing, strict request validation, exact `rustc -Vv` normalization, and stdout JSON.
+- [x] Run `tools/library-analyzers/prepare`, then `tools/library-analyzers/build`; expect handshake success.
+- [x] Invoke `/commit` with `feat: add Rust analyzer protocol executable`.
 
 ### Task 2: Resolve direct Rust dependencies
 
@@ -54,17 +54,17 @@ pub fn analyze_dependencies(
 ) -> Vec<TargetDependencyAnalysis>;
 ```
 
-- [ ] Write failing fixtures for `mod`, `#[path]`, grouped/aliased/glob `use`, `crate/self/super`,
+- [x] Write failing fixtures for `mod`, `#[path]`, grouped/aliased/glob `use`, `crate/self/super`,
       qualified paths, external crates, cycles, cfg-inactive items, and unresolved macro-generated paths.
-- [ ] Implement deterministic module ownership and same-language internal path resolution.
-- [ ] Mark analysis `partial` whenever an active source reference cannot be resolved uniquely.
-- [ ] Run `cargo test -p ce-library-rust-analyzer dependencies`; compare checked-in JSON exactly.
-- [ ] Invoke `/commit` with `feat: analyze direct Rust library dependencies`.
+- [x] Implement deterministic module ownership and same-language internal path resolution.
+- [x] Mark analysis `partial` whenever an active source reference cannot be resolved uniquely.
+- [x] Run `cargo test -p ce-library-rust-analyzer dependencies`; compare checked-in JSON exactly.
+- [x] Invoke `/commit` with `feat: analyze direct Rust library dependencies`.
 
 ### Task 3: Deliver Rust dependencies
 
-- [ ] Run the Rust fixture through the generic process runner and normalized snapshot tests.
-- [ ] Run rollout repository verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record Rust dependency adapter completion`.
+- [x] Run the Rust fixture through the generic process runner and normalized snapshot tests.
+- [x] Run rollout repository verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record Rust dependency adapter completion`.
 - [ ] Invoke `/pr --base main`; link plan 043 and state that it unblocks plan 044.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.

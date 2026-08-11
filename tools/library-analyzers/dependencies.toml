@@ -13,4 +13,12 @@
 archives = []
 git = []
 locals = []
-toolchains = []
+
+# Declarative toolchain pins fold into the dependency-id so a mismatched host
+# rustup toolchain never impersonates the pinned one. Plan 043 pins the Rust
+# compiler; downloads (source dist, registry mirrors) are added by later plans
+# alongside the offline `cargo build` command.
+[[toolchains]]
+name = "rustc"
+version = "1.92.0"
+components = ["rustfmt", "clippy"]
