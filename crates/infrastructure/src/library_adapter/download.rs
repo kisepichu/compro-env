@@ -19,8 +19,10 @@ use reqwest::redirect::Policy;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-/// Default maximum artifact size (1 GiB). Callers can tighten it per-request.
-pub const DEFAULT_MAX_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
+/// Default maximum artifact size (2 GiB). Callers can tighten it per-request.
+/// The LLVM 22.1.0 Linux-X64 archive alone is ~1.4 GiB uncompressed metadata,
+/// so 1 GiB is not enough for a single toolchain download in practice.
+pub const DEFAULT_MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Default HTTP timeout for both connect and read halves.
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(120);

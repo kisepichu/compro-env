@@ -15,8 +15,11 @@ use domain::adapter_build::{ExpectedBuild, TargetPlatform};
 use domain::adapter_prepare::ExpectedPreparedSet;
 use infrastructure::library_adapter::build::{BuildRequest, build_adapters};
 use infrastructure::library_adapter::build_state::{BuildStateError, inspect_build_state};
+use infrastructure::library_adapter::cpp_toolchain::{CppToolchainError, select_cpp_toolchain};
 use infrastructure::library_adapter::inputs::{calculate_input_digest, load_build_inputs};
-use infrastructure::library_adapter::language_plans::{rust_build_plan, sanitized_language_env};
+use infrastructure::library_adapter::language_plans::{
+    cpp_build_plan, rust_build_plan, sanitized_language_env,
+};
 use infrastructure::library_adapter::prepare::{PREPARED_SUBDIR, prepared_dir};
 use infrastructure::library_adapter::prepared::{
     expected_dependency_id, load_dependency_manifest, validate_prepared_set,
@@ -156,6 +159,35 @@ fn run(args: Args) -> anyhow::Result<()> {
 
     let git_commit_sha = read_git_commit_sha(&repository_root)?;
 
+    let mut language_plans = vec![rust_build_plan(&repository_root)];
+    // Plan 045 Task 2 wiring for the C++ adapter.
+    //
+    // - Unsupported target platform → silently skip. `select_cpp_toolchain`
+    //   already rejects any triple outside {linux/x86_64, linux/aarch64,
+    //   macos/aarch64}, and we deliberately do NOT fall back to Apple Clang,
+    //   Homebrew, or `/usr/bin/clang` (spec §6.7). A Rust-only build is the
+    //   correct outcome on those hosts.
+    // - Supported target, prepared LLVM install not on disk → warn and skip.
+    //   This is the interim between `prepare` and `build`; forcing a hard
+    //   error here would block a Rust-only rebuild the operator ran on
+    //   purpose.
+    // - Any other cpp_build_plan error → propagate. Layout / version failures
+    //   must not be swallowed because they mean the prepared set is corrupt
+    //   or the wrong LLVM revision was published.
+    if select_cpp_toolchain(&target_platform).is_ok() {
+        match cpp_build_plan(&repository_root, &target_platform, &prepared_set) {
+            Ok(plan) => language_plans.push(plan),
+            Err(CppToolchainError::PreparedInstallMissing { archive_name, path }) => {
+                eprintln!(
+                    "library-adapter-build: skipping C++ adapter: prepared LLVM \
+                     install {archive_name:?} not on disk at {path}. Run \
+                     `tools/library-analyzers/prepare` first to build ce-cpp."
+                );
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+
     let request = BuildRequest {
         repository_root: repository_root.clone(),
         analyzer_root: analyzer_root.clone(),
@@ -165,7 +197,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         input_digest,
         git_commit_sha,
         prepared_set,
-        language_plans: vec![rust_build_plan(&repository_root)],
+        language_plans,
         handshake_timeout: Duration::from_secs(args.handshake_timeout_secs),
     };
 

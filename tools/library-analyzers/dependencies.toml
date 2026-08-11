@@ -6,13 +6,43 @@
 # derived from the normalized manifest below plus the target platform, so a
 # fresh checkout on the same platform always resolves to the same cache entry.
 #
-# Language-specific pins (rust registry mirrors, clang / Lean toolchains) are
-# added by the follow-up plans 043–050. This initial manifest ships empty so
-# the mechanism and `prepare --check` invariants ship first.
+# Language-specific pins (rust registry mirrors, Lean toolchain) are added by
+# the follow-up plans. This manifest currently pins the Rust toolchain (plan
+# 043) and all three official LLVM 22.1.0 release archives (plan 045). Each
+# LLVM archive gates itself with `target_os` and `target_arch` so `prepare`
+# only downloads the one matching the current host.
 
-archives = []
 git = []
 locals = []
+
+# LLVM/Clang 22.1.0 official release archives (plan 045).
+#
+# Source: <https://github.com/llvm/llvm-project/releases/tag/llvmorg-22.1.0>.
+# Digests must stay in sync with
+# `crates/infrastructure/src/library_adapter/cpp_toolchain.rs`.
+[[archives]]
+name = "llvm-linux-x64"
+url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/LLVM-22.1.0-Linux-X64.tar.xz"
+sha256 = "8d662e425e46c48b45f5f970770b5e37f323607c8c2cbc371593fc9c4ba1e7b3"
+format = "tar.xz"
+target_os = "linux"
+target_arch = "x86_64"
+
+[[archives]]
+name = "llvm-linux-arm64"
+url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/LLVM-22.1.0-Linux-ARM64.tar.xz"
+sha256 = "e3b4205fe45d5561dec9d46465873a79c26b25b028b310515b38c34f668c6aec"
+format = "tar.xz"
+target_os = "linux"
+target_arch = "aarch64"
+
+[[archives]]
+name = "llvm-macos-arm64"
+url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/LLVM-22.1.0-macOS-ARM64.tar.xz"
+sha256 = "cd5e615f4dab23d0239359cd343202c5f6ceeaf072c245a3c685d73afac09646"
+format = "tar.xz"
+target_os = "macos"
+target_arch = "aarch64"
 
 # Declarative toolchain pins fold into the dependency-id so a mismatched host
 # rustup toolchain never impersonates the pinned one. Plan 043 pins the Rust

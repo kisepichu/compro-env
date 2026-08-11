@@ -9,6 +9,7 @@ pub mod archive;
 #[cfg(unix)]
 pub mod build;
 pub mod build_state;
+pub mod cpp_toolchain;
 pub mod download;
 pub mod inputs;
 #[cfg(unix)]
