@@ -334,6 +334,46 @@ fn symbol_only_failure_leaves_dependency_analysis_complete() {
 }
 
 #[test]
+fn cpp_partial_symbol_state_leaves_dependency_analysis_complete() {
+    // plan 047 Task 2: The C++ symbol analyzer degrades to `partial` when a
+    // declaration's location cannot be pinned (macro-expanded name, invalid
+    // source range) or when parse recovery kicks in. Dependency completeness
+    // is computed by the preprocess-only pass and must remain independent —
+    // downstream verification only stalls when the dependency closure is
+    // incomplete, so a partial symbol catalog is not a stall condition.
+    let manifest = build_manifest();
+    let mut responses = build_responses();
+    let cpp = LanguageId::parse("cpp").unwrap();
+    let monoid = responses
+        .get_mut(&cpp)
+        .unwrap()
+        .libraries
+        .iter_mut()
+        .find(|l| l.path == "libraries/cpp/monoid.hpp")
+        .expect("cpp/monoid.hpp in fixture");
+    monoid.symbol_analysis.state = library_adapter_protocol::AnalysisState::Partial;
+    monoid.symbol_analysis.symbols.clear();
+
+    let snapshot = normalize_analysis(
+        &manifest,
+        responses,
+        "rev-cpp-partial",
+        &build_source_bytes(),
+    )
+    .unwrap();
+
+    let cpp_lib = LibraryId::parse("libraries/cpp/monoid.hpp").unwrap();
+    let analysis = &snapshot.languages[&cpp].libraries[&cpp_lib];
+    assert_eq!(
+        analysis.state.dependency_state,
+        AnalysisState::Complete,
+        "partial C++ symbol analysis must not drag dependency state down",
+    );
+    assert_eq!(analysis.state.symbol_state, AnalysisState::Partial);
+    assert!(!snapshot.snapshot_hash.is_empty());
+}
+
+#[test]
 fn rejects_duplicate_toolchain_name() {
     let manifest = build_manifest();
     let mut responses = build_responses();

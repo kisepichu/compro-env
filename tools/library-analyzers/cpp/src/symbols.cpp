@@ -112,16 +112,56 @@ bool spelling_in_main_file(const clang::SourceManager& SM, clang::SourceLocation
     return SM.isWrittenInMainFile(spelling);
 }
 
-/// Extract 1-based line/column at the spelling location of `loc`. Returns
-/// (0, 0) when the location has no usable coordinates — the caller uses
-/// (line == 0) as the "unusable" sentinel.
+/// Convert Clang's byte column into a 1-based Unicode-scalar column, per
+/// spec §6.3. Clang counts each source byte as one column; the shared
+/// protocol counts USV. For pure-ASCII lines the two match; for lines with
+/// multibyte UTF-8 characters we scan the buffer up to the spelling offset
+/// and count leading bytes.
+///
+/// Malformed UTF-8 lead bytes are counted as one USV each — the goal is a
+/// deterministic column, not a strict decoder.
+uint32_t byte_col_to_usv_col(const clang::SourceManager& SM,
+                             clang::SourceLocation spelling,
+                             unsigned byte_col) {
+    if (byte_col == 0) return 0;
+    clang::FileID fid = SM.getFileID(spelling);
+    llvm::StringRef buffer = SM.getBufferOrFake(fid).getBuffer();
+    if (buffer.empty()) return byte_col;
+    unsigned file_offset = SM.getFileOffset(spelling);
+    if (file_offset > buffer.size()) return byte_col;
+    unsigned line_start_offset =
+        (file_offset >= byte_col - 1) ? file_offset - (byte_col - 1) : 0;
+    uint32_t usv = 1;
+    unsigned i = line_start_offset;
+    while (i < file_offset && i < buffer.size()) {
+        auto b = static_cast<unsigned char>(buffer[i]);
+        unsigned advance;
+        if (b < 0x80) advance = 1;
+        else if ((b & 0xE0) == 0xC0) advance = 2;
+        else if ((b & 0xF0) == 0xE0) advance = 3;
+        else if ((b & 0xF8) == 0xF0) advance = 4;
+        else advance = 1;
+        i += advance;
+        ++usv;
+    }
+    return usv;
+}
+
+/// Extract 1-based line/column at the spelling location of `loc`. Column
+/// is in Unicode scalar values (spec §6.3). Returns (0, 0) when the
+/// location has no usable coordinates — the caller uses (line == 0) as the
+/// "unusable" sentinel.
 std::pair<uint32_t, uint32_t> spelling_line_col(const clang::SourceManager& SM,
                                                 clang::SourceLocation loc) {
     if (loc.isInvalid()) return {0, 0};
     clang::SourceLocation spelling = SM.getSpellingLoc(loc);
-    unsigned line = SM.getSpellingLineNumber(spelling);
-    unsigned col = SM.getSpellingColumnNumber(spelling);
-    return {static_cast<uint32_t>(line), static_cast<uint32_t>(col)};
+    if (spelling.isInvalid()) return {0, 0};
+    bool invalid = false;
+    unsigned line = SM.getSpellingLineNumber(spelling, &invalid);
+    if (invalid || line == 0) return {0, 0};
+    unsigned byte_col = SM.getSpellingColumnNumber(spelling, &invalid);
+    if (invalid || byte_col == 0) return {0, 0};
+    return {static_cast<uint32_t>(line), byte_col_to_usv_col(SM, spelling, byte_col)};
 }
 
 /// End-of-token span for `end`. Clang's `getEndLoc()` points at the start of

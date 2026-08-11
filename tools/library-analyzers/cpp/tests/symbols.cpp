@@ -218,6 +218,122 @@ void run_semantic_checks(const std::vector<ce_cpp::LibraryAnalysis>& libraries) 
     CE_EXPECT_TRUE(find_symbol(unicode, u8"こんにちは", "function") != nullptr);
 }
 
+// ─── Task 2: source-location and recovery semantics ────────────────────────
+
+/// Macro spelling/expansion: declarations synthesized inside a macro body
+/// have their spelling location inside the macro definition, so the
+/// main-file filter suppresses them. Non-macro decls emitted alongside are
+/// still returned.
+void test_macro_expansions_are_filtered() {
+    ce_cpp::CompileProfile profile = build_test_profile();
+    auto la = run_target(profile, "libraries/cpp/symbols/macros.hpp");
+    const auto& sa = la.symbol_analysis;
+    CE_EXPECT_TRUE(find_symbol(sa, "Real", "class") != nullptr);
+    // A `CE_DECLARE_STRUCT(FromMacro)` invocation may either project no
+    // symbol at all or emit the record at the invocation site — accept
+    // both, but never emit at the macro definition line.
+    for (const auto& s : sa.symbols) {
+        if (s.location.has_value()) {
+            CE_EXPECT_TRUE(s.location->start.line > 3);
+        }
+    }
+}
+
+/// CRLF handling: Clang counts `\r\n` as one line terminator, so decls on
+/// the physical Nth line report `line = N`, not `N + 1`.
+void test_crlf_line_numbers() {
+    ce_cpp::CompileProfile profile = build_test_profile();
+    auto la = run_target(profile, "libraries/cpp/symbols/crlf.hpp");
+    const auto& sa = la.symbol_analysis;
+    const auto* first = find_symbol(sa, "First", "class");
+    CE_EXPECT_TRUE(first != nullptr);
+    if (first != nullptr && first->location.has_value()) {
+        CE_EXPECT_EQ(first->location->start.line, uint32_t{3});
+    }
+    const auto* second = find_symbol(sa, "Second", "class");
+    CE_EXPECT_TRUE(second != nullptr);
+    if (second != nullptr && second->location.has_value()) {
+        CE_EXPECT_EQ(second->location->start.line, uint32_t{6});
+    }
+}
+
+/// Duplicate declarations + forward declarations: each entity yields at most
+/// one emitted symbol. Prefer the definition when one exists in the main
+/// file; otherwise the earliest declaration in the main file.
+void test_forward_and_duplicate_declarations() {
+    ce_cpp::CompileProfile profile = build_test_profile();
+    auto la = run_target(profile, "libraries/cpp/symbols/forward.hpp");
+    const auto& sa = la.symbol_analysis;
+    // `class NotDefined;` — no definition, single forward decl emitted.
+    size_t not_def_count = 0;
+    for (const auto& s : sa.symbols) {
+        if (s.name == "NotDefined") ++not_def_count;
+    }
+    CE_EXPECT_EQ(not_def_count, size_t{1});
+    // `class Defined;` + `class Defined { … };` — one symbol at the
+    // definition line.
+    size_t defined_count = 0;
+    uint32_t defined_line = 0;
+    for (const auto& s : sa.symbols) {
+        if (s.name == "Defined" && s.kind == "class") {
+            ++defined_count;
+            if (s.location.has_value()) defined_line = s.location->start.line;
+        }
+    }
+    CE_EXPECT_EQ(defined_count, size_t{1});
+    CE_EXPECT_TRUE(defined_line >= 5);
+    // Three redeclarations of `plain` collapse to one emit at the definition.
+    size_t plain_count = 0;
+    uint32_t plain_line = 0;
+    for (const auto& s : sa.symbols) {
+        if (s.name == "plain" && s.kind == "function") {
+            ++plain_count;
+            if (s.location.has_value()) plain_line = s.location->start.line;
+        }
+    }
+    CE_EXPECT_EQ(plain_count, size_t{1});
+    CE_EXPECT_TRUE(plain_line >= 10);
+}
+
+/// Symbols from included headers must not leak into the target's analysis.
+/// The target only owns declarations physically inside its own file.
+void test_included_header_symbols_not_leaked() {
+    ce_cpp::CompileProfile profile = build_test_profile();
+    auto la = run_target(profile, "libraries/cpp/symbols/headers.hpp");
+    const auto& sa = la.symbol_analysis;
+    // Local decls appear.
+    CE_EXPECT_TRUE(find_symbol(sa, "LocalOnly", "class") != nullptr);
+    CE_EXPECT_TRUE(find_symbol(sa, "local_fn", "function") != nullptr);
+    // Included basic.hpp decls must not appear.
+    CE_EXPECT_TRUE(find_symbol(sa, "algebra", "type") == nullptr);
+    CE_EXPECT_TRUE(find_symbol(sa, "Point", "class") == nullptr);
+    CE_EXPECT_TRUE(find_symbol(sa, "Addable", "concept") == nullptr);
+}
+
+/// Parse recovery: an error mid-file leaves earlier decls intact and marks
+/// the analysis `partial` so the caller can see the catalog is incomplete.
+/// Dependency completeness is not tested here — that lives in the usecases
+/// integration test — but the state contract must hold.
+void test_parse_recovery_is_partial() {
+    ce_cpp::CompileProfile profile = build_test_profile();
+    auto la = run_target(profile, "libraries/cpp/symbols/recovery.hpp");
+    const auto& sa = la.symbol_analysis;
+    CE_EXPECT_TRUE(find_symbol(sa, "Before", "class") != nullptr);
+    CE_EXPECT_TRUE(find_symbol(sa, "before_fn", "function") != nullptr);
+    // Clang's recovery is best-effort — either the analysis state is
+    // `partial` (typical) or the driver bailed and we saw `failed`. Either
+    // must not be `complete`.
+    CE_EXPECT_TRUE(sa.state != ce_cpp::AnalysisState::Complete);
+}
+
+void run_task2_checks() {
+    test_macro_expansions_are_filtered();
+    test_crlf_line_numbers();
+    test_forward_and_duplicate_declarations();
+    test_included_header_symbols_not_leaked();
+    test_parse_recovery_is_partial();
+}
+
 void run_test() {
     ce_cpp::CompileProfile profile = build_test_profile();
 
@@ -233,6 +349,7 @@ void run_test() {
     }
 
     run_semantic_checks(library_analyses);
+    run_task2_checks();
 
     std::string actual = serialize_payload(library_analyses);
 
