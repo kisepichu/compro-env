@@ -1078,18 +1078,24 @@ fn build_completed_state(
         PortVerdict::Other(raw) => (VerdictKind::Other, raw.clone()),
     };
 
-    // Derive language + capabilities from the current record if it carries
-    // them; else fall back to a minimal binding. Callers running the full
-    // verify pipeline supply language on Starting; poll_handle is invoked
-    // after start_plan so we always have context.
-    let language = match &current.state {
-        VerificationState::Starting(s) => s.language.clone(),
-        VerificationState::AcceptanceUnknown(s) => s.language.clone(),
-        _ => domain::verification::LanguageBinding {
-            language_id: domain::library::LanguageId::parse("unknown")
-                .expect("static language id is valid"),
-            oj_language_id: "unknown".into(),
-        },
+    // Prefer the frozen PlanContext (spec §11) so the completed record
+    // quotes the language the plan pinned even when `current.state` is
+    // Submitted/Queued/Judging/InfrastructureFailure (those bodies don't
+    // carry language). Fall back to the state body only if the record
+    // predates PlanContext (backward-compat with pre-existing on-disk
+    // records).
+    let language = if let Some(ctx) = &current.plan_context {
+        ctx.language.clone()
+    } else {
+        match &current.state {
+            VerificationState::Starting(s) => s.language.clone(),
+            VerificationState::AcceptanceUnknown(s) => s.language.clone(),
+            _ => domain::verification::LanguageBinding {
+                language_id: domain::library::LanguageId::parse("unknown")
+                    .expect("static language id is valid"),
+                oj_language_id: "unknown".into(),
+            },
+        }
     };
 
     let capabilities = domain::online_judge::SubmissionCapabilities {

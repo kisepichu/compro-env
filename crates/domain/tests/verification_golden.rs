@@ -326,6 +326,7 @@ fn record_can_be_built_from_scratch_and_round_trips() {
         )
         .unwrap(),
         state,
+        plan_context: None,
     };
     let json = serde_json::to_string(&record).unwrap();
     let round: VerificationRecord = serde_json::from_str(&json).unwrap();

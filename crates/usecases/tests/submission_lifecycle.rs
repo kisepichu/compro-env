@@ -104,6 +104,7 @@ fn make_starting_record(solution: &SolutionId, attempt_id: &str) -> Verification
             language: binding(),
             started_at: fixed_offset_time(0),
         }),
+        plan_context: None,
     }
 }
 
@@ -122,6 +123,7 @@ fn make_acceptance_unknown(solution: &SolutionId, attempt_id: &str) -> Verificat
             observed_at: fixed_offset_time(1),
             summary: "network drop after POST".into(),
         }),
+        plan_context: None,
     }
 }
 
@@ -151,6 +153,7 @@ fn make_submitted(
             handle: make_domain_handle(oj, sub_id),
             submitted_at: fixed_offset_time(0),
         }),
+        plan_context: None,
     }
 }
 
@@ -170,6 +173,7 @@ fn make_queued(
             handle: make_domain_handle(oj, sub_id),
             observed_at: fixed_offset_time(1),
         }),
+        plan_context: None,
     }
 }
 
@@ -189,6 +193,7 @@ fn make_judging(
             handle: make_domain_handle(oj, sub_id),
             observed_at: fixed_offset_time(1),
         }),
+        plan_context: None,
     }
 }
 
@@ -214,6 +219,7 @@ fn make_infra_failure(
             plan_hash: Some(hash(0xaa)),
             handle,
         }),
+        plan_context: None,
     }
 }
 

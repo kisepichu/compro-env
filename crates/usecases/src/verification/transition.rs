@@ -77,6 +77,7 @@ pub fn apply_transition(
         replaces_attempt_id: current.replaces_attempt_id.clone(),
         fingerprint: current.fingerprint.clone(),
         state: next_state,
+        plan_context: current.plan_context.clone(),
     })
 }
 
@@ -400,6 +401,7 @@ mod tests {
             replaces_attempt_id: None,
             fingerprint: fingerprint(),
             state,
+            plan_context: None,
         }
     }
 

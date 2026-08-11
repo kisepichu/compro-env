@@ -428,6 +428,29 @@ pub struct VerificationRecord {
     pub replaces_attempt_id: Option<AttemptId>,
     pub fingerprint: VerifyFingerprint,
     pub state: VerificationState,
+    /// Frozen plan context (spec §11 "record が十分な証跡を持つ") carried
+    /// across every state transition so `CompletedState` can quote the
+    /// original `language` and `submitted_source_hash` even from
+    /// `Submitted/Queued/Judging/InfrastructureFailure`, which drop the
+    /// `Starting` body once the OJ hands back a submission handle.
+    ///
+    /// `None` is allowed for backward compatibility with records written
+    /// before this field existed; new records always populate it.
+    #[serde(default)]
+    pub plan_context: Option<PlanContext>,
+}
+
+/// Frozen plan facts required by every terminal record (spec §11).
+///
+/// Populated when the `Starting` record is first persisted; preserved by
+/// [`apply_transition`] through every forward move, so downstream states
+/// (`Submitted`, `Queued`, `Judging`, `InfrastructureFailure`, `Completed`)
+/// can quote it without reaching back into the discarded `Starting` body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanContext {
+    pub language: LanguageBinding,
+    pub submitted_source_hash: ContentHash,
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

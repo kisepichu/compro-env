@@ -205,6 +205,10 @@ impl SubmissionPlan {
             replaces_attempt_id: self.body.replaces_attempt_id.clone(),
             fingerprint: self.body.fingerprint.clone(),
             state: VerificationState::Starting(self.starting_state()),
+            plan_context: Some(domain::verification::PlanContext {
+                language: self.body.language.clone(),
+                submitted_source_hash: self.body.submitted_source_hash.clone(),
+            }),
         }
     }
 }

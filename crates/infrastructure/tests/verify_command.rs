@@ -945,6 +945,7 @@ fn seed_starting_record(solution: &SolutionId) -> VerificationRecord {
             },
             started_at: fixed_time(),
         }),
+        plan_context: None,
     }
 }
 
@@ -1145,6 +1146,7 @@ fn seed_queued_record(solution: &SolutionId) -> VerificationRecord {
             },
             observed_at: fixed_time(),
         }),
+        plan_context: None,
     }
 }
 
