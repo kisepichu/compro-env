@@ -4,6 +4,7 @@
 //! can stay platform-agnostic.
 
 pub mod archive;
+pub mod build_state;
 pub mod download;
 pub mod inputs;
 pub mod prepare;
