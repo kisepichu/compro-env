@@ -592,8 +592,7 @@ h3 {
 .language-list,
 .directory-list,
 .contest-list,
-.problem-list,
-.solutions .solution-list {
+.problem-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(288px, 1fr));
   gap: var(--space-4);
@@ -602,8 +601,7 @@ h3 {
 .language-card,
 .directory-card,
 .contest-card,
-.problem-card,
-.solutions .solution-card {
+.problem-card {
   height: 100%;
   padding: var(--space-4);
   background: var(--c-surface);
@@ -639,7 +637,8 @@ h3 {
 .recent-libraries .library-list,
 .recent-solutions .solution-list,
 .attention-required .attention-list,
-.library-files .library-list {
+.library-files .library-list,
+.solutions .solution-list {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
@@ -648,21 +647,24 @@ h3 {
 .recent-libraries .library-list > li,
 .recent-solutions .solution-list > li,
 .attention-required .attention-list > li,
-.library-files .library-list > li {
+.library-files .library-list > li,
+.solutions .solution-list > li {
   border-top: 1px solid var(--c-border);
 }
 
 .recent-libraries .library-list > li:first-child,
 .recent-solutions .solution-list > li:first-child,
 .attention-required .attention-list > li:first-child,
-.library-files .library-list > li:first-child {
+.library-files .library-list > li:first-child,
+.solutions .solution-list > li:first-child {
   border-top: none;
 }
 
 .recent-libraries .library-card,
 .recent-solutions .solution-card,
 .attention-required .attention-card,
-.library-files .library-card {
+.library-files .library-card,
+.solutions .solution-card {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -673,7 +675,8 @@ h3 {
 .recent-libraries .library-card h3,
 .recent-solutions .solution-card h3,
 .attention-required .attention-card h3,
-.library-files .library-card h3 {
+.library-files .library-card h3,
+.solutions .solution-card h3 {
   flex: 1 1 16rem;
   min-width: 0;
   font-size: var(--fs-body);
@@ -684,6 +687,8 @@ h3 {
 .library-files .library-card .library-file-name,
 .recent-solutions .solution-card .solution-contest,
 .recent-solutions .solution-card .solution-language,
+.solutions .solution-card .solution-language,
+.solutions .solution-card .solution-dep-count,
 .attention-required .attention-card .attention-language {
   flex: 0 1 auto;
   margin-top: 0;
@@ -706,7 +711,6 @@ h3 {
   white-space: normal;
 }
 
-.solutions .solution-card .status-badge,
 .language-card .status-badge,
 .directory-card .status-badge {
   margin-top: var(--space-2);
@@ -726,13 +730,15 @@ h3 {
   @supports (grid-template-columns: subgrid) {
     .recent-libraries .library-list,
     .recent-solutions .solution-list,
-    .library-files .library-list {
+    .library-files .library-list,
+    .solutions .solution-list {
       display: grid;
     }
 
     .recent-libraries .library-list > li,
     .recent-solutions .solution-list > li,
-    .library-files .library-list > li {
+    .library-files .library-list > li,
+    .solutions .solution-list > li {
       display: grid;
       grid-column: 1 / -1;
       grid-template-columns: subgrid;
@@ -740,7 +746,8 @@ h3 {
 
     .recent-libraries .library-card,
     .recent-solutions .solution-card,
-    .library-files .library-card {
+    .library-files .library-card,
+    .solutions .solution-card {
       display: grid;
       grid-column: 1 / -1;
       grid-template-columns: subgrid;
@@ -754,10 +761,10 @@ h3 {
         minmax(0, 1fr) 4.5rem minmax(0, 1.4fr) max-content max-content;
     }
 
-    /* title | contest / problem | language | solved | status */
+    /* title | language | contest / problem | solved | status */
     .recent-solutions .solution-list {
       grid-template-columns:
-        minmax(0, 1fr) minmax(0, 1.4fr) 4.5rem max-content max-content;
+        minmax(0, 1fr) 4.5rem minmax(0, 1.4fr) max-content max-content;
     }
 
     /* title | file name | updated | status */
@@ -765,16 +772,24 @@ h3 {
       grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) max-content max-content;
     }
 
+    /* title | language | solved | direct dependencies | status */
+    .solutions .solution-list {
+      grid-template-columns:
+        minmax(0, 1fr) 4.5rem max-content max-content max-content;
+    }
+
     .recent-libraries .library-card > *,
     .recent-solutions .solution-card > *,
-    .library-files .library-card > * {
+    .library-files .library-card > *,
+    .solutions .solution-card > * {
       margin: 0;
       min-width: 0;
     }
 
     .recent-libraries .library-card h3,
     .recent-solutions .solution-card h3,
-    .library-files .library-card h3 {
+    .library-files .library-card h3,
+    .solutions .solution-card h3 {
       flex: none;
     }
 
@@ -783,7 +798,8 @@ h3 {
     .solution-solved,
     .recent-libraries .library-card .status-badge,
     .recent-solutions .solution-card .status-badge,
-    .library-files .library-card .status-badge {
+    .library-files .library-card .status-badge,
+    .solutions .solution-card .status-badge {
       justify-self: end;
     }
   }
@@ -1862,7 +1878,8 @@ table.testcases th:nth-child(4) {
   .recent-libraries .library-card,
   .recent-solutions .solution-card,
   .attention-required .attention-card,
-  .library-files .library-card {
+  .library-files .library-card,
+  .solutions .solution-card {
     align-items: flex-start;
     gap: var(--space-1) var(--space-3);
   }
@@ -1870,7 +1887,8 @@ table.testcases th:nth-child(4) {
   .recent-libraries .library-card h3,
   .recent-solutions .solution-card h3,
   .attention-required .attention-card h3,
-  .library-files .library-card h3 {
+  .library-files .library-card h3,
+  .solutions .solution-card h3 {
     flex-basis: 100%;
   }
 

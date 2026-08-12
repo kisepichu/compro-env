@@ -74,8 +74,8 @@ function renderRecentSolutionItem(
   return (
     `<li><article class="solution-card">` +
       `<h3><a href="${escapeAttribute(href)}">${escapeHtml(sol.solution_name)}</a></h3>` +
-      `<p class="solution-contest">${escapeHtml(sol.contest_id)} / ${escapeHtml(sol.problem_code)}</p>` +
       `<p class="solution-language">${escapeHtml(sol.language)}</p>` +
+      `<p class="solution-contest">${escapeHtml(sol.contest_id)} / ${escapeHtml(sol.problem_code)}</p>` +
       `<p class="solution-solved"><time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(formatCompactTimestamp(sol.solved_at))}</time></p>` +
       renderStatus("solution-verification", sol.verification.status) +
     `</article></li>`

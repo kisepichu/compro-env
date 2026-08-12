@@ -139,10 +139,7 @@ export function renderSolutionsRootMainInner(
       : `<ul class="contest-list">${groups.map((g) => renderContestCard(config, g)).join("")}</ul>`;
   return (
     `<header class="page-header"><h1>Solutions</h1></header>` +
-    `<section class="contests" aria-labelledby="contests-heading">` +
-      `<h2 id="contests-heading">Contests</h2>` +
-      contestsHtml +
-    `</section>`
+    contestsHtml
   );
 }
 
@@ -224,7 +221,6 @@ export function renderContestMainInner(
   return (
     `<header class="page-header">` +
       `<h1>${escapeHtml(contestId)}</h1>` +
-      `<p class="subtitle">Contest</p>` +
     `</header>` +
     `<section class="problems" aria-labelledby="problems-heading">` +
       `<h2 id="problems-heading">Problems</h2>` +
@@ -284,8 +280,8 @@ function renderSolutionCard(
       `<h3><a href="${escapeAttribute(href)}">${escapeHtml(sol.solution_name)}</a></h3>` +
       `<p class="solution-language">${escapeHtml(sol.language)}</p>` +
       `<p class="solution-solved"><time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(formatCompactTimestamp(sol.solved_at))}</time></p>` +
-      renderStatus("solution-verification", sol.verification.status) +
       `<p class="solution-dep-count">Direct dependencies: ${sol.direct_dependencies.length}</p>` +
+      renderStatus("solution-verification", sol.verification.status) +
     `</article></li>`
   );
 }
@@ -304,7 +300,6 @@ export function renderProblemMainInner(
   return (
     `<header class="page-header">` +
       `<h1>${escapeHtml(problemCode)}</h1>` +
-      `<p class="subtitle">${escapeHtml(contestId)} / ${escapeHtml(problemCode)}</p>` +
     `</header>` +
     `<section class="solutions" aria-labelledby="solutions-heading">` +
       `<h2 id="solutions-heading">Solutions</h2>` +

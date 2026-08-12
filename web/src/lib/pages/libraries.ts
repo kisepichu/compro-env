@@ -152,10 +152,7 @@ export function renderLibrariesRootMainInner(
       : `<ul class="language-list">${langs.map((l) => renderLanguageCard(config, l)).join("")}</ul>`;
   return (
     `<header class="page-header"><h1>Libraries</h1></header>` +
-    `<section class="languages" aria-labelledby="languages-heading">` +
-      `<h2 id="languages-heading">Languages</h2>` +
-      languagesHtml +
-    `</section>`
+    languagesHtml
   );
 }
 
@@ -344,10 +341,6 @@ export function renderLibraryDirectoryMainInner(
     directoryParts.length === 0
       ? displayName
       : directoryParts[directoryParts.length - 1];
-  const subtitleText =
-    directoryParts.length === 0
-      ? languageId
-      : [languageId, ...directoryParts].join("/");
   const directLibraries = librariesAtDirectory(
     siteData,
     languageId,
@@ -374,7 +367,6 @@ export function renderLibraryDirectoryMainInner(
   return (
     `<header class="page-header">` +
       `<h1>${escapeHtml(heading)}</h1>` +
-      `<p class="subtitle"><code>${escapeHtml(subtitleText)}</code></p>` +
       `<dl class="verification-summary">` +
         `<dt>Verified</dt><dd>${counts.verified}</dd>` +
         `<dt>Stale</dt><dd>${counts.stale}</dd>` +

@@ -38,7 +38,7 @@ const projectConfig: UrlConfig = {
 };
 
 function parse(html: string): Document {
-  return new JSDOM(html).window.document;
+  return new JSDOM(html, { url: rootConfig.origin }).window.document;
 }
 
 /**
@@ -233,6 +233,18 @@ describe("Home page (/)", () => {
     expect(solutionTime.textContent).toBe("2026-08-10");
   });
 
+  it("orders recent solution metadata to match recent library rows", () => {
+    const doc = parse(html);
+    const card = doc.querySelector(".recent-solutions .solution-card")!;
+    expect([...card.children].map((child) => child.className || child.tagName)).toEqual([
+      "H3",
+      "solution-language",
+      "solution-contest",
+      "solution-solved",
+      "status-badge",
+    ]);
+  });
+
   it("recent libraries are capped at 10 and sorted by (updated_at desc, id asc)", () => {
     // Build 15 libraries to prove capping and stable tie-break.
     const many: LibraryPageData[] = [];
@@ -296,11 +308,19 @@ describe("Libraries root (/libraries/)", () => {
     expect(cards[0].textContent).toContain("Rust");
   });
 
+  it("places the language list directly after the page header without a redundant heading", () => {
+    const doc = parse(renderLibrariesRootPage(rootConfig, buildFixtureSiteData()));
+    expect(doc.querySelector("main > .page-header + .language-list")).toBeTruthy();
+    expect(doc.querySelector("main > section.languages")).toBeNull();
+    expect(doc.querySelector("main > h2")).toBeNull();
+  });
+
   it("renders an empty-state message when no eligible languages exist", () => {
     const siteData = buildFixtureSiteData({ languages: [] });
     const doc = parse(renderLibrariesRootPage(rootConfig, siteData));
     expect(doc.querySelector(".empty-state")).toBeTruthy();
     expect(doc.querySelector(".empty-state")!.textContent).toMatch(/No languages/);
+    expect(doc.querySelector("main > .page-header + .empty-state")).toBeTruthy();
   });
 
   it("keeps internal links under a project base like /compro-env/", () => {
@@ -354,6 +374,17 @@ describe("Library directory pages", () => {
     const time = doc.querySelector(".library-files .library-updated time")!;
     expect(time.getAttribute("datetime")).toBe("2026-08-10T12:00:00Z");
     expect(time.textContent).toBe("2026-08-10");
+  });
+
+  it("does not repeat the breadcrumb path below language or category headings", () => {
+    const languageDoc = parse(
+      renderLibraryDirectoryPage(rootConfig, siteData, "rust", []),
+    );
+    const categoryDoc = parse(
+      renderLibraryDirectoryPage(rootConfig, siteData, "rust", ["graph"]),
+    );
+    expect(languageDoc.querySelector(".page-header .subtitle")).toBeNull();
+    expect(categoryDoc.querySelector(".page-header .subtitle")).toBeNull();
   });
 });
 
@@ -442,6 +473,18 @@ describe("Solution browse and detail", () => {
     expect(heads).toEqual(["abc300", "abc301"]);
   });
 
+  it("places contest cards directly after the page header without a redundant heading", () => {
+    const doc = parse(renderSolutionsRootPage(rootConfig, siteData));
+    expect(doc.querySelector("main > .page-header + .contest-list")).toBeTruthy();
+    expect(doc.querySelector("main > section.contests")).toBeNull();
+    expect(doc.querySelector("main > h2")).toBeNull();
+
+    const emptyDoc = parse(
+      renderSolutionsRootPage(rootConfig, buildFixtureSiteData({ solutions: [] })),
+    );
+    expect(emptyDoc.querySelector("main > .page-header + .empty-state")).toBeTruthy();
+  });
+
   it("shows compact dates throughout solution browse cards", () => {
     const rootDoc = parse(renderSolutionsRootPage(rootConfig, siteData));
     const contestTime = rootDoc.querySelector(".contest-card time")!;
@@ -484,6 +527,27 @@ describe("Solution browse and detail", () => {
       (li) => li.textContent,
     );
     expect(crumbs).toEqual(["Home", "Solutions", "abc300", "a"]);
+  });
+
+  it("does not repeat contest or problem paths below browse headings", () => {
+    const contestDoc = parse(renderContestPage(rootConfig, siteData, "abc300"));
+    const problemDoc = parse(
+      renderProblemPage(rootConfig, siteData, "abc300", "a"),
+    );
+    expect(contestDoc.querySelector(".page-header .subtitle")).toBeNull();
+    expect(problemDoc.querySelector(".page-header .subtitle")).toBeNull();
+  });
+
+  it("orders problem solution rows with the status at the right edge", () => {
+    const doc = parse(renderProblemPage(rootConfig, siteData, "abc300", "a"));
+    const card = doc.querySelector(".solutions .solution-card")!;
+    expect([...card.children].map((child) => child.className || child.tagName)).toEqual([
+      "H3",
+      "solution-language",
+      "solution-solved",
+      "solution-dep-count",
+      "status-badge",
+    ]);
   });
 
   it("solution detail: article has data-pagefind-body and canonical page id", async () => {
