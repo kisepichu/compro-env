@@ -1772,6 +1772,183 @@ fn worker_declares_mode_and_solution_inputs() {
     );
 }
 
+/// #062.17: The library-analyzer executables that `verify-prepare` /
+/// `verify-start` / `verify-poll` boot via `build_analysis` are frozen once
+/// in `prepare` and shipped to secret jobs as a digest-pinned artifact,
+/// exactly like `plan.json` and `ce`. This test asserts three invariants:
+///
+///  1. `prepare` runs `tools/library-analyzers/prepare` and
+///     `tools/library-analyzers/build` before it invokes
+///     `ce internal verify-prepare` — otherwise `analyze_all` fails with
+///     `adapter executable for language ...` (this is the failure that
+///     motivated the fix).
+///  2. `prepare.outputs.analyzers_sha` is a job output so downstream jobs
+///     can enforce byte-for-byte equality against a value baked into the
+///     workflow run.
+///  3. Every OJ-side job (`submit`, `poll`) downloads
+///     `verify-analyzers-<suffix>` and re-validates its SHA256 against
+///     `needs.prepare.outputs.analyzers_sha`. The `persist_*` jobs are
+///     intentionally exempt: they only invoke `verify-persist`, which is a
+///     plain HTTP client and never calls `build_analysis`.
+#[test]
+fn worker_prepare_freezes_and_ships_analyzers_to_oj_jobs() {
+    let doc = load_worker();
+    let jobs_map = jobs(&doc);
+
+    // ── prepare: build order + tar packaging + upload + output wiring ──
+    let prepare = get(jobs_map, "prepare").expect("missing prepare job");
+    let prepare_steps = steps(prepare);
+    let mut ran_prepare_step_idx: Option<usize> = None;
+    let mut ran_build_step_idx: Option<usize> = None;
+    let mut freeze_idx: Option<usize> = None;
+    let mut hash_step_tars_analyzers = false;
+    let mut upload_analyzer_step = false;
+    for (idx, step) in prepare_steps.iter().enumerate() {
+        let map = match step.as_mapping() {
+            Some(m) => m,
+            None => continue,
+        };
+        let run = get(map, "run").and_then(Value::as_str).unwrap_or("");
+        // Anchor on `./tools/library-analyzers/prepare\n` (LF terminator or
+        // end-of-string) so a step that only mentions the sibling
+        // `tools/library-analyzers/prepared/*` path does NOT count as an
+        // invocation.
+        for line in run.lines() {
+            let stripped = line.trim();
+            if stripped == "./tools/library-analyzers/prepare"
+                || stripped.starts_with("./tools/library-analyzers/prepare ")
+            {
+                ran_prepare_step_idx = Some(idx);
+            }
+            if stripped == "./tools/library-analyzers/build"
+                || stripped.starts_with("./tools/library-analyzers/build ")
+            {
+                ran_build_step_idx = Some(idx);
+            }
+        }
+        let id = get(map, "id").and_then(Value::as_str).unwrap_or("");
+        if id == "build_plan" {
+            freeze_idx = Some(idx);
+        }
+        if id == "hash"
+            && run.contains("tar")
+            && run.contains("--dereference")
+            && run.contains("artifacts/analyzers.tar")
+            && run.contains("ANALYZERS_SHA=$(sha256sum artifacts/analyzers.tar")
+        {
+            hash_step_tars_analyzers = true;
+        }
+        if let Some(uses) = get(map, "uses").and_then(Value::as_str)
+            && uses.starts_with("actions/upload-artifact@")
+            && let Some(with) = get(map, "with").and_then(Value::as_mapping)
+            && get(with, "name")
+                .and_then(Value::as_str)
+                .is_some_and(|v| v.starts_with("verify-analyzers-"))
+        {
+            upload_analyzer_step = true;
+        }
+    }
+    let ran_prepare = ran_prepare_step_idx.expect(
+        "prepare job must invoke `./tools/library-analyzers/prepare` on its own line \
+         (fetches pinned toolchain archives; sibling paths under `prepared/` do not count)",
+    );
+    let ran_build = ran_build_step_idx.expect(
+        "prepare job must invoke `./tools/library-analyzers/build` on its own line \
+         (produces target/library-analyzers/bin/*-analyzer)",
+    );
+    let freeze = freeze_idx.expect("prepare job must have the `build_plan` freeze step");
+    assert!(
+        ran_prepare < freeze && ran_build < freeze,
+        "prepare job must build analyzers *before* the `build_plan` freeze step — \
+         otherwise `verify-prepare` errors with `adapter executable for language ... not found` \
+         (prepare_step={ran_prepare}, build_step={ran_build}, freeze_step={freeze})"
+    );
+    assert!(
+        hash_step_tars_analyzers,
+        "prepare job's `hash` step must package the analyzers with `tar --dereference` into \
+         `artifacts/analyzers.tar` and compute its SHA256 — otherwise the artifact digest \
+         chain-of-custody can be silently bypassed"
+    );
+    assert!(
+        upload_analyzer_step,
+        "prepare job must upload a `verify-analyzers-*` artifact — without it, submit/poll fail \
+         with `Unable to find any artifacts for the associated workflow`"
+    );
+
+    let prepare_outputs = get(as_map(prepare, "prepare"), "outputs")
+        .and_then(Value::as_mapping)
+        .expect("prepare job must declare outputs");
+    let analyzers_sha_out = get(prepare_outputs, "analyzers_sha").and_then(Value::as_str);
+    assert_eq!(
+        analyzers_sha_out,
+        Some("${{ steps.hash.outputs.analyzers_sha }}"),
+        "prepare.outputs.analyzers_sha must be wired to the `hash` step's `analyzers_sha` output \
+         (any other step could be computing a sha over the wrong file)"
+    );
+
+    // ── submit/poll: download + digest-check + extract in one step ──
+    for name in ["submit", "poll"] {
+        let job = get(jobs_map, name).unwrap();
+        let mut downloads = false;
+        let mut env_wires_expected = false;
+        let mut digest_comparison_present = false;
+        let mut extracts_tar = false;
+        for step in steps(job) {
+            let map = match step.as_mapping() {
+                Some(m) => m,
+                None => continue,
+            };
+            if let Some(uses) = get(map, "uses").and_then(Value::as_str)
+                && uses.starts_with("actions/download-artifact@")
+                && let Some(with) = get(map, "with").and_then(Value::as_mapping)
+                && get(with, "name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| v.starts_with("verify-analyzers-"))
+            {
+                downloads = true;
+            }
+            let env_wires_here = get(map, "env")
+                .and_then(Value::as_mapping)
+                .and_then(|env| get(env, "EXPECTED_ANALYZERS_SHA").and_then(Value::as_str))
+                .is_some_and(|v| v.contains("needs.prepare.outputs.analyzers_sha"));
+            if env_wires_here {
+                env_wires_expected = true;
+            }
+            let run = get(map, "run").and_then(Value::as_str).unwrap_or("");
+            if run.contains("ACTUAL_ANALYZERS=$(sha256sum work/analyzers.tar")
+                && run.contains("EXPECTED_ANALYZERS_SHA")
+                && run.contains("$ACTUAL_ANALYZERS")
+                && run.contains("digest mismatch")
+                && run.contains("exit 1")
+            {
+                digest_comparison_present = true;
+            }
+            if run.contains("tar -C target/library-analyzers -xf work/analyzers.tar") {
+                extracts_tar = true;
+            }
+        }
+        assert!(
+            downloads,
+            "OJ job {name:?} must download the pinned `verify-analyzers-*` artifact"
+        );
+        assert!(
+            env_wires_expected,
+            "OJ job {name:?} must wire `EXPECTED_ANALYZERS_SHA` to `needs.prepare.outputs.analyzers_sha`"
+        );
+        assert!(
+            digest_comparison_present,
+            "OJ job {name:?} must actually compare `sha256sum work/analyzers.tar` against \
+             `$EXPECTED_ANALYZERS_SHA` and fail with `analyzers digest mismatch` — the env-var \
+             wiring alone does not prove the guard runs"
+        );
+        assert!(
+            extracts_tar,
+            "OJ job {name:?} must extract `work/analyzers.tar` into `target/library-analyzers/` \
+             so `resolve_adapter_executable` finds each analyzer at its declared path"
+        );
+    }
+}
+
 /// #062.16: `secret-bearing` jobs must not run `git clone` / `git fetch` /
 /// `git checkout` in shell — the only way to materialize source is through
 /// the pinned `actions/checkout@<sha>` action targeting `${{ inputs.after }}`

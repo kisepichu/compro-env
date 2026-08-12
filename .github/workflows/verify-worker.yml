@@ -62,6 +62,7 @@ jobs:
       plan_sha: ${{ steps.hash.outputs.plan_sha }}
       starting_sha: ${{ steps.hash.outputs.starting_sha }}
       ce_sha: ${{ steps.hash.outputs.ce_sha }}
+      analyzers_sha: ${{ steps.hash.outputs.analyzers_sha }}
       base_sha: ${{ inputs.after }}
       artifact_suffix: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -89,6 +90,62 @@ jobs:
 
       - name: Build ce
         run: cargo build --release --bin ce
+
+      # ── Library analyzer executables (spec §6.9) ───────────────────
+      # `ce internal verify-prepare` boots `build_analysis`, which fans
+      # out to every language adapter declared in `config.toml`. The
+      # adapter binaries live at `target/library-analyzers/bin/*-analyzer`;
+      # `prepare` writes them once here so downstream secret-bearing jobs
+      # can consume the same digest-pinned artifact without needing a
+      # toolchain of their own. `prepare` is `submit`/`persist_*`
+      # short-circuits when `has_work=false`, so on empty-solution runs
+      # this block still runs but its output is dropped.
+
+      - name: Install analyzer build dependencies
+        # `library-adapter-build` compiles cpp-analyzer with cmake +
+        # ninja; ubuntu-latest ships gcc / g++ but not cmake or ninja by
+        # default. The Lean adapter uses its own vendored toolchain.
+        # Gated on `solution != ''` so scheduled ticks with no candidate
+        # skip the apt cycle entirely.
+        if: inputs.solution != ''
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build
+
+      - name: Cache prepared adapter dependencies
+        if: inputs.solution != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: target/library-analyzers/prepared
+          key: ${{ runner.os }}-analyzers-prepared-${{ hashFiles('tools/library-analyzers/dependencies.toml') }}
+
+      - name: Cache built analyzer binaries
+        # Keys on the analyzer sources, the domain / infrastructure build
+        # orchestrator (which knows how to invoke each language plan), the
+        # protocol crate the adapters compile against, plus the Rust
+        # toolchain / lockfile pins. Missing any of these lets a change to
+        # build orchestration silently ship a stale cached binary that no
+        # longer matches the source at `inputs.after`.
+        if: inputs.solution != ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            target/library-analyzers/builds
+            target/library-analyzers/bin
+          key: ${{ runner.os }}-analyzers-builds-${{ hashFiles('tools/library-analyzers/**', 'crates/library-adapter-protocol/**', 'crates/domain/src/adapter_build.rs', 'crates/domain/src/adapter_prepare.rs', 'crates/infrastructure/src/library_adapter/**', 'Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Prepare library analyzer dependencies
+        # Empty `solution` = dispatcher tick with no work. `Freeze plan`
+        # short-circuits at `if [ -z "$SOLUTION" ]`, so paying the LLVM
+        # 22.1 (~700MB) + Lean 4.30 (~500MB) prepare cost here would be
+        # pure waste. Cache-restore steps above are gated the same way.
+        if: inputs.solution != ''
+        run: ./tools/library-analyzers/prepare
+
+      - name: Build library analyzer executables
+        if: inputs.solution != ''
+        run: ./tools/library-analyzers/build
 
       - name: Freeze plan and starting record
         id: build_plan
@@ -120,13 +177,20 @@ jobs:
           CE_SHA=$(sha256sum target/release/ce | awk '{print $1}')
           # `plan.sha256` is the only sidecar carried into the artifact:
           # `verify-persist --plan-hash-in work/plan.sha256` reads it directly.
-          # `starting_sha` and `ce_sha` are enforced via job outputs so their
-          # digest is baked into the workflow run at prepare time.
+          # `starting_sha` / `ce_sha` / `analyzers_sha` are enforced via job
+          # outputs so their digest is baked into the workflow run at prepare
+          # time. `analyzers.tar` packages the resolved `bin/` symlinks and
+          # their build target so submit / poll receive the exact executables
+          # `prepare` fingerprinted against.
           printf "%s" "$PLAN_SHA" > artifacts/plan.sha256
           cp target/release/ce artifacts/ce
+          tar -C target/library-analyzers --dereference \
+            -cf artifacts/analyzers.tar bin builds
+          ANALYZERS_SHA=$(sha256sum artifacts/analyzers.tar | awk '{print $1}')
           echo "plan_sha=$PLAN_SHA" >> "$GITHUB_OUTPUT"
           echo "starting_sha=$STARTING_SHA" >> "$GITHUB_OUTPUT"
           echo "ce_sha=$CE_SHA" >> "$GITHUB_OUTPUT"
+          echo "analyzers_sha=$ANALYZERS_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Upload plan artifact
         if: steps.build_plan.outputs.has_work == 'true'
@@ -146,6 +210,21 @@ jobs:
         with:
           name: verify-ce-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/ce
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload analyzer artifact
+        # Consumed by `submit` and `poll` — those jobs run `ce internal
+        # verify-start` / `verify-poll` which invoke `build_analysis`, and
+        # they have no Rust / LLVM / Lean toolchains of their own. The
+        # unpacked bundle lands at `target/library-analyzers/` relative to
+        # the state-branch checkout so `resolve_adapter_executable` still
+        # finds each binary at its declared `analyzer.command[0]` path.
+        if: steps.build_plan.outputs.has_work == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: verify-analyzers-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/analyzers.tar
           if-no-files-found: error
           retention-days: 7
 
@@ -278,21 +357,43 @@ jobs:
           name: verify-ce-${{ needs.prepare.outputs.artifact_suffix }}
           path: work
 
+      - name: Download analyzer artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-analyzers-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
       - name: Validate artifact digests
         env:
           EXPECTED_PLAN_SHA: ${{ needs.prepare.outputs.plan_sha }}
           EXPECTED_CE_SHA: ${{ needs.prepare.outputs.ce_sha }}
+          EXPECTED_ANALYZERS_SHA: ${{ needs.prepare.outputs.analyzers_sha }}
         run: |
           set -euo pipefail
           ACTUAL_PLAN=$(sha256sum work/plan.json | awk '{print $1}')
           ACTUAL_CE=$(sha256sum work/ce | awk '{print $1}')
+          ACTUAL_ANALYZERS=$(sha256sum work/analyzers.tar | awk '{print $1}')
           if [ "$ACTUAL_PLAN" != "$EXPECTED_PLAN_SHA" ]; then
             echo "plan artifact digest mismatch"; exit 1
           fi
           if [ "$ACTUAL_CE" != "$EXPECTED_CE_SHA" ]; then
             echo "ce artifact digest mismatch"; exit 1
           fi
+          if [ "$ACTUAL_ANALYZERS" != "$EXPECTED_ANALYZERS_SHA" ]; then
+            echo "analyzers artifact digest mismatch"; exit 1
+          fi
           chmod +x work/ce
+          mkdir -p target/library-analyzers
+          tar -C target/library-analyzers -xf work/analyzers.tar
+          # `find -exec chmod` gracefully handles an empty bin/ (which
+          # would otherwise fail here with a confusing "No such file"
+          # under `set -euo pipefail`) and surfaces the real cause via
+          # the sanity guard on the next step.
+          find target/library-analyzers/bin -maxdepth 1 -type f -exec chmod +x {} +
+          if [ -z "$(ls -A target/library-analyzers/bin 2>/dev/null || true)" ]; then
+            echo "analyzers.tar unpacked but target/library-analyzers/bin is empty" >&2
+            exit 1
+          fi
 
       - name: Configure LibraryChecker session
         env:
@@ -467,20 +568,40 @@ jobs:
           name: verify-handle-${{ needs.prepare.outputs.artifact_suffix }}
           path: work
 
+      - name: Download analyzer artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-analyzers-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
       - name: Validate artifact digests
         env:
           EXPECTED_PLAN_SHA: ${{ needs.prepare.outputs.plan_sha }}
           EXPECTED_CE_SHA: ${{ needs.prepare.outputs.ce_sha }}
           EXPECTED_HANDLE_SHA: ${{ needs.submit.outputs.handle_sha }}
+          EXPECTED_ANALYZERS_SHA: ${{ needs.prepare.outputs.analyzers_sha }}
         run: |
           set -euo pipefail
           ACTUAL_PLAN=$(sha256sum work/plan.json | awk '{print $1}')
           ACTUAL_CE=$(sha256sum work/ce | awk '{print $1}')
           ACTUAL_HANDLE=$(sha256sum work/handle.json | awk '{print $1}')
+          ACTUAL_ANALYZERS=$(sha256sum work/analyzers.tar | awk '{print $1}')
           if [ "$ACTUAL_PLAN" != "$EXPECTED_PLAN_SHA" ]; then echo "plan digest mismatch"; exit 1; fi
           if [ "$ACTUAL_CE" != "$EXPECTED_CE_SHA" ]; then echo "ce digest mismatch"; exit 1; fi
           if [ "$ACTUAL_HANDLE" != "$EXPECTED_HANDLE_SHA" ]; then echo "handle digest mismatch"; exit 1; fi
+          if [ "$ACTUAL_ANALYZERS" != "$EXPECTED_ANALYZERS_SHA" ]; then echo "analyzers digest mismatch"; exit 1; fi
           chmod +x work/ce
+          mkdir -p target/library-analyzers
+          tar -C target/library-analyzers -xf work/analyzers.tar
+          # `find -exec chmod` gracefully handles an empty bin/ (which
+          # would otherwise fail here with a confusing "No such file"
+          # under `set -euo pipefail`) and surfaces the real cause via
+          # the sanity guard on the next step.
+          find target/library-analyzers/bin -maxdepth 1 -type f -exec chmod +x {} +
+          if [ -z "$(ls -A target/library-analyzers/bin 2>/dev/null || true)" ]; then
+            echo "analyzers.tar unpacked but target/library-analyzers/bin is empty" >&2
+            exit 1
+          fi
 
       - name: Configure LibraryChecker session
         env:
