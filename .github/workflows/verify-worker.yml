@@ -444,10 +444,21 @@ jobs:
           # otherwise other runner users can enumerate the file name.
           umask 077
           mkdir -p "$HOME/.config/ce"
+          # Firebase refresh tokens are base64url + optional dots (JWT-like).
+          # Reject anything else so a malformed secret cannot inject TOML
+          # metacharacters (in particular a single quote would break the
+          # literal string below).
+          if ! printf '%s' "$LC_REFRESH" | LC_ALL=C grep -qE '^[A-Za-z0-9._~+/=-]+$'; then
+            echo "LIBRARYCHECKER_REFRESH_TOKEN contains disallowed characters" >&2
+            exit 1
+          fi
+          # Emit the token as a TOML literal string (single quotes) so no
+          # escape sequences apply. `id_token` is refreshed on demand from
+          # the refresh token so an empty placeholder is fine here.
           {
             printf '[librarychecker]\n'
             printf 'id_token = ""\n'
-            printf 'refresh_token = %s\n' "\"$LC_REFRESH\""
+            printf "refresh_token = '%s'\n" "$LC_REFRESH"
           } > "$HOME/.config/ce/session.toml"
 
       - name: Poll handle to terminal or unavailable
