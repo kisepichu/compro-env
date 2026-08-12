@@ -500,16 +500,17 @@ fn verify_dispatcher_wires_before_after_through_env() {
         "classify step env.AFTER must derive from steps.resolve.outputs.after (got {after:?})"
     );
 
-    // The worker exposes the SAME inputs (needed for the reusable call) — its
-    // `workflow_call.inputs.before/after` must remain `required: true` and
-    // `type: string` so the dispatcher can forward its resolved values.
+    // The worker consumes `after` (it needs the plan base SHA); the dispatcher
+    // resolves both `before` and `after` for its own classification but only
+    // forwards `after`. Assert the worker's `after` input is still
+    // `required: true` and `type: string`.
     let worker = load_worker();
     let on = get(as_map(&worker, "verify-worker"), "on").expect("missing `on:`");
     let workflow_call = get(as_map(on, "on"), "workflow_call").expect("missing workflow_call");
     let inputs = get(as_map(workflow_call, "workflow_call"), "inputs")
         .expect("workflow_call missing `inputs:`");
     let inputs_map = as_map(inputs, "inputs");
-    for name in ["before", "after"] {
+    for name in ["after"] {
         let input = get(inputs_map, name)
             .unwrap_or_else(|| panic!("workflow_call.inputs missing {name:?}"));
         let input_map = as_map(input, name);
@@ -1724,8 +1725,10 @@ fn worker_is_workflow_call_only() {
 }
 
 /// #062.15: The worker exposes `mode` as a `workflow_call` input (accepting
-/// `live` or `dry-run`) and `solution` as an optional string. The
-/// dispatcher must forward both.
+/// `live` or `dry-run`) and `solution` as an optional string. `after` carries
+/// the plan base SHA. `before` deliberately does NOT appear on the worker —
+/// classification lives in the dispatcher (§15.3) and nothing inside the
+/// worker consumes it. `mode` must default to `dry-run` for defense-in-depth.
 #[test]
 fn worker_declares_mode_and_solution_inputs() {
     let doc = load_worker();
@@ -1736,7 +1739,7 @@ fn worker_declares_mode_and_solution_inputs() {
     let inputs = get(as_map(wc, "workflow_call"), "inputs")
         .and_then(Value::as_mapping)
         .expect("workflow_call must declare inputs");
-    for name in ["before", "after", "mode", "solution"] {
+    for name in ["after", "mode", "solution"] {
         let input =
             get(inputs, name).unwrap_or_else(|| panic!("workflow_call.inputs missing {name:?}"));
         let m = as_map(input, name);
@@ -1747,6 +1750,26 @@ fn worker_declares_mode_and_solution_inputs() {
             "workflow_call.inputs.{name} must be type: string"
         );
     }
+
+    // `mode` must default to `dry-run` so a caller that forgets to pass it
+    // cannot silently exercise the OJ path.
+    let mode_map = as_map(
+        get(inputs, "mode").expect("workflow_call.inputs.mode missing"),
+        "mode",
+    );
+    let mode_default = get(mode_map, "default").and_then(Value::as_str);
+    assert_eq!(
+        mode_default,
+        Some("dry-run"),
+        "workflow_call.inputs.mode default must be `dry-run`"
+    );
+
+    // `before` was removed once classification moved to the dispatcher; any
+    // future accidental re-add would signal a stale contract.
+    assert!(
+        get(inputs, "before").is_none(),
+        "workflow_call.inputs.before must not exist — classification lives in the dispatcher"
+    );
 }
 
 /// #062.16: `secret-bearing` jobs must not run `git clone` / `git fetch` /

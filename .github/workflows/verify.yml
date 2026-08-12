@@ -149,7 +149,6 @@ jobs:
       && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/verify-worker.yml
     with:
-      before: ${{ needs.dispatch.outputs.before }}
       after: ${{ needs.dispatch.outputs.after }}
       # Default to `dry-run` for `push` / `schedule` triggers so that when
       # automatic candidate selection lands, unattended cron ticks and

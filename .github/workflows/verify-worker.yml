@@ -14,20 +14,23 @@ name: verify-worker
 on:
   workflow_call:
     inputs:
-      before:
-        required: true
-        type: string
       after:
+        # Immutable commit SHA the plan is frozen against; forwarded from the
+        # dispatcher's `Resolve BEFORE and AFTER` step. Consumed as the CAS
+        # `base_sha` in every `persist_*` job.
         required: true
         type: string
       mode:
-        # `dry-run` runs prepare → persist_starting only (no OJ contact); use it
-        # from `workflow_dispatch` before Task 4 live activation. `live` runs the
-        # full pipeline. `persist_*` jobs always run so a stalled `AcceptanceUnknown`
-        # can be persisted before another `Starting` is minted.
+        # `dry-run` runs prepare → persist_starting only (no OJ contact). `live`
+        # runs the full six-job chain, gating `submit` / `persist_handle` /
+        # `poll` / `persist_terminal` on the OJ credential environment. Only
+        # `persist_starting` is unconditional — the other `persist_*` jobs are
+        # `mode == 'live'`-gated because they consume artifacts that the OJ
+        # steps produce. Default is `dry-run` so a caller that forgets to pass
+        # `mode:` cannot silently exercise the OJ path.
         required: false
         type: string
-        default: live
+        default: dry-run
       solution:
         # Solution ID (e.g. `librarychecker-aplusb/aplusb/main`). Empty means
         # "nothing to do this run" (has_work=false, all downstream jobs skip).

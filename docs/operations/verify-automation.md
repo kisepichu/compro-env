@@ -100,18 +100,23 @@ Complete every step below before flipping `VERIFY_ACTIVATED` to
    - Environment secret: `LIBRARYCHECKER_REFRESH_TOKEN` = the Firebase
      refresh token captured by running `ce login` against Library
      Checker manually.
-6. Under **Settings → Actions → Variables** (repository scope), add
+6. Bootstrap the `automation/verify` state branch from the current
+   `main` tip: `git push origin main:automation/verify`. Every
+   `persist_*` job's CAS assumes this ref already exists; without it
+   the first `persist_starting` fails opaquely with
+   `PATCH refs/heads/automation/verify → 404`.
+7. Under **Settings → Actions → Variables** (repository scope), add
    `VERIFY_ACTIVATED = true`. This is the master activation switch;
    setting it back to `false` disables the workflow without needing
    to delete the environments or rotate secrets.
-7. Enable branch protection on `main` with these required status
+8. Enable branch protection on `main` with these required status
    checks: `CI / Cargo test + clippy + fmt`, `CI / Web build`, and any
    `verify-result-integrity` check that surfaces on the automation
    PRs.
-8. Enable **Settings → General → Allow auto-merge** so the bot's
+9. Enable **Settings → General → Allow auto-merge** so the bot's
    terminal-verdict PRs can auto-merge once all required checks pass.
-9. Record the completion date, the App ID, and the PEM fingerprint in
-   your operator log. Never commit the PEM itself.
+10. Record the completion date, the App ID, and the PEM fingerprint in
+    your operator log. Never commit the PEM itself.
 
 Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
 
