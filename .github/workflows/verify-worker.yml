@@ -57,6 +57,7 @@ jobs:
       has_work: ${{ steps.build_plan.outputs.has_work }}
       solution_id: ${{ steps.build_plan.outputs.solution_id }}
       plan_sha: ${{ steps.hash.outputs.plan_sha }}
+      starting_sha: ${{ steps.hash.outputs.starting_sha }}
       ce_sha: ${{ steps.hash.outputs.ce_sha }}
       base_sha: ${{ inputs.after }}
       artifact_suffix: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -112,11 +113,14 @@ jobs:
         run: |
           set -euo pipefail
           PLAN_SHA=$(sha256sum artifacts/plan.json | awk '{print $1}')
+          STARTING_SHA=$(sha256sum artifacts/starting.json | awk '{print $1}')
           CE_SHA=$(sha256sum target/release/ce | awk '{print $1}')
           printf "%s" "$PLAN_SHA" > artifacts/plan.sha256
+          printf "%s" "$STARTING_SHA" > artifacts/starting.sha256
           printf "%s" "$CE_SHA" > artifacts/ce.sha256
           cp target/release/ce artifacts/ce
           echo "plan_sha=$PLAN_SHA" >> "$GITHUB_OUTPUT"
+          echo "starting_sha=$STARTING_SHA" >> "$GITHUB_OUTPUT"
           echo "ce_sha=$CE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Upload plan artifact
@@ -128,6 +132,7 @@ jobs:
             artifacts/plan.json
             artifacts/plan.sha256
             artifacts/starting.json
+            artifacts/starting.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -168,13 +173,19 @@ jobs:
       - name: Validate artifact digests
         env:
           EXPECTED_PLAN_SHA: ${{ needs.prepare.outputs.plan_sha }}
+          EXPECTED_STARTING_SHA: ${{ needs.prepare.outputs.starting_sha }}
           EXPECTED_CE_SHA: ${{ needs.prepare.outputs.ce_sha }}
         run: |
           set -euo pipefail
           ACTUAL_PLAN=$(sha256sum work/plan.json | awk '{print $1}')
+          ACTUAL_STARTING=$(sha256sum work/starting.json | awk '{print $1}')
           ACTUAL_CE=$(sha256sum work/ce | awk '{print $1}')
           if [ "$ACTUAL_PLAN" != "$EXPECTED_PLAN_SHA" ]; then
             echo "plan artifact digest mismatch: expected $EXPECTED_PLAN_SHA, got $ACTUAL_PLAN"
+            exit 1
+          fi
+          if [ "$ACTUAL_STARTING" != "$EXPECTED_STARTING_SHA" ]; then
+            echo "starting artifact digest mismatch: expected $EXPECTED_STARTING_SHA, got $ACTUAL_STARTING"
             exit 1
           fi
           if [ "$ACTUAL_CE" != "$EXPECTED_CE_SHA" ]; then
@@ -267,12 +278,21 @@ jobs:
           # otherwise other runner users can enumerate the file name.
           umask 077
           mkdir -p "$HOME/.config/ce"
-          # The id_token is refreshed on demand from the refresh_token so an
-          # empty placeholder is fine here.
+          # Firebase refresh tokens are base64url + optional dots (JWT-like).
+          # Reject anything else so a malformed secret cannot inject TOML
+          # metacharacters (in particular a single quote would break the
+          # literal string below).
+          if ! printf '%s' "$LC_REFRESH" | LC_ALL=C grep -qE '^[A-Za-z0-9._~+/=-]+$'; then
+            echo "LIBRARYCHECKER_REFRESH_TOKEN contains disallowed characters" >&2
+            exit 1
+          fi
+          # Emit the token as a TOML literal string (single quotes) so no
+          # escape sequences apply. `id_token` is refreshed on demand from
+          # the refresh token so an empty placeholder is fine here.
           {
             printf '[librarychecker]\n'
             printf 'id_token = ""\n'
-            printf 'refresh_token = %s\n' "\"$LC_REFRESH\""
+            printf "refresh_token = '%s'\n" "$LC_REFRESH"
           } > "$HOME/.config/ce/session.toml"
 
       - name: Submit prepared plan

@@ -470,9 +470,15 @@ pub fn run() -> Result<()> {
                     usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
                 )?;
                 // Emit the current record so the persist_terminal job has
-                // something to hand to `verify-persist`. Non-terminal states
-                // still need to be persisted (spec §15.1: intermediate poll
-                // transitions save back to the branch).
+                // something to hand to `verify-persist`. Terminal states
+                // (Completed / Unavailable) exit 0 and let persist_terminal
+                // run. Non-terminal states (BudgetExhausted, HandleLost,
+                // InfrastructureError) exit 1: the poll job fails, downstream
+                // persist_terminal is skipped, and the scheduled dispatcher
+                // resumes from the state already saved to the branch by the
+                // previous persist_handle. Spec §15.1's "intermediate poll
+                // transitions save back" is achieved by the next tick's
+                // prepare/persist chain, not by this poll job on failure.
                 let record = poll_event_record(&event);
                 let json = serde_json::to_string(record)
                     .map_err(|e| anyhow::anyhow!("failed to serialize poll record: {e}"))?;
