@@ -758,13 +758,13 @@ h3 {
     /* title | language | path | updated | status */
     .recent-libraries .library-list {
       grid-template-columns:
-        minmax(0, 1fr) 4.5rem minmax(0, 1.4fr) max-content max-content;
+        minmax(0, 0.8fr) 4.5rem minmax(0, 1.6fr) max-content max-content;
     }
 
     /* title | language | contest / problem | solved | status */
     .recent-solutions .solution-list {
       grid-template-columns:
-        minmax(0, 1fr) 4.5rem minmax(0, 1.4fr) max-content max-content;
+        minmax(0, 0.8fr) 4.5rem minmax(0, 1.6fr) max-content max-content;
     }
 
     /* title | file name | updated | status */

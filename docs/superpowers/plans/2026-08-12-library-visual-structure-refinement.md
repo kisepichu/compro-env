@@ -676,33 +676,14 @@ Do not create the PR until the user approves this visual gate or all feedback is
 ### Task 6: Incorporate the final G1 Home alignment feedback
 
 **Files:**
-- Create: `web/tests/site-css.test.ts`
 - Modify: `web/public/assets/site.css`
+- Modify: `docs/superpowers/plans/2026-08-12-library-visual-structure-refinement.md`
 
 **Interfaces:**
 - Consumes: the existing desktop subgrid selectors for Home recent library and solution lists.
 - Produces: matching `0.8fr : 1.6fr` title-to-path track ratios without changing DOM or mobile layout.
 
-- [ ] **Step 1: Write a failing stylesheet contract test**
-
-Read `web/public/assets/site.css`, extract the `grid-template-columns` declaration for
-`.recent-libraries .library-list` and `.recent-solutions .solution-list`, normalize whitespace, and assert both equal:
-
-```text
-minmax(0, 0.8fr) 4.5rem minmax(0, 1.6fr) max-content max-content
-```
-
-- [ ] **Step 2: Run the focused test and observe RED**
-
-Run:
-
-```bash
-npm test -- tests/site-css.test.ts
-```
-
-Expected: both assertions fail because the current tracks are `1fr : 1.4fr`.
-
-- [ ] **Step 3: Apply the minimal desktop CSS change**
+- [ ] **Step 1: Apply the minimal desktop CSS change**
 
 Change only the two Home recent list declarations to:
 
@@ -711,12 +692,11 @@ grid-template-columns:
   minmax(0, 0.8fr) 4.5rem minmax(0, 1.6fr) max-content max-content;
 ```
 
-- [ ] **Step 4: Run focused and full Web verification**
+- [ ] **Step 2: Run full Web verification**
 
 Run:
 
 ```bash
-npm test -- tests/site-css.test.ts
 npm test
 npm run verify:builds
 npm run site:build
@@ -724,16 +704,25 @@ npm run site:build
 
 Expected: all tests pass, both base builds produce 13 HTML pages, and `site-verify: OK` is printed.
 
-- [ ] **Step 5: Re-run stylesheet safety and commit**
+- [ ] **Step 3: Verify the generated artifact and stylesheet safety**
 
-Run the comment-stripping stylesheet scan from Task 1 and `git diff --check`, then commit only the CSS contract test and stylesheet:
+Confirm `web/dist/assets/site.css` contains both updated Home grid declarations after `site:build`. Run the
+comment-stripping stylesheet safety scan from Task 1 and `git diff --check`.
+
+Do not add an automated assertion for the literal ratio: it would test CSS source text rather than rendered
+behavior and would fail only on an intentional design change.
+
+- [ ] **Step 4: Commit the feedback adjustment**
+
+Commit the stylesheet and this plan correction:
 
 ```bash
-git add web/public/assets/site.css web/tests/site-css.test.ts
+git add web/public/assets/site.css \
+  docs/superpowers/plans/2026-08-12-library-visual-structure-refinement.md
 git commit -m "style: align home recent metadata columns"
 ```
 
-- [ ] **Step 6: Record G1 approval and continue the rollout**
+- [ ] **Step 5: Record G1 approval and continue the rollout**
 
 The user's approval covers all earlier G1 checks plus this requested spacing adjustment. After fresh verification,
 deliver the branch through the rollout's `/pr --base main` workflow; do not reopen the visual gate unless the
