@@ -27,11 +27,7 @@ impl Monoid for AddMonoid {
 
 #[cfg(test)]
 mod tests {
-    // The rust library-adapter marks any file that contains a glob-`use`
-    // (including `use super::*;` inside a `#[cfg(test)] mod tests`) as
-    // `partial`, which then blocks the verification-closure fingerprint in
-    // `verify-prepare`. Use explicit imports so the analysis state stays
-    // `complete`.
+    // Glob `use` marks the file `partial` in the rust library-adapter; use explicit imports.
     use super::{AddMonoid, Monoid};
 
     #[test]
