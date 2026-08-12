@@ -105,29 +105,46 @@ jobs:
         # `library-adapter-build` compiles cpp-analyzer with cmake +
         # ninja; ubuntu-latest ships gcc / g++ but not cmake or ninja by
         # default. The Lean adapter uses its own vendored toolchain.
+        # Gated on `solution != ''` so scheduled ticks with no candidate
+        # skip the apt cycle entirely.
+        if: inputs.solution != ''
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake ninja-build
 
       - name: Cache prepared adapter dependencies
+        if: inputs.solution != ''
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: target/library-analyzers/prepared
           key: ${{ runner.os }}-analyzers-prepared-${{ hashFiles('tools/library-analyzers/dependencies.toml') }}
 
       - name: Cache built analyzer binaries
+        # Keys on the analyzer sources, the domain / infrastructure build
+        # orchestrator (which knows how to invoke each language plan), the
+        # protocol crate the adapters compile against, plus the Rust
+        # toolchain / lockfile pins. Missing any of these lets a change to
+        # build orchestration silently ship a stale cached binary that no
+        # longer matches the source at `inputs.after`.
+        if: inputs.solution != ''
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             target/library-analyzers/builds
             target/library-analyzers/bin
-          key: ${{ runner.os }}-analyzers-builds-${{ hashFiles('tools/library-analyzers/**', 'crates/library-adapter-protocol/**', 'Cargo.lock', 'rust-toolchain.toml') }}
+          key: ${{ runner.os }}-analyzers-builds-${{ hashFiles('tools/library-analyzers/**', 'crates/library-adapter-protocol/**', 'crates/domain/src/adapter_build.rs', 'crates/domain/src/adapter_prepare.rs', 'crates/infrastructure/src/library_adapter/**', 'Cargo.lock', 'rust-toolchain.toml') }}
 
       - name: Prepare library analyzer dependencies
+        # Empty `solution` = dispatcher tick with no work. `Freeze plan`
+        # short-circuits at `if [ -z "$SOLUTION" ]`, so paying the LLVM
+        # 22.1 (~700MB) + Lean 4.30 (~500MB) prepare cost here would be
+        # pure waste. Cache-restore steps above are gated the same way.
+        if: inputs.solution != ''
         run: ./tools/library-analyzers/prepare
 
       - name: Build library analyzer executables
+        if: inputs.solution != ''
         run: ./tools/library-analyzers/build
 
       - name: Freeze plan and starting record

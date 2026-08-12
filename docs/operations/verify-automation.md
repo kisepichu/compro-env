@@ -44,12 +44,18 @@ chain:
    language declared in `config.toml`, and a missing adapter surfaces
    as `adapter executable for language ... not found`. `prepare` then
    computes SHA256 for `plan.json`, the `ce` binary, and the
-   `analyzers.tar` bundle (`bin/` + `builds/`), and uploads the
-   `verify-plan`, `verify-ce`, and `verify-analyzers` artifacts. Emits
-   `has_work`, `plan_sha`, `ce_sha`, `analyzers_sha`, and `base_sha`
-   outputs consumed by the rest of the chain. The adapter caches key on
-   `hashFiles(dependencies.toml)` (prepared archives) and
-   `hashFiles(tools/library-analyzers/**, crates/library-adapter-protocol/**, Cargo.lock, rust-toolchain.toml)`
+   `analyzers.tar` bundle (`tar --dereference` of `bin/` plus the
+   accumulated `builds/`, so downstream jobs receive plain files
+   instead of the `bin/*-analyzer -> builds/<build-id>/...`
+   symlinks), and uploads the `verify-plan`, `verify-ce`, and
+   `verify-analyzers` artifacts. Emits `has_work`, `plan_sha`,
+   `ce_sha`, `analyzers_sha`, and `base_sha` outputs consumed by the
+   rest of the chain. All analyzer prepare/build steps (and the
+   supporting apt install) are gated on `inputs.solution != ''`, so a
+   scheduled tick with no candidate skips the entire prelude. The
+   adapter caches key on `hashFiles(dependencies.toml)` (prepared
+   archives) and
+   `hashFiles(tools/library-analyzers/**, crates/library-adapter-protocol/**, crates/domain/src/adapter_build.rs, crates/domain/src/adapter_prepare.rs, crates/infrastructure/src/library_adapter/**, Cargo.lock, rust-toolchain.toml)`
    (built binaries), so a cold run downloading LLVM 22.1 (~700MB) and
    Lean 4.30 (~500MB) only happens when those inputs change.
 2. **`persist_starting`** — `verify-state` environment,
