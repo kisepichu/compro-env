@@ -85,8 +85,20 @@ impl GitHubVerificationStateWriter {
 
 ### Task 4: Deliver the safe automation foundation
 
-- [ ] Prove no workflow path can currently call an OJ or mint an App token.
-- [ ] Run rollout Rust/Web verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record safe automation completion`.
+- [x] Prove no workflow path can currently call an OJ or mint an App token.
+- [x] Run rollout Rust/Web verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record safe automation completion`.
 - [ ] Invoke `/pr --base main`; link plan 060 and state that it unblocks plan 061.
 - [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+
+**Completion notes:**
+
+- `verify-worker.yml` is `workflow_call`-only, has zero callers in the repo, and
+  every executable step is `if: false`. `verify-result-integrity.yml` is a
+  secretless PR check restricted to `paths: [verification/results/**]` with no
+  `environment:` binding. Repo-wide grep for `secrets.OJ*` / `secrets.APP*` /
+  `APP_ID` / `PRIVATE_KEY` returns nothing. No path currently reaches an OJ
+  or mints an App installation token.
+- Delivery gate: `cargo test --all`, `cargo clippy --all --all-features -- -D warnings`,
+  `cargo fmt --all --check`, `git diff --check origin/main...HEAD`, and
+  `npm test` (vitest, 190/190) all exit 0.
