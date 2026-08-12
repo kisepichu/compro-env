@@ -61,12 +61,12 @@ impl GitHubVerificationStateWriter {
 }
 ```
 
-- [ ] Write local-server tests for base SHA, plan hash, schema, attempt CAS, sole-path allowlist, branch exactly
+- [x] Write local-server tests for base SHA, plan hash, schema, attempt CAS, sole-path allowlist, branch exactly
       `automation/verify`, draft/ready, auto-merge, conflict retry, and sanitized request failures.
-- [ ] Use Git Data/Pulls APIs; hold token in `SecretString` and never install it in Git credentials.
-- [ ] Validate base/plan/CAS/path immediately before every mutating API call.
-- [ ] Run `cargo test -p infrastructure --test github_state_writer`.
-- [ ] Invoke `/commit` with `feat: persist verification state through GitHub API`.
+- [x] Use Git Data/Pulls APIs; hold token in `SecretString` and never install it in Git credentials.
+- [x] Validate base/plan/CAS/path immediately before every mutating API call.
+- [x] Run `cargo test -p infrastructure --test github_state_writer`.
+- [x] Invoke `/commit` with `feat: persist verification state through GitHub API`.
 
 ### Task 3: Add hidden artifact commands and policy-checked dormant workflows
 

@@ -1,0 +1,619 @@
+//! Integration tests for the constrained GitHub verification-state writer.
+//!
+//! All HTTP fixtures are served by a `tiny_http::Server` bound to
+//! `127.0.0.1:0`; no test contacts the real GitHub API. Each test drives
+//! the writer through a scripted response sequence and asserts both the
+//! per-request payloads and the aggregate call count.
+
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use chrono::{DateTime, FixedOffset};
+use domain::library::{LanguageId, SolutionId};
+use domain::verification::{
+    AttemptId, ContentHash, LanguageBinding, PlanContext, StartingState, VerificationRecord,
+    VerificationState, VerifyFingerprint,
+};
+use infrastructure::github::{
+    BotPullRequestState, GitHubVerificationStateWriter, PersistError, PersistStateRequest,
+    validate_result_path,
+};
+use secrecy::SecretString;
+use tiny_http::{Response, Server};
+
+// ─── Harness ────────────────────────────────────────────────────────────────
+
+/// One scripted response the fake server should return for the next request.
+#[derive(Clone)]
+struct Reply {
+    status: u16,
+    body: String,
+}
+
+impl Reply {
+    fn json(status: u16, body: serde_json::Value) -> Self {
+        Self {
+            status,
+            body: body.to_string(),
+        }
+    }
+
+    fn empty(status: u16) -> Self {
+        Self {
+            status,
+            body: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RecordedRequest {
+    method: String,
+    url: String,
+    body: String,
+    /// `Authorization` header if present.
+    authorization: Option<String>,
+}
+
+/// Local tiny_http fixture that owns a scripted response queue.
+struct Fixture {
+    addr: SocketAddr,
+    recorded: Arc<Mutex<Vec<RecordedRequest>>>,
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Fixture {
+    fn start(script: Vec<Reply>) -> Self {
+        let server = Server::http("127.0.0.1:0").expect("bind fixture server");
+        let addr = server.server_addr().to_ip().expect("fixture ipv4 addr");
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let index = Arc::new(AtomicUsize::new(0));
+
+        let recorded_thread = Arc::clone(&recorded);
+        let stop_thread = Arc::clone(&stop);
+        let index_thread = Arc::clone(&index);
+
+        let handle = thread::spawn(move || {
+            while !stop_thread.load(Ordering::SeqCst) {
+                match server.recv_timeout(Duration::from_millis(100)) {
+                    Ok(Some(mut req)) => {
+                        let mut body = String::new();
+                        let _ = req.as_reader().read_to_string(&mut body);
+                        let authorization = req
+                            .headers()
+                            .iter()
+                            .find(|h| h.field.equiv("Authorization"))
+                            .map(|h| h.value.as_str().to_string());
+                        recorded_thread.lock().unwrap().push(RecordedRequest {
+                            method: req.method().as_str().to_string(),
+                            url: req.url().to_string(),
+                            body,
+                            authorization,
+                        });
+                        let i = index_thread.fetch_add(1, Ordering::SeqCst);
+                        if i < script.len() {
+                            let reply = script[i].clone();
+                            let resp =
+                                Response::from_string(reply.body).with_status_code(reply.status);
+                            let _ = req.respond(resp);
+                        } else {
+                            // Unexpected extra request: signal by returning 500.
+                            let resp =
+                                Response::from_string("unexpected extra request".to_string())
+                                    .with_status_code(500);
+                            let _ = req.respond(resp);
+                        }
+                    }
+                    Ok(None) => continue,
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Self {
+            addr,
+            recorded,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    fn recorded(&self) -> Vec<RecordedRequest> {
+        self.recorded.lock().unwrap().clone()
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+// ─── Fixtures for VerificationRecord ────────────────────────────────────────
+
+fn ts(offset_min: i64) -> DateTime<FixedOffset> {
+    DateTime::parse_from_rfc3339("2026-08-10T09:00:00+00:00").unwrap()
+        + chrono::Duration::minutes(offset_min)
+}
+
+fn language() -> LanguageBinding {
+    LanguageBinding {
+        language_id: LanguageId::parse("rust").unwrap(),
+        oj_language_id: "rust".into(),
+    }
+}
+
+fn plan_hash() -> ContentHash {
+    ContentHash::parse("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+        .unwrap()
+}
+
+fn source_hash() -> ContentHash {
+    ContentHash::parse("sha256:3333333333333333333333333333333333333333333333333333333333333333")
+        .unwrap()
+}
+
+fn fingerprint() -> VerifyFingerprint {
+    VerifyFingerprint::parse(
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    )
+    .unwrap()
+}
+
+fn starting_record(attempt: &str, replaces: Option<&str>) -> VerificationRecord {
+    VerificationRecord {
+        schema_version: 1,
+        solution_id: SolutionId::parse("abc999/a/main").unwrap(),
+        attempt_id: AttemptId::parse(attempt).unwrap(),
+        replaces_attempt_id: replaces.map(|r| AttemptId::parse(r).unwrap()),
+        fingerprint: fingerprint(),
+        state: VerificationState::Starting(StartingState {
+            plan_hash: plan_hash(),
+            submitted_source_hash: source_hash(),
+            language: language(),
+            started_at: ts(0),
+        }),
+        plan_context: Some(PlanContext {
+            language: language(),
+            submitted_source_hash: source_hash(),
+        }),
+    }
+}
+
+fn base_sha() -> &'static str {
+    "0123456789abcdef0123456789abcdef01234567"
+}
+
+fn commit_sha() -> &'static str {
+    "aaaabbbbccccddddeeeeffff0000111122223333"
+}
+
+fn tree_sha() -> &'static str {
+    "1111222233334444555566667777888899990000"
+}
+
+fn blob_sha() -> &'static str {
+    "9999888877776666555544443333222211110000"
+}
+
+fn valid_request(record: VerificationRecord) -> PersistStateRequest {
+    PersistStateRequest {
+        repository: "owner/repo".into(),
+        base_sha: base_sha().into(),
+        branch: "automation/verify".into(),
+        candidate: record,
+    }
+}
+
+fn contents_response_for(record: &VerificationRecord) -> Reply {
+    let json = serde_json::to_string(record).unwrap();
+    let content = BASE64.encode(json.as_bytes());
+    Reply::json(
+        200,
+        serde_json::json!({
+            "content": content,
+            "encoding": "base64",
+            "name": "main.json",
+            "path": "verification/results/abc999/a/main.json",
+        }),
+    )
+}
+
+fn writer(base_url: String) -> GitHubVerificationStateWriter {
+    GitHubVerificationStateWriter::new(base_url, SecretString::from("test-token"))
+}
+
+// Common happy-path scripts ─────────────────────────────────────────────────
+
+fn happy_script() -> Vec<Reply> {
+    vec![
+        // 1. CAS GET → 404 (result absent)
+        Reply::empty(404),
+        // 2. POST blob
+        Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
+        // 3. POST tree
+        Reply::json(201, serde_json::json!({ "sha": tree_sha() })),
+        // 4. POST commit
+        Reply::json(201, serde_json::json!({ "sha": commit_sha() })),
+        // 5. PATCH ref
+        Reply::json(
+            200,
+            serde_json::json!({
+                "ref": "refs/heads/automation/verify",
+                "object": { "sha": commit_sha() }
+            }),
+        ),
+    ]
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn persist_rejects_wrong_branch() {
+    // No fixture: any HTTP call would fail because we never point the writer
+    // at a live server. This is the strongest way to assert "no HTTP call was
+    // made" — if a request escaped, reqwest would report a connection error.
+    let w = writer("http://127.0.0.1:1".into());
+    let mut req = valid_request(starting_record("attempt-1", None));
+    req.branch = "main".into();
+
+    let err = w.persist(&req).unwrap_err();
+    match err {
+        PersistError::WrongBranch { branch } => assert_eq!(branch, "main"),
+        other => panic!("expected WrongBranch, got {other:?}"),
+    }
+}
+
+#[test]
+fn persist_rejects_invalid_base_sha() {
+    let w = writer("http://127.0.0.1:1".into());
+    let mut req = valid_request(starting_record("attempt-1", None));
+    req.base_sha = "not-hex".into();
+
+    let err = w.persist(&req).unwrap_err();
+    assert!(matches!(err, PersistError::InvalidBaseSha), "got {err:?}");
+}
+
+#[test]
+fn persist_rejects_disallowed_path() {
+    // `SolutionId` already forbids `..` and other escape segments, so we
+    // exercise the defense-in-depth `validate_result_path` guard directly.
+    let err = validate_result_path("verification/results/../evil.json").unwrap_err();
+    assert!(matches!(err, PersistError::InvalidResultPath { .. }));
+
+    let err = validate_result_path("workflows/verify.yml").unwrap_err();
+    assert!(matches!(err, PersistError::InvalidResultPath { .. }));
+
+    let err = validate_result_path("verification/results/foo.txt").unwrap_err();
+    assert!(matches!(err, PersistError::InvalidResultPath { .. }));
+
+    // Positive control: a canonical result path is accepted.
+    validate_result_path("verification/results/abc999/a/main.json").unwrap();
+}
+
+#[test]
+fn persist_writes_blob_tree_commit_and_updates_ref_when_result_absent() {
+    let fx = Fixture::start(happy_script());
+    let w = writer(fx.base_url());
+
+    let req = valid_request(starting_record("attempt-1", None));
+    let out = w.persist(&req).expect("persist succeeds");
+
+    assert_eq!(out.result_path, "verification/results/abc999/a/main.json");
+    assert_eq!(out.blob_sha, blob_sha());
+    assert_eq!(out.tree_sha, tree_sha());
+    assert_eq!(out.commit_sha, commit_sha());
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 5, "expected 5 requests, got {recorded:#?}");
+
+    // Every request must have carried the Bearer token.
+    for r in &recorded {
+        assert_eq!(
+            r.authorization.as_deref(),
+            Some("Bearer test-token"),
+            "missing/incorrect Authorization on {} {}",
+            r.method,
+            r.url,
+        );
+    }
+
+    // 1. CAS GET.
+    assert_eq!(recorded[0].method, "GET");
+    assert!(
+        recorded[0]
+            .url
+            .starts_with("/repos/owner/repo/contents/verification/results/abc999/a/main.json?ref="),
+        "CAS url: {}",
+        recorded[0].url
+    );
+    assert!(recorded[0].url.ends_with(&format!("?ref={}", base_sha())));
+
+    // 2. POST blob.
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/repos/owner/repo/git/blobs");
+    let blob_body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    assert_eq!(blob_body["encoding"], "utf-8");
+    let sent_content: &str = blob_body["content"].as_str().unwrap();
+    // The blob content must round-trip to the same VerificationRecord.
+    let round: VerificationRecord = serde_json::from_str(sent_content).unwrap();
+    assert_eq!(round.attempt_id.as_str(), "attempt-1");
+
+    // 3. POST tree.
+    assert_eq!(recorded[2].method, "POST");
+    assert_eq!(recorded[2].url, "/repos/owner/repo/git/trees");
+    let tree_body: serde_json::Value = serde_json::from_str(&recorded[2].body).unwrap();
+    assert_eq!(tree_body["base_tree"], base_sha());
+    let leaves = tree_body["tree"].as_array().unwrap();
+    assert_eq!(leaves.len(), 1);
+    assert_eq!(leaves[0]["path"], "verification/results/abc999/a/main.json");
+    assert_eq!(leaves[0]["mode"], "100644");
+    assert_eq!(leaves[0]["type"], "blob");
+    assert_eq!(leaves[0]["sha"], blob_sha());
+
+    // 4. POST commit.
+    assert_eq!(recorded[3].method, "POST");
+    assert_eq!(recorded[3].url, "/repos/owner/repo/git/commits");
+    let commit_body: serde_json::Value = serde_json::from_str(&recorded[3].body).unwrap();
+    assert_eq!(commit_body["tree"], tree_sha());
+    assert_eq!(commit_body["parents"][0], base_sha());
+    assert!(
+        commit_body["message"]
+            .as_str()
+            .unwrap()
+            .contains("abc999/a/main")
+    );
+
+    // 5. PATCH ref.
+    assert_eq!(recorded[4].method, "PATCH");
+    assert_eq!(
+        recorded[4].url,
+        "/repos/owner/repo/git/refs/heads/automation/verify"
+    );
+    let patch_body: serde_json::Value = serde_json::from_str(&recorded[4].body).unwrap();
+    assert_eq!(patch_body["sha"], commit_sha());
+    assert_eq!(patch_body["force"], false);
+}
+
+#[test]
+fn persist_fails_when_attempt_cas_mismatch() {
+    // Server returns a record with a different attempt_id than the candidate
+    // claims to replace. No further requests should be sent.
+    let remote = starting_record("attempt-remote", None);
+    let script = vec![contents_response_for(&remote)];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let req = valid_request(starting_record("attempt-2", Some("attempt-someone-else")));
+    let err = w.persist(&req).unwrap_err();
+    match err {
+        PersistError::AttemptCasMismatch { expected, actual } => {
+            assert_eq!(expected.as_deref(), Some("attempt-someone-else"));
+            assert_eq!(actual.as_deref(), Some("attempt-remote"));
+        }
+        other => panic!("expected AttemptCasMismatch, got {other:?}"),
+    }
+
+    let recorded = fx.recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "expected exactly one GET, got {recorded:#?}"
+    );
+    assert_eq!(recorded[0].method, "GET");
+}
+
+#[test]
+fn persist_retries_once_on_ref_update_conflict() {
+    // First PATCH → 422. Writer refetches ref, re-checks CAS, retries PATCH → 200.
+    let script = vec![
+        // 1. CAS GET → 404
+        Reply::empty(404),
+        // 2. blob
+        Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
+        // 3. tree
+        Reply::json(201, serde_json::json!({ "sha": tree_sha() })),
+        // 4. commit
+        Reply::json(201, serde_json::json!({ "sha": commit_sha() })),
+        // 5. PATCH → 422 (non-fast-forward)
+        Reply::json(
+            422,
+            serde_json::json!({ "message": "Update is not a fast-forward" }),
+        ),
+        // 6. GET ref (refetch)
+        Reply::json(
+            200,
+            serde_json::json!({
+                "ref": "refs/heads/automation/verify",
+                "object": { "sha": "5555555555555555555555555555555555555555" }
+            }),
+        ),
+        // 7. CAS re-check → still 404
+        Reply::empty(404),
+        // 8. PATCH retry → 200
+        Reply::json(
+            200,
+            serde_json::json!({
+                "ref": "refs/heads/automation/verify",
+                "object": { "sha": commit_sha() }
+            }),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let req = valid_request(starting_record("attempt-1", None));
+    w.persist(&req).expect("persist succeeds after retry");
+
+    let recorded = fx.recorded();
+    // 8 requests total; 2 PATCH attempts.
+    let patch_count = recorded
+        .iter()
+        .filter(|r| {
+            r.method == "PATCH" && r.url == "/repos/owner/repo/git/refs/heads/automation/verify"
+        })
+        .count();
+    assert_eq!(patch_count, 2, "recorded: {recorded:#?}");
+    assert_eq!(recorded.len(), 8, "recorded: {recorded:#?}");
+}
+
+#[test]
+fn persist_fails_after_second_ref_conflict() {
+    let script = vec![
+        Reply::empty(404),
+        Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
+        Reply::json(201, serde_json::json!({ "sha": tree_sha() })),
+        Reply::json(201, serde_json::json!({ "sha": commit_sha() })),
+        // First PATCH → 422
+        Reply::json(422, serde_json::json!({ "message": "non-ff" })),
+        // GET ref
+        Reply::json(
+            200,
+            serde_json::json!({
+                "ref": "refs/heads/automation/verify",
+                "object": { "sha": "5555555555555555555555555555555555555555" }
+            }),
+        ),
+        // CAS re-check
+        Reply::empty(404),
+        // Second PATCH → 422 again
+        Reply::json(422, serde_json::json!({ "message": "non-ff" })),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let req = valid_request(starting_record("attempt-1", None));
+    let err = w.persist(&req).unwrap_err();
+    assert!(
+        matches!(err, PersistError::RefUpdateConflict),
+        "got {err:?}"
+    );
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 8, "recorded: {recorded:#?}");
+}
+
+#[test]
+fn set_pull_request_state_marks_draft() {
+    let script = vec![Reply::json(
+        200,
+        serde_json::json!({ "number": 42, "draft": true }),
+    )];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+    w.bind_repository("owner/repo").expect("bind repo");
+
+    w.set_pull_request_state(BotPullRequestState::Draft {
+        pull_request_number: 42,
+    })
+    .expect("mark draft");
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].method, "PATCH");
+    assert_eq!(recorded[0].url, "/repos/owner/repo/pulls/42");
+    let body: serde_json::Value = serde_json::from_str(&recorded[0].body).unwrap();
+    assert_eq!(body["draft"], true);
+}
+
+#[test]
+fn set_pull_request_state_marks_ready_and_enables_auto_merge() {
+    let script = vec![
+        // 1. PATCH /pulls/{n} { draft: false }
+        Reply::json(200, serde_json::json!({ "number": 7, "draft": false })),
+        // 2. POST /graphql (enablePullRequestAutoMerge)
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": {
+                    "enablePullRequestAutoMerge": { "clientMutationId": "ok" }
+                }
+            }),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+    w.bind_repository("owner/repo").expect("bind repo");
+
+    w.set_pull_request_state(BotPullRequestState::Ready {
+        pull_request_number: 7,
+        auto_merge: true,
+    })
+    .expect("mark ready + auto-merge");
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 2);
+
+    // First: PATCH pulls/7 with { draft: false }
+    assert_eq!(recorded[0].method, "PATCH");
+    assert_eq!(recorded[0].url, "/repos/owner/repo/pulls/7");
+    let body0: serde_json::Value = serde_json::from_str(&recorded[0].body).unwrap();
+    assert_eq!(body0["draft"], false);
+
+    // Second: POST /graphql with enablePullRequestAutoMerge
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/graphql");
+    let body1: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    let query = body1["query"].as_str().unwrap();
+    assert!(
+        query.contains("enablePullRequestAutoMerge"),
+        "graphql body missing mutation: {query}"
+    );
+}
+
+#[test]
+fn sanitized_errors_hide_response_body() {
+    // Force the CAS GET to fail with a body containing a fake token; the
+    // returned error must never surface the body.
+    let bad_body = "the internal error mentioned secret_token_abc in the trace".to_string();
+    let script = vec![Reply {
+        status: 500,
+        body: bad_body.clone(),
+    }];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let req = valid_request(starting_record("attempt-1", None));
+    let err = w.persist(&req).unwrap_err();
+    let display = format!("{err}");
+    let debug = format!("{err:?}");
+    assert!(
+        !display.contains("secret_token_abc"),
+        "Display leaked body: {display}"
+    );
+    assert!(
+        !debug.contains("secret_token_abc"),
+        "Debug leaked body: {debug}"
+    );
+    // The status code is fine to surface.
+    assert!(display.contains("500"), "Display: {display}");
+    match err {
+        PersistError::UpstreamStatus { status, .. } => assert_eq!(status, 500),
+        other => panic!("expected UpstreamStatus, got {other:?}"),
+    }
+}
+
+#[test]
+fn token_is_never_logged_via_debug() {
+    let w = GitHubVerificationStateWriter::new("http://127.0.0.1:1", SecretString::from("hunter2"));
+    let debug = format!("{w:?}");
+    assert!(!debug.contains("hunter2"), "Debug leaked token: {debug}");
+    // The redaction marker from `secrecy` should appear.
+    assert!(
+        debug.contains("REDACTED"),
+        "Debug missing redaction marker: {debug}"
+    );
+}

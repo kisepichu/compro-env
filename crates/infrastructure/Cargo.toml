@@ -31,6 +31,7 @@ xz2 = "0.1"
 zstd = "0.13"
 fs2 = "0.4"
 tempfile = "3"
+secrecy = "0.10"
 
 [[bin]]
 name = "library-adapter-prepare"
