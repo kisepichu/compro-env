@@ -46,11 +46,15 @@ CSS の `order` ではなく renderer の情報順を変更し、DOM、読み上
 各 evidence row は次の DOM 順にする。
 
 ```text
-solution identity
+solution identity link
 judged time / OJ submission link
 verification status
 optional stale reason
 ```
+
+solution identity は `solution_page_id` に一致する公開 solution detail への base-aware link とし、
+表示 text は完全な `solution_id` を保つ。evidence が公開 solution に解決できなければ、壊れた link や
+plain text へ縮退せず site build を失敗させる。
 
 desktop では status badge を最終 column の右端へ置く。mobile でも同じ DOM 順を保ち、stale reason は row 全幅に表示する。
 
@@ -65,6 +69,55 @@ main
 ```
 
 対象が 0 件なら `ul` の代わりに既存の empty-state message を page header 直下へ置く。見出しのない `section` は残さず、list と empty state を意味のない layout wrapper で囲わない。
+
+### 2.5 Browse page header の重複 metadata
+
+breadcrumb が同じ階層情報を示すため、次の page header subtitle は削除する。
+
+- contest page の `Contest`
+- problem page の `contest ID / problem code`
+- library language / category page の language ID または root-relative category path
+
+page の `h1`、breadcrumb、document title、canonical URL は維持する。削除した path を別の場所へ重複表示しない。
+
+### 2.6 Problem page の solution row
+
+problem page の solution list は card grid ではなく全幅の row list とする。各 row の DOM 順は次のとおり。
+
+```text
+solution name link
+language
+solved date
+direct public dependency count
+verification status
+```
+
+desktop では status badge を最終 column の右端へ置く。mobile では DOM 順を変えずに折り返し、
+solution name を row の先頭に保つ。section heading `Solutions` と既存の sort は維持する。
+
+### 2.7 Solution detail header
+
+breadcrumb と重複する contest / problem path は page header から削除する。header は `h1` に続けて、
+次の 1 metadata row を持つ。
+
+```text
+language
+online judge
+solved time
+verification status
+```
+
+desktop では 1 行に配置し、狭い画面では同じ DOM 順のまま折り返す。
+
+### 2.8 Solution detail の library 表示
+
+`verifies` と `direct_dependencies` は内部データでは引き続き別の概念として保持する。
+ただし solution を閲覧する利用者は verify target を確認しないものとし、solution detail では
+`verifies` を表示しない。library detail の verification evidence を verify relationship の公開 UI とする。
+
+solution detail の in-page navigation と section heading は `Depends on` とし、direct public dependency list だけを
+表示する。内側の `Verifies` / `Depends on` subheading は置かない。既存 fragment を壊さないため
+`section#libraries` は維持し、private dependency note も維持する。
 
 ## 3. `tmp/additional.md` の判断
 
@@ -89,11 +142,15 @@ main
   - Home item の情報順
   - root page の見出しなし list 構造
   - compact / detailed time 表示 contract
-  - verification evidence の status 最終順
+  - verification evidence の solution link と status 最終順
+  - browse header の重複 subtitle 削除と problem solution row
+  - solution detail header と Depends on section
 - `2026-08-10-library-platform-design.md`
   - Home recent item と solution browse の表示項目
   - library verification evidence の順序
   - timestamp の値と表示 text の責務分離
+  - browse / detail の重複 metadata 削除
+  - `verifies` を保持しつつ solution detail では表示しない UI 方針
 
 ## 5. 検証
 
@@ -102,8 +159,13 @@ renderer test で次を固定する。
 - Home recent solution の DOM 順が `title / language / contest-problem / time / status`。
 - compact time の text が日付だけで、`datetime` が元値のまま。
 - detail / evidence time の text が UTC 分単位で、`datetime` が元値のまま。
-- verification evidence の status badge が row の最後にある。
+- verification evidence の solution link が対応する base-aware detail URL を指し、status badge が row の最後にある。
+- evidence が公開 solution に解決できない場合は render / build が失敗する。
 - Libraries / Solutions root に冗長な `h2` と `section` がなく、list または empty state が page header に続く。
+- contest、problem、library category page header に重複 subtitle がない。
+- problem solution row が `name / language / time / dependency count / status` の DOM 順を持つ。
+- solution detail header が `language / OJ / time / status` の 1 metadata row だけを持つ。
+- solution detail が `verifies` を表示せず、`Depends on` の direct dependency list だけを表示する。
 - root `/` と project base `/compro-env/` の build / semantic checks が通る。
 
 CSS は Home の subgrid と verification evidence の column 順を新しい DOM contract に合わせる。route、breadcrumb、Pagefind 属性、source line ID、status label は変更しない。
