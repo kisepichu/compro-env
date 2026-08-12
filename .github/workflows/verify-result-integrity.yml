@@ -1,0 +1,24 @@
+name: verify-result-integrity
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'verification/results/**'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Build ce
+        run: cargo build --release --bin ce
+      - name: Validate result-only PR
+        run: ./target/release/ce internal verify-validate-result-pr --before ${{ github.event.pull_request.base.sha }} --after ${{ github.event.pull_request.head.sha }}

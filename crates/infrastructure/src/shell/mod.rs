@@ -466,6 +466,107 @@ pub fn run() -> Result<()> {
                 };
                 std::process::exit(exit_code);
             }
+            commands::InternalSubcommand::ClassifyChanges {
+                before,
+                after,
+                root,
+            } => {
+                let class = crate::git_change_classifier::classify_changes(
+                    std::path::Path::new(&root),
+                    &before,
+                    &after,
+                )?;
+                let label = match class {
+                    crate::git_change_classifier::ChangeClass::Empty => "empty",
+                    crate::git_change_classifier::ChangeClass::ResultOnly => "result-only",
+                    crate::git_change_classifier::ChangeClass::SourceOrConfig => "source-or-config",
+                };
+                println!("{label}");
+                Ok(())
+            }
+            commands::InternalSubcommand::VerifyValidateResultPr {
+                before,
+                after,
+                root,
+            } => {
+                use crate::git_change_classifier::{ChangeClass, classify_changes};
+                let root_path = std::path::Path::new(&root);
+                let class = classify_changes(root_path, &before, &after)?;
+                match class {
+                    ChangeClass::Empty | ChangeClass::ResultOnly => {}
+                    ChangeClass::SourceOrConfig => {
+                        eprintln!(
+                            "verify-validate-result-pr: PR changes files outside verification/results/**"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+                let touched = list_result_json_paths(root_path, &before, &after)?;
+                for path in touched {
+                    let out = std::process::Command::new("git")
+                        .arg("-C")
+                        .arg(root_path)
+                        .arg("show")
+                        .arg(format!("{after}:{path}"))
+                        .output()?;
+                    if !out.status.success() {
+                        eprintln!(
+                            "verify-validate-result-pr: git show failed for {path}: {}",
+                            String::from_utf8_lossy(&out.stderr).trim()
+                        );
+                        std::process::exit(2);
+                    }
+                    if let Err(e) = serde_json::from_slice::<domain::verification::VerificationRecord>(
+                        &out.stdout,
+                    ) {
+                        eprintln!(
+                            "verify-validate-result-pr: {path} does not deserialize as VerificationRecord: {e}"
+                        );
+                        std::process::exit(2);
+                    }
+                }
+                Ok(())
+            }
+            commands::InternalSubcommand::VerifyPersist {
+                plan_hash_in,
+                candidate_in,
+                repository,
+                base_sha,
+                token_env,
+            } => {
+                validate_plan_hash_file(std::path::Path::new(&plan_hash_in))?;
+                let candidate_bytes = std::fs::read(&candidate_in).map_err(|e| {
+                    anyhow::anyhow!("failed to read candidate file {candidate_in}: {e}")
+                })?;
+                let candidate: domain::verification::VerificationRecord =
+                    serde_json::from_slice(&candidate_bytes)
+                        .map_err(|e| anyhow::anyhow!("failed to parse candidate record: {e}"))?;
+                let token = std::env::var(&token_env).map_err(|_| {
+                    anyhow::anyhow!(
+                        "environment variable {token_env} is not set; refusing to contact GitHub"
+                    )
+                })?;
+                let writer = crate::github::GitHubVerificationStateWriter::new(
+                    "https://api.github.com",
+                    secrecy::SecretString::from(token),
+                );
+                let request = crate::github::PersistStateRequest {
+                    repository,
+                    base_sha,
+                    branch: "automation/verify".into(),
+                    candidate,
+                };
+                match writer.persist(&request) {
+                    Ok(state) => {
+                        println!("{}", state.commit_sha);
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("verify-persist failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
         },
         commands::Commands::Check { language } => {
             let root = match find_project_root() {
@@ -1048,6 +1149,95 @@ fn find_project_root() -> Result<std::path::PathBuf> {
             anyhow::bail!("could not find project root (no templates/ directory found)");
         }
     }
+}
+
+/// Lists repository-relative paths under `verification/results/**/*.json` that
+/// differ between `before` and `after`, as NUL-separated `git diff --name-only`
+/// output. Returns paths as UTF-8 strings. Non-result-JSON paths are silently
+/// filtered out because the caller has already established the classifier
+/// returned `ResultOnly` (or `Empty`).
+fn list_result_json_paths(
+    root: &std::path::Path,
+    before: &str,
+    after: &str,
+) -> Result<Vec<String>> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["diff", "--name-only", "-z", "--no-renames"])
+        .arg(before)
+        .arg(after)
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git diff --name-only failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let mut paths = Vec::new();
+    for chunk in output.stdout.split(|&b| b == 0) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let s = std::str::from_utf8(chunk)
+            .map_err(|e| anyhow::anyhow!("non-utf8 path in git diff output: {e}"))?;
+        if is_result_json_path(s) {
+            paths.push(s.to_string());
+        }
+    }
+    Ok(paths)
+}
+
+fn is_result_json_path(path: &str) -> bool {
+    let mut comps = std::path::Path::new(path).components();
+    match comps.next().and_then(|c| c.as_os_str().to_str()) {
+        Some("verification") => {}
+        _ => return false,
+    }
+    match comps.next().and_then(|c| c.as_os_str().to_str()) {
+        Some("results") => {}
+        _ => return false,
+    }
+    let remainder: Vec<_> = comps.collect();
+    if remainder.is_empty() {
+        return false;
+    }
+    let leaf = match remainder.last().and_then(|c| c.as_os_str().to_str()) {
+        Some(s) => s,
+        None => return false,
+    };
+    leaf.len() > ".json".len() && leaf.ends_with(".json")
+}
+
+/// Validates that the plan-hash artifact exists as a regular file whose
+/// trimmed contents form a plain lowercase-or-uppercase hex string of length
+/// at least 32. The value is not consumed by the writer — this check is the
+/// "plan-hash gate" that keeps the secretless-job artifact honest before we
+/// touch any App token (spec §15.4).
+fn validate_plan_hash_file(path: &std::path::Path) -> Result<()> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| anyhow::anyhow!("failed to stat plan-hash file {}: {e}", path.display()))?;
+    if !metadata.is_file() {
+        eprintln!(
+            "verify-persist: plan-hash file {} is not a regular file",
+            path.display()
+        );
+        std::process::exit(3);
+    }
+    let bytes = std::fs::read(path)
+        .map_err(|e| anyhow::anyhow!("failed to read plan-hash file {}: {e}", path.display()))?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| ())
+        .map(str::trim)
+        .unwrap_or("");
+    if text.len() < 32 || !text.chars().all(|c| c.is_ascii_hexdigit()) {
+        eprintln!(
+            "verify-persist: plan-hash file {} contents are not a hex string of length >= 32",
+            path.display()
+        );
+        std::process::exit(3);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

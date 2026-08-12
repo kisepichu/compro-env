@@ -1,0 +1,53 @@
+name: verify-worker
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-main
+  cancel-in-progress: false
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      class: ${{ steps.classify.outputs.class }}
+    steps:
+      - name: Checkout
+        if: false
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Classify changed paths
+        id: classify
+        if: false
+        run: cargo run --quiet --bin ce -- internal classify-changes --before "$BEFORE" --after "$AFTER"
+
+  verify:
+    needs: classify
+    runs-on: ubuntu-latest
+    environment: oj-library-checker
+    permissions:
+      contents: read
+    if: needs.classify.outputs.class != 'result-only' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Submit and poll (dormant)
+        if: false
+        run: 'echo "ce verify would run here"'
+
+  persist:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: verify-state
+    permissions:
+      contents: read
+    if: false
+    steps:
+      - name: Persist verification state (dormant)
+        if: false
+        run: 'echo "ce internal verify-persist would run here"'

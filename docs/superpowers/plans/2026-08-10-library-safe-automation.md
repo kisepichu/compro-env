@@ -77,11 +77,11 @@ impl GitHubVerificationStateWriter {
 - Create: `.github/workflows/verify-worker.yml`
 - Create: `.github/workflows/verify-result-integrity.yml`
 
-- [ ] Add hidden `verify-persist`, `verify-validate-result-pr`, and `classify-changes` commands with strict files.
-- [ ] Write policy tests for no target trigger, main-only secret use, action SHA pins, permissions, environment
+- [x] Add hidden `verify-persist`, `verify-validate-result-pr`, and `classify-changes` commands with strict files.
+- [x] Write policy tests for no target trigger, main-only secret use, action SHA pins, permissions, environment
       names, no checkout/build in secret jobs, OJ/App separation, and result path restriction.
-- [ ] Define `verify-worker.yml` with `workflow_call` only and no caller; define secretless result-integrity PR checks.
-- [ ] Run workflow-policy tests and invoke `/commit` with `ci: add dormant safe verification automation`.
+- [x] Define `verify-worker.yml` with `workflow_call` only and no caller; define secretless result-integrity PR checks.
+- [x] Run workflow-policy tests and invoke `/commit` with `ci: add dormant safe verification automation`.
 
 ### Task 4: Deliver the safe automation foundation
 

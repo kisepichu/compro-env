@@ -118,6 +118,60 @@ pub enum InternalSubcommand {
         #[arg(long)]
         solution: String,
     },
+    /// Persist a candidate `VerificationRecord` through the GitHub state
+    /// writer. Reads a plan-hash file and a candidate-record JSON. Never
+    /// contacts an online judge; the plan-hash gate lives on this
+    /// (secret-bearing) side of the automation split (spec §15.1, §15.4).
+    #[command(hide = true)]
+    VerifyPersist {
+        /// Path to the immutable plan hash file produced by the secretless job.
+        #[arg(long)]
+        plan_hash_in: String,
+        /// Path to the serialized `VerificationRecord` JSON to persist.
+        #[arg(long)]
+        candidate_in: String,
+        /// `owner/repo` slug of the target repository.
+        #[arg(long)]
+        repository: String,
+        /// Main branch commit SHA the plan was built against (40 lowercase hex).
+        #[arg(long)]
+        base_sha: String,
+        /// Name of the env var carrying the App installation token. Its value
+        /// is never echoed or logged.
+        #[arg(long, default_value = "GITHUB_TOKEN")]
+        token_env: String,
+    },
+    /// Validate that a bot PR's changed files are exclusively verification
+    /// result JSONs and that every touched result JSON deserializes as a
+    /// `VerificationRecord`. Secretless: no OJ or GitHub App contact
+    /// (spec §15.3, §15.4).
+    #[command(hide = true)]
+    VerifyValidateResultPr {
+        /// Base commit SHA (PR base).
+        #[arg(long)]
+        before: String,
+        /// Head commit SHA (PR head).
+        #[arg(long)]
+        after: String,
+        /// Repository root (defaults to CWD).
+        #[arg(long, default_value = ".")]
+        root: String,
+    },
+    /// Classify a push's file changes without contacting the OJ. Prints
+    /// exactly one of `empty`, `result-only`, or `source-or-config`
+    /// (spec §15.3).
+    #[command(hide = true)]
+    ClassifyChanges {
+        /// Previous commit SHA.
+        #[arg(long)]
+        before: String,
+        /// New commit SHA.
+        #[arg(long)]
+        after: String,
+        /// Repository root (defaults to CWD).
+        #[arg(long, default_value = ".")]
+        root: String,
+    },
 }
 
 #[derive(Subcommand)]
