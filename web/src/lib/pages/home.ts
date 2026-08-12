@@ -31,6 +31,7 @@ import {
 } from "./document.ts";
 import { escapeAttribute, escapeHtml } from "./escape.ts";
 import { renderStatus } from "./status.ts";
+import { formatCompactTimestamp } from "./time.ts";
 
 function renderLanguageCard(lang: LanguageSummary): string {
   return (
@@ -59,7 +60,7 @@ function renderRecentLibraryItem(
       `<h3><a href="${escapeAttribute(href)}">${escapeHtml(lib.title)}</a></h3>` +
       `<p class="library-language">${escapeHtml(lib.language)}</p>` +
       `<p class="library-path"><code>${escapeHtml(lib.source_path)}</code></p>` +
-      `<p class="library-updated"><time datetime="${escapeAttribute(lib.updated_at)}">${escapeHtml(lib.updated_at)}</time></p>` +
+      `<p class="library-updated"><time datetime="${escapeAttribute(lib.updated_at)}">${escapeHtml(formatCompactTimestamp(lib.updated_at))}</time></p>` +
       renderStatus("library-verification", lib.verification.aggregate_status) +
     `</article></li>`
   );
@@ -75,7 +76,7 @@ function renderRecentSolutionItem(
       `<h3><a href="${escapeAttribute(href)}">${escapeHtml(sol.solution_name)}</a></h3>` +
       `<p class="solution-contest">${escapeHtml(sol.contest_id)} / ${escapeHtml(sol.problem_code)}</p>` +
       `<p class="solution-language">${escapeHtml(sol.language)}</p>` +
-      `<p class="solution-solved"><time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(sol.solved_at)}</time></p>` +
+      `<p class="solution-solved"><time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(formatCompactTimestamp(sol.solved_at))}</time></p>` +
       renderStatus("solution-verification", sol.verification.status) +
     `</article></li>`
   );

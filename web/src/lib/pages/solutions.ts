@@ -32,6 +32,10 @@ import {
 } from "./document.ts";
 import { escapeAttribute, escapeHtml } from "./escape.ts";
 import { renderStatus } from "./status.ts";
+import {
+  formatCompactTimestamp,
+  formatDetailedTimestamp,
+} from "./time.ts";
 
 // ---- Route enumeration ----
 
@@ -118,7 +122,7 @@ function renderContestCard(config: UrlConfig, group: ContestGroup): string {
       `<dl class="contest-counts">` +
         `<dt>Public problems</dt><dd>${group.problems.size}</dd>` +
         `<dt>Public solutions</dt><dd>${group.count}</dd>` +
-        `<dt>Latest solved</dt><dd><time datetime="${escapeAttribute(group.latestSolvedAt)}">${escapeHtml(group.latestSolvedAt)}</time></dd>` +
+        `<dt>Latest solved</dt><dd><time datetime="${escapeAttribute(group.latestSolvedAt)}">${escapeHtml(formatCompactTimestamp(group.latestSolvedAt))}</time></dd>` +
       `</dl>` +
     `</article></li>`
   );
@@ -201,7 +205,7 @@ function renderProblemCard(
       `<h3><a href="${escapeAttribute(href)}">${escapeHtml(problem.problemCode)}</a></h3>` +
       `<dl class="problem-counts">` +
         `<dt>Public solutions</dt><dd>${problem.count}</dd>` +
-        `<dt>Latest solved</dt><dd><time datetime="${escapeAttribute(problem.latestSolvedAt)}">${escapeHtml(problem.latestSolvedAt)}</time></dd>` +
+        `<dt>Latest solved</dt><dd><time datetime="${escapeAttribute(problem.latestSolvedAt)}">${escapeHtml(formatCompactTimestamp(problem.latestSolvedAt))}</time></dd>` +
       `</dl>` +
     `</article></li>`
   );
@@ -279,7 +283,7 @@ function renderSolutionCard(
     `<li><article class="solution-card">` +
       `<h3><a href="${escapeAttribute(href)}">${escapeHtml(sol.solution_name)}</a></h3>` +
       `<p class="solution-language">${escapeHtml(sol.language)}</p>` +
-      `<p class="solution-solved"><time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(sol.solved_at)}</time></p>` +
+      `<p class="solution-solved"><time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(formatCompactTimestamp(sol.solved_at))}</time></p>` +
       renderStatus("solution-verification", sol.verification.status) +
       `<p class="solution-dep-count">Direct dependencies: ${sol.direct_dependencies.length}</p>` +
     `</article></li>`
@@ -444,7 +448,7 @@ async function renderSolutionDetailArticleInner(
       `</p>` +
       `<p class="solution-language-time">` +
         `<span class="language">${escapeHtml(sol.language)}</span> ` +
-        `<time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(sol.solved_at)}</time>` +
+        `<time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(formatDetailedTimestamp(sol.solved_at))}</time>` +
       `</p>` +
       renderStatus("solution-verification", status) +
     `</header>` +
@@ -502,7 +506,7 @@ function renderSolutionVerificationSection(sol: SolutionPageData): string {
   const verdict = result.verdict ?? "unknown";
   const judged =
     result.judged_at !== null && result.judged_at !== undefined
-      ? `<dt>Judged</dt><dd><time datetime="${escapeAttribute(result.judged_at)}">${escapeHtml(result.judged_at)}</time></dd>`
+      ? `<dt>Judged</dt><dd><time datetime="${escapeAttribute(result.judged_at)}">${escapeHtml(formatDetailedTimestamp(result.judged_at))}</time></dd>`
       : "";
   const time =
     result.execution_time_ms !== null && result.execution_time_ms !== undefined

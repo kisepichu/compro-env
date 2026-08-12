@@ -214,6 +214,25 @@ describe("Home page (/)", () => {
     );
   });
 
+  it("keeps RFC 3339 values in datetime while showing compact recent dates", () => {
+    const doc = parse(html);
+    const libraryTime = doc.querySelector(
+      ".recent-libraries .library-updated time",
+    )!;
+    expect(libraryTime.getAttribute("datetime")).toBe(
+      "2026-08-10T12:00:00Z",
+    );
+    expect(libraryTime.textContent).toBe("2026-08-10");
+
+    const solutionTime = doc.querySelector(
+      ".recent-solutions .solution-solved time",
+    )!;
+    expect(solutionTime.getAttribute("datetime")).toBe(
+      "2026-08-10T13:00:00Z",
+    );
+    expect(solutionTime.textContent).toBe("2026-08-10");
+  });
+
   it("recent libraries are capped at 10 and sorted by (updated_at desc, id asc)", () => {
     // Build 15 libraries to prove capping and stable tie-break.
     const many: LibraryPageData[] = [];
@@ -327,6 +346,15 @@ describe("Library directory pages", () => {
     expect(libLinks.length).toBe(1);
     expect(libLinks[0].getAttribute("href")).toBe("/libraries/rust/graph/dijkstra.rs/");
   });
+
+  it("shows compact dates on library file rows", () => {
+    const doc = parse(
+      renderLibraryDirectoryPage(rootConfig, siteData, "rust", ["graph"]),
+    );
+    const time = doc.querySelector(".library-files .library-updated time")!;
+    expect(time.getAttribute("datetime")).toBe("2026-08-10T12:00:00Z");
+    expect(time.textContent).toBe("2026-08-10");
+  });
 });
 
 // ---- Library detail ----
@@ -376,6 +404,17 @@ describe("Library detail (/libraries/{lang}/{source-path}/)", () => {
     );
   });
 
+  it("shows detailed UTC times in the header and verification evidence", () => {
+    const doc = parse(html);
+    const updated = doc.querySelector(".library-meta time")!;
+    expect(updated.getAttribute("datetime")).toBe("2026-08-10T12:00:00Z");
+    expect(updated.textContent).toBe("2026-08-10 12:00 UTC");
+
+    const judged = doc.querySelector(".evidence-judged time")!;
+    expect(judged.getAttribute("datetime")).toBe("2026-08-10T13:00:00Z");
+    expect(judged.textContent).toBe("2026-08-10 13:00 UTC");
+  });
+
   it("omits documentation section when description is null", async () => {
     const html2 = await renderLibraryDetailPage(rootConfig, siteData, siteData.libraries[1]);
     const doc = parse(html2);
@@ -401,6 +440,31 @@ describe("Solution browse and detail", () => {
     // abc300 (latest 2026-08-10) before abc301 (2026-08-08).
     const heads = [...cards].map((c) => c.querySelector("h3 a")!.textContent);
     expect(heads).toEqual(["abc300", "abc301"]);
+  });
+
+  it("shows compact dates throughout solution browse cards", () => {
+    const rootDoc = parse(renderSolutionsRootPage(rootConfig, siteData));
+    const contestTime = rootDoc.querySelector(".contest-card time")!;
+    expect(contestTime.getAttribute("datetime")).toBe(
+      "2026-08-10T13:00:00Z",
+    );
+    expect(contestTime.textContent).toBe("2026-08-10");
+
+    const contestDoc = parse(renderContestPage(rootConfig, siteData, "abc300"));
+    const problemTime = contestDoc.querySelector(".problem-card time")!;
+    expect(problemTime.getAttribute("datetime")).toBe(
+      "2026-08-10T13:00:00Z",
+    );
+    expect(problemTime.textContent).toBe("2026-08-10");
+
+    const problemDoc = parse(
+      renderProblemPage(rootConfig, siteData, "abc300", "a"),
+    );
+    const solutionTime = problemDoc.querySelector(".solution-card time")!;
+    expect(solutionTime.getAttribute("datetime")).toBe(
+      "2026-08-10T13:00:00Z",
+    );
+    expect(solutionTime.textContent).toBe("2026-08-10");
   });
 
   it("contest page: h1 = contest_id and lists distinct problems", () => {
@@ -440,6 +504,19 @@ describe("Solution browse and detail", () => {
     // Status badge with data-status="verified".
     const detailStatus = article.querySelector("header .status-badge")!;
     expect(detailStatus.getAttribute("data-status")).toBe("verified");
+  });
+
+  it("shows detailed UTC times in solution detail metadata and results", async () => {
+    const sol = siteData.solutions[0];
+    const doc = parse(await renderSolutionDetailPage(rootConfig, siteData, sol));
+
+    const solved = doc.querySelector(".solution-language-time time")!;
+    expect(solved.getAttribute("datetime")).toBe("2026-08-10T13:00:00Z");
+    expect(solved.textContent).toBe("2026-08-10 13:00 UTC");
+
+    const judged = doc.querySelector("#verification .verification-summary time")!;
+    expect(judged.getAttribute("datetime")).toBe("2026-08-10T13:00:00Z");
+    expect(judged.textContent).toBe("2026-08-10 13:00 UTC");
   });
 
   it("solution detail with 'never' status keeps verification section as empty state", async () => {

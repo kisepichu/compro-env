@@ -39,6 +39,10 @@ import {
 } from "./document.ts";
 import { escapeAttribute, escapeHtml } from "./escape.ts";
 import { renderStatus } from "./status.ts";
+import {
+  formatCompactTimestamp,
+  formatDetailedTimestamp,
+} from "./time.ts";
 
 // ---- Route enumeration ----
 
@@ -290,7 +294,7 @@ function renderLibraryCard(
     `<li><article class="library-card">` +
       `<h3><a href="${escapeAttribute(href)}">${escapeHtml(lib.title)}</a></h3>` +
       `<p class="library-file-name"><code>${escapeHtml(fileName)}</code></p>` +
-      `<p class="library-updated"><time datetime="${escapeAttribute(lib.updated_at)}">${escapeHtml(lib.updated_at)}</time></p>` +
+      `<p class="library-updated"><time datetime="${escapeAttribute(lib.updated_at)}">${escapeHtml(formatCompactTimestamp(lib.updated_at))}</time></p>` +
       renderStatus("library-verification", lib.verification.aggregate_status) +
     `</article></li>`
   );
@@ -500,7 +504,7 @@ function renderVerificationEvidenceList(
     .map((ev) => {
       const time =
         ev.judged_at !== null && ev.judged_at !== undefined
-          ? `<time datetime="${escapeAttribute(ev.judged_at)}">${escapeHtml(ev.judged_at)}</time>`
+          ? `<time datetime="${escapeAttribute(ev.judged_at)}">${escapeHtml(formatDetailedTimestamp(ev.judged_at))}</time>`
           : `<span class="empty-time">not judged yet</span>`;
       const safeOjUrl = sanitizeExternalUrl(ev.oj_submission_url);
       const ojLink =
@@ -653,7 +657,7 @@ async function renderLibraryDetailArticleInner(
       `<p class="library-meta">` +
         `<span class="language">${escapeHtml(lib.language)}</span> ` +
         `<code class="path">${relativePath}</code> ` +
-        `<time datetime="${escapeAttribute(lib.updated_at)}">${escapeHtml(lib.updated_at)}</time>` +
+        `<time datetime="${escapeAttribute(lib.updated_at)}">${escapeHtml(formatDetailedTimestamp(lib.updated_at))}</time>` +
       `</p>` +
       renderStatus("library-verification", lib.verification.aggregate_status) +
       renderStatus("analysis", dependencyAnalysis.state) +
