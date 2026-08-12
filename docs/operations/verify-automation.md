@@ -35,12 +35,23 @@ this run). All jobs live in the `verify-heavy` concurrency group with
 `cancel-in-progress: false`. The six jobs form a strict `needs:`
 chain:
 
-1. **`prepare`** — secretless. Checks out, builds `ce`, runs
-   `ce internal verify-prepare --plan-out plan.json
-   --starting-out starting.json`, computes SHA256 for `plan.json` and
-   the `ce` binary, and uploads the `verify-plan` and `verify-ce`
-   artifacts. Emits `has_work`, `plan_sha`, `ce_sha`, and `base_sha`
-   outputs consumed by the rest of the chain.
+1. **`prepare`** — secretless. Checks out, builds `ce`, then runs
+   `tools/library-analyzers/prepare` + `tools/library-analyzers/build`
+   to materialize the pinned adapter executables under
+   `target/library-analyzers/bin/*-analyzer`. Only after those exist
+   does it invoke `ce internal verify-prepare --plan-out plan.json
+   --starting-out starting.json` — `build_analysis` fans out over every
+   language declared in `config.toml`, and a missing adapter surfaces
+   as `adapter executable for language ... not found`. `prepare` then
+   computes SHA256 for `plan.json`, the `ce` binary, and the
+   `analyzers.tar` bundle (`bin/` + `builds/`), and uploads the
+   `verify-plan`, `verify-ce`, and `verify-analyzers` artifacts. Emits
+   `has_work`, `plan_sha`, `ce_sha`, `analyzers_sha`, and `base_sha`
+   outputs consumed by the rest of the chain. The adapter caches key on
+   `hashFiles(dependencies.toml)` (prepared archives) and
+   `hashFiles(tools/library-analyzers/**, crates/library-adapter-protocol/**, Cargo.lock, rust-toolchain.toml)`
+   (built binaries), so a cold run downloading LLVM 22.1 (~700MB) and
+   Lean 4.30 (~500MB) only happens when those inputs change.
 2. **`persist_starting`** — `verify-state` environment,
    `permissions: contents: read`. Downloads both artifacts,
    re-validates the SHAs, mints an App installation token via
@@ -53,17 +64,21 @@ chain:
    through the environment only, never on the command line.
 3. **`submit`** — `oj-library-checker` environment,
    `permissions: contents: read`. Skipped unless `inputs.mode ==
-   'live'`. Downloads the artifacts, re-validates the SHAs, writes
-   `~/.config/ce/session.toml` from
-   `secrets.LIBRARYCHECKER_REFRESH_TOKEN`, runs
+   'live'`. Downloads the `verify-plan`, `verify-ce`, and
+   `verify-analyzers` artifacts, re-validates all three SHAs, unpacks
+   `analyzers.tar` into `target/library-analyzers/` on top of the
+   `automation/verify` checkout, writes `~/.config/ce/session.toml`
+   from `secrets.LIBRARYCHECKER_REFRESH_TOKEN`, runs
    `./ce internal verify-start --plan-in plan.json`, and uploads the
    emitted handle record as the `verify-handle` artifact.
 4. **`persist_handle`** — `verify-state` environment. Downloads the
    handle record, mints a fresh App token, and persists it through
    `verify-persist`.
 5. **`poll`** — `oj-library-checker` environment. Downloads the
-   handle, polls once (looping if the terminal verdict has not yet
-   landed), and uploads the terminal record artifact.
+   handle plus the same `verify-analyzers` bundle (so
+   `verify-poll` can boot `build_analysis` without a toolchain), polls
+   once (looping if the terminal verdict has not yet landed), and
+   uploads the terminal record artifact.
 6. **`persist_terminal`** — `verify-state` environment. Persists the
    terminal record and releases the automation PR to ready-for-review
    when the verdict is terminal.
@@ -160,6 +175,16 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
   `persist_handle`, or `persist_terminal` indicates tampering or a
   corrupted artifact download. Re-run the workflow; do not attempt to
   patch the artifact by hand.
+- `analyzers digest mismatch` in `submit` or `poll` follows the same
+  root cause as `plan artifact digest mismatch` but points at
+  `analyzers.tar`. Re-run the workflow; the bundle is regenerated
+  deterministically in `prepare` from the pinned toolchains.
+- `adapter executable for language ... not found` from the `prepare`
+  job means one of `tools/library-analyzers/prepare` or
+  `tools/library-analyzers/build` failed silently, or the analyzer
+  cache key is stale. Check the two build-step logs; the caches key on
+  `dependencies.toml` and `tools/library-analyzers/**` so a corrupted
+  cache is invalidated by touching the tree.
 - `PATCH refs/heads/automation/verify remained non-fast-forward`
   after retries is a CAS conflict on the state ref. The worker will
   reattempt on the next 5-minute tick — no operator action needed.

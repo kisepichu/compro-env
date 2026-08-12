@@ -1772,6 +1772,107 @@ fn worker_declares_mode_and_solution_inputs() {
     );
 }
 
+/// #062.17: The library-analyzer executables that `verify-prepare` /
+/// `verify-start` / `verify-poll` boot via `build_analysis` are frozen once
+/// in `prepare` and shipped to secret jobs as a digest-pinned artifact,
+/// exactly like `plan.json` and `ce`. This test asserts three invariants:
+///
+///  1. `prepare` runs `tools/library-analyzers/prepare` and
+///     `tools/library-analyzers/build` before it invokes
+///     `ce internal verify-prepare` — otherwise `analyze_all` fails with
+///     `adapter executable for language ...` (this is the failure that
+///     motivated the fix).
+///  2. `prepare.outputs.analyzers_sha` is a job output so downstream jobs
+///     can enforce byte-for-byte equality against a value baked into the
+///     workflow run.
+///  3. Every OJ-side job (`submit`, `poll`) downloads
+///     `verify-analyzers-<suffix>` and re-validates its SHA256 against
+///     `needs.prepare.outputs.analyzers_sha`. The `persist_*` jobs are
+///     intentionally exempt: they only invoke `verify-persist`, which is a
+///     plain HTTP client and never calls `build_analysis`.
+#[test]
+fn worker_prepare_freezes_and_ships_analyzers_to_oj_jobs() {
+    let doc = load_worker();
+    let jobs_map = jobs(&doc);
+
+    let prepare = get(jobs_map, "prepare").expect("missing prepare job");
+    let prepare_steps = steps(prepare);
+    let mut ran_prepare = false;
+    let mut ran_build = false;
+    let mut freeze_after_analyzer_setup = false;
+    for step in &prepare_steps {
+        let map = match step.as_mapping() {
+            Some(m) => m,
+            None => continue,
+        };
+        let run = get(map, "run").and_then(Value::as_str).unwrap_or("");
+        if run.contains("tools/library-analyzers/prepare") {
+            ran_prepare = true;
+        }
+        if run.contains("tools/library-analyzers/build") {
+            ran_build = true;
+        }
+        let id = get(map, "id").and_then(Value::as_str).unwrap_or("");
+        if id == "build_plan" && ran_prepare && ran_build {
+            freeze_after_analyzer_setup = true;
+        }
+    }
+    assert!(
+        ran_prepare,
+        "prepare job must invoke `tools/library-analyzers/prepare` (fetches pinned toolchain archives)"
+    );
+    assert!(
+        ran_build,
+        "prepare job must invoke `tools/library-analyzers/build` (produces target/library-analyzers/bin/*-analyzer)"
+    );
+    assert!(
+        freeze_after_analyzer_setup,
+        "prepare job must build analyzers *before* the `build_plan` freeze step — otherwise `verify-prepare` errors with `adapter executable for language ... not found`"
+    );
+
+    let prepare_outputs = get(as_map(prepare, "prepare"), "outputs")
+        .and_then(Value::as_mapping)
+        .expect("prepare job must declare outputs");
+    let analyzers_sha_out = get(prepare_outputs, "analyzers_sha").and_then(Value::as_str);
+    assert!(
+        analyzers_sha_out.is_some_and(|v| v.contains("steps.") && v.contains("analyzers_sha")),
+        "prepare.outputs.analyzers_sha must be wired to a step output (got {analyzers_sha_out:?})"
+    );
+
+    for name in ["submit", "poll"] {
+        let job = get(jobs_map, name).unwrap();
+        let mut downloads = false;
+        let mut digest_check = false;
+        for step in steps(job) {
+            let map = match step.as_mapping() {
+                Some(m) => m,
+                None => continue,
+            };
+            if let Some(with) = get(map, "with").and_then(Value::as_mapping)
+                && let Some(artifact) = get(with, "name").and_then(Value::as_str)
+                && artifact.starts_with("verify-analyzers-")
+            {
+                downloads = true;
+            }
+            if let Some(env) = get(map, "env").and_then(Value::as_mapping)
+                && get(env, "EXPECTED_ANALYZERS_SHA")
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| v.contains("needs.prepare.outputs.analyzers_sha"))
+            {
+                digest_check = true;
+            }
+        }
+        assert!(
+            downloads,
+            "OJ job {name:?} must download the pinned `verify-analyzers-*` artifact"
+        );
+        assert!(
+            digest_check,
+            "OJ job {name:?} must re-validate the analyzers artifact SHA256 against `needs.prepare.outputs.analyzers_sha`"
+        );
+    }
+}
+
 /// #062.16: `secret-bearing` jobs must not run `git clone` / `git fetch` /
 /// `git checkout` in shell — the only way to materialize source is through
 /// the pinned `actions/checkout@<sha>` action targeting `${{ inputs.after }}`
