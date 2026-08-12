@@ -105,6 +105,11 @@ pub enum InternalSubcommand {
         solution: String,
         #[arg(long = "plan-out")]
         plan_out: String,
+        /// Optional emitted `Starting` `VerificationRecord` JSON. When set,
+        /// the App-only persist job can commit this to `automation/verify`
+        /// without seeing the plan bytes (spec §15.4, dry-run path).
+        #[arg(long = "starting-out")]
+        starting_out: Option<String>,
     },
     /// Dispatch a previously-prepared plan via the OJ starter.
     #[command(hide = true)]
@@ -342,6 +347,7 @@ impl VerifyInput for VerifyCommand {
 pub struct InternalVerifyPrepareCommand {
     pub solution: String,
     pub plan_out: String,
+    pub starting_out: Option<String>,
 }
 impl InternalVerifyPrepareInput for InternalVerifyPrepareCommand {
     fn solution(&self) -> String {
@@ -349,6 +355,9 @@ impl InternalVerifyPrepareInput for InternalVerifyPrepareCommand {
     }
     fn plan_out(&self) -> String {
         self.plan_out.clone()
+    }
+    fn starting_out(&self) -> Option<String> {
+        self.starting_out.clone()
     }
 }
 

@@ -226,6 +226,18 @@ impl Controller {
         let out_path = std::path::PathBuf::from(args.plan_out());
         std::fs::write(&out_path, plan.to_canonical_json_bytes())
             .map_err(|e| anyhow::anyhow!("failed to write plan to {}: {e}", out_path.display()))?;
+        if let Some(starting_out) = args.starting_out() {
+            let starting = plan.as_starting_record();
+            let starting_path = std::path::PathBuf::from(&starting_out);
+            let bytes = serde_json::to_vec_pretty(&starting)
+                .map_err(|e| anyhow::anyhow!("failed to serialize starting record: {e}"))?;
+            std::fs::write(&starting_path, bytes).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to write starting record to {}: {e}",
+                    starting_path.display()
+                )
+            })?;
+        }
         Ok(out_path)
     }
 

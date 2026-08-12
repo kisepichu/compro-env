@@ -1158,13 +1158,16 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
     use interfaces::controller::input::{
         InternalVerifyPollInput, InternalVerifyPrepareInput, InternalVerifyStartInput,
     };
-    struct PrepIn(String, String);
+    struct PrepIn(String, String, Option<String>);
     impl InternalVerifyPrepareInput for PrepIn {
         fn solution(&self) -> String {
             self.0.clone()
         }
         fn plan_out(&self) -> String {
             self.1.clone()
+        }
+        fn starting_out(&self) -> Option<String> {
+            self.2.clone()
         }
     }
     struct StartIn(String);
@@ -1185,7 +1188,7 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
     let path = env
         .controller
         .internal_verify_prepare(
-            &PrepIn(LC_SOLUTION.into(), plan_path.display().to_string()),
+            &PrepIn(LC_SOLUTION.into(), plan_path.display().to_string(), None),
             &env.root,
             &env.config,
             &env.manifest,

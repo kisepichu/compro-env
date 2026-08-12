@@ -395,7 +395,11 @@ pub fn run() -> Result<()> {
             }
         }
         commands::Commands::Internal { subcommand } => match subcommand {
-            commands::InternalSubcommand::VerifyPrepare { solution, plan_out } => {
+            commands::InternalSubcommand::VerifyPrepare {
+                solution,
+                plan_out,
+                starting_out,
+            } => {
                 let root = find_project_root()?;
                 let config = ProjectLibraryConfigLoader::load(&root)?;
                 let (manifest, snapshot) = build_analysis(&root, &config)?;
@@ -404,6 +408,7 @@ pub fn run() -> Result<()> {
                     &commands::InternalVerifyPrepareCommand {
                         solution: solution.clone(),
                         plan_out: plan_out.clone(),
+                        starting_out: starting_out.clone(),
                     },
                     &root,
                     &config,
