@@ -131,6 +131,8 @@ main
 - status overview は公開 library 数、公開 solution 数、verify 状態別件数を持つ。
 - language card は表示名、language ID、公開 library 数、verify 状態別件数を持つ。
 - recent library / solution は最大 10 件。
+- recent solution row の field 順は title、language、contest / problem、solved date、status。
+- recent library / solution の日時 text は UTC の `YYYY-MM-DD`。
 - attention は stale、rejected、unavailable、公開対象の解析失敗を最大 10 件。
 - 0 件の section も heading と短い empty-state message を残す。
 - Home 専用 search form は置かない。
@@ -141,12 +143,11 @@ main
 ```text
 main
 |- page header > h1 Libraries
-`- section.languages
-   |- h2
-   `- ul > li > article.language-card
+`- ul > li > article.language-card または empty-state
 ```
 
 - Home と同じ language card を使う。
+- `Languages` という重複見出しや wrapper section は置かず、page header の直後に一覧を置く。
 - 公開 library がある、または root description がある言語だけを表示する。
 - 対象 0 件では empty-state message を表示する。
 - Pagefind index から除外する。
@@ -157,7 +158,6 @@ main
 main
 |- page header
 |  |- h1
-|  |- language ID または root-relative path
 |  `- public verify status overview
 |- optional Markdown body
 |- section.child-directories
@@ -185,6 +185,7 @@ Library card:
 共通規則:
 
 - child directory と library file は混在させない。
+- breadcrumb と同じ language ID / root-relative path を page header 内で繰り返さない。
 - 直下の項目だけを表示する。
 - 空 directory は library section に empty-state message を表示する。
 - private library は item、件数、状態のどこにも含めない。
@@ -229,7 +230,10 @@ article.library-detail
 - location 付き diagnostic: source line anchor へ link。
 - private dependency を指す location: target 情報を出さず共通 reason だけを表示。
 - library の代表 status は、全 direct verifier が accepted の場合だけ verified とする。
-- detail の verification evidence は、direct verifier ごとの状態をすべて表示する。
+- detail の updated time と verification evidence の judged time は UTC の分精度で表示する。
+- detail の verification evidence は、direct verifier ごとの状態をすべて表示し、公開 solution
+  detail への link、judged time / OJ link、右端の status の順に並べる。
+- evidence の `solution_page_id` と `solution_id` が同じ公開 solution に解決できなければ build を失敗させる。
 
 ## 8. Solution browse
 
@@ -238,13 +242,13 @@ article.library-detail
 ```text
 main
 |- page header > h1 Solutions
-`- section.contests
-   `- ul > li > article.contest-card
+`- ul > li > article.contest-card または empty-state
 ```
+
+- `Contests` という重複見出しや wrapper section は置かず、page header の直後に一覧を置く。
 
 Contest card:
 
-- OJ
 - contest title と link
 - public problem count
 - public solution count
@@ -254,10 +258,7 @@ Contest card:
 
 ```text
 main
-|- page header
-|  |- h1 contest title
-|  |- OJ
-|  `- official contest link
+|- page header > h1 contest title
 `- section.problems
    `- ul > li > article.problem-card
 ```
@@ -272,10 +273,7 @@ Problem card:
 
 ```text
 main
-|- page header
-|  |- h1 problem title
-|  |- contest / OJ
-|  `- official problem link
+|- page header > h1 problem title
 `- section.solutions
    `- ul > li > article.solution-card
 ```
@@ -285,10 +283,13 @@ Solution card:
 - solution name と detail link
 - language
 - solved time
-- verification status badge
 - direct public dependency count
+- verification status badge
 
-全 browse page は公開 solution だけから生成し、Pagefind index から除外する。
+- contest / problem の breadcrumb path を page header の subtitle として繰り返さない。
+- problem の solution card は full-width row とし、title、language、solved date、direct public
+  dependency count、右端の verification status の順に並べる。
+- 全 browse page は公開 solution だけから生成し、Pagefind index から除外する。
 
 ## 9. Solution detail
 
@@ -296,21 +297,21 @@ Solution card:
 article.solution-detail
 |- page header
 |  |- h1 solution name
-|  |- contest / problem / OJ
-|  |- language / solved time
-|  `- verification status badge
+|  `- language / OJ / solved time / verification status badge
 |- nav.in-page-navigation
 |- section#source
-|- section#libraries
-|  |- verifies
-|  `- depends on
+|- section#libraries (heading: Depends on)
+|  `- direct dependencies
 |- optional section#verification
 `- optional section#diagnostics
 ```
 
 - source は repository の entry file。
 - preprocess があれば、OJ 上の source そのものではないと明示する。
-- verifies と direct dependencies は別 list。
+- contest / problem path は breadcrumb にだけ表示し、page header では繰り返さない。
+- `section#libraries` は fragment 互換性のため ID を維持し、navigation と `h2` の表示名を
+  `Depends on` とする。
+- `verifies` は公開 DTO に保持するが Solution detail には表示せず、direct dependencies だけを表示する。
 - `not_configured` は verification section を省略する。
 - `never` は verification section に未実行の empty-state を表示する。
 - result summary は verdict、judged time、実行時間、memory、OJ link の `dl`。
@@ -428,7 +429,8 @@ Analysis labels:
 - static badge に alert / live role を付けない。
 - list card は badge、detail は必要に応じて説明 callout も表示する。
 - callout は対象、理由、影響、次の link を文章で示す。
-- time は RFC 3339 `datetime` を持つ `<time>`。
+- time は RFC 3339 原値の `datetime` を持つ `<time>` とする。browse / card の表示 text は
+  `YYYY-MM-DD`、detail / evidence は `YYYY-MM-DD HH:mm UTC` とし、無効値は原文を表示する。
 
 ## 13. Shared source viewer
 
@@ -483,9 +485,9 @@ Verification evidence:
 ```text
 section > ul > li > article
 |- solution link
+|- judged time / OJ link
 |- status badge
-|- judged time
-`- OJ link
+`- optional stale reason
 ```
 
 Diagnostics:

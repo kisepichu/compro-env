@@ -1735,6 +1735,8 @@ CI では少なくとも base `/` と `/compro-env/` の両方で static build �
 `/libraries/` は共通 navigation の Libraries link が指す常設 page とする。
 
 - `h1` `Libraries` と言語 card の `ul` を持つ。
+- `Languages` という重複見出しや wrapper section は置かず、page header の直後に
+  言語 card の `ul` または empty-state message を置く。
 - 言語 card はトップ page と同じ component を再利用する。
 - 公開 library がある、または language root に `_index.md` がある言語だけを掲載する。
 - private library だけで `_index.md` もない言語は page を作らず、一覧からも存在を隠す。
@@ -1826,6 +1828,8 @@ attention required
 - 言語 card は表示名、言語 ID、公開 library 数、verify 状態別件数を持つ。
 - recently updated libraries は `updated_at` 降順で最大 10 件表示する。
 - recently solved solutions は `solved_at` 降順で最大 10 件表示する。
+- recently solved solution row は title、language、contest / problem、solved date、status の
+  field 順とし、recently updated library row と metadata の流れを揃える。
 - 同時刻の tie-break は既定の library ID / solution ID 昇順を使う。
 - 各 recent item は `ul` 内の `article` とし、detail page への link と日時を持つ。
 - attention required は stale、rejected、unavailable、公開 library の解析失敗を最大 10 件表示する。
@@ -1842,7 +1846,6 @@ attention required
 ```text
 page header
 |- h1
-|- language ID または language-root-relative path
 `- public verify status overview
 
 overview
@@ -1856,11 +1859,13 @@ library files
 ```
 
 - breadcrumb で libraries、言語、親 directory、現在 page の階層を示す。
+- breadcrumb と同じ language ID / language-root-relative path を page header 内で繰り返さない。
 - `_index.md` がなければ overview section 自体を生成しない。
 - `_index.md` がある空 directory は page を生成し、library files section に
   「公開 library はありません」という empty-state message を表示する。
 - child directory item は title、root 相対 path、公開 descendant 数、verify 状態集計を持つ。
 - library item は title、file name、updated_at、verify 状態を持つ。
+- library item の updated_at は UTC の `YYYY-MM-DD` で表示する。
 - child directories と library files は別の見出し付き `section` と `ul` にする。
 - 一覧は直下の項目だけを含め、descendant library を再帰的に展開しない。
 - child directory は path 順、library file は path 順の既定 stable sort を使う。
@@ -1931,6 +1936,10 @@ article
 - external dependency は MVP では表示しない。
 - relation は kind と公開 target library link を表示する。
 - verification evidence は solution ごとの最新状態、solution link、OJ link、判定日時を表示する。
+- verification evidence は solution link、judged time / OJ link、右端の status の順に並べる。
+- verification evidence の `solution_page_id` と `solution_id` は同じ公開 solution に解決し、
+  解決不能または不一致なら build を失敗させる。plain text への fallback は行わない。
+- header の updated_at と evidence の judged_at は UTC の分精度で表示する。
 - verification evidence は `[verify].libraries` で直接指定した solution だけを列挙する。
 - stale の場合は verification evidence 内に公開可能な stale reason を表示する。
 - diagnostics は severity 順とし、location があれば library 自身の source line へ link する。
@@ -1952,17 +1961,21 @@ solution browse は solutions、contest、problem の 3 段階とする。
 `- solution list
 ```
 
-- solutions root の contest card は OJ、contest 名、公開 problem 数、公開 solution 数、
+- solutions root の contest card は contest 名、公開 problem 数、公開 solution 数、
   最新 solved_at を持つ。
+- solutions root は `Contests` という重複見出しや wrapper section を置かず、page header の
+  直後に contest list または empty-state message を置く。
 - contest は最新 solved_at 降順、contest ID 昇順で並べる。
-- contest page header は contest 名、OJ、公式 contest link を持つ。
+- contest page header は contest 名だけを持ち、breadcrumb と重複する `Contest` subtitle を置かない。
 - problem item は problem 名と code、公開 solution 数、最新 solved_at を持つ。
 - problem は既存 metadata の順序を優先し、なければ problem code の UTF-8 byte 順にする。
-- problem page header は contest、problem、OJ への link を持つ。
-- solution item は solution 名、言語、solved_at、verify 状態、直接依存 library 数を持つ。
+- problem page header は problem 名だけを持ち、breadcrumb と重複する contest / problem path を置かない。
+- solution item は solution 名、言語、solved_at、直接依存 library 数、verify 状態をこの順で持つ。
+- problem の solution list は full-width row とし、verify status を右端へ置く。
 - solution は solved_at 降順、solution ID 昇順で並べる。
 - すべての item と集計は公開 solution だけから作る。
-- 各一覧は見出し付き `section` の `ul > li > article` とする。
+- contest / problem の一覧は見出し付き `section` の `ul > li > article` とする。
+- browse card / row の timestamp 表示は UTC の `YYYY-MM-DD` とする。
 - 公開 solution がない階層は page 自体を生成しない。
 - solutions、contest、problem page を Pagefind index から除外する。
 
@@ -1974,25 +1987,25 @@ solution detail は library detail と同じ単一 article と source component 
 article
 |- page header
 |  |- h1
-|  |- contest / problem / OJ
-|  |- language / solved_at
-|  `- verification status
+|  `- language / OJ / solved_at / verification status
 |- in-page navigation
 |- source
-|- libraries
-|  |- verifies
-|  `- depends on
+|- libraries (visible label: Depends on)
+|  `- direct depends on
 |- verification result
 `- diagnostics
 ```
 
-- contest、problem、OJ は内部 browse page と公式 page の適切な link を持つ。
+- contest / problem path は breadcrumb に保持し、page header では繰り返さない。
 - source section は library detail と同じ `L*`、line permalink、Shiki HTML contract を使う。
 - source toolbar に `Repository source` と明記し、build source commit 上の file へ link する。
 - preprocess があれば、OJ 上の提出 source そのものではないことを source toolbar に表示する。
-- verifies と direct depends on は別の小見出しと list で表示する。
+- `section#libraries` は fragment 互換性のため ID を維持し、in-page navigation と `h2` は
+  `Depends on` と表示する。小見出しは置かず、direct depends on だけを表示する。
+- `verifies` は公開 site data に保持するが Solution detail には表示しない。どの solution が
+  library を保証するかは Library detail の verification evidence から参照できるようにする。
 - 非公開 dependency は library detail と同じ非公開情報を漏らさない共通表示へ変換する。
-- `not_configured` では verifies と verification result を省略し、header に中立状態を表示する。
+- `not_configured` では verification result を省略し、header に中立状態を表示する。
 - `never` では verification result を維持し、まだ提出結果がないという empty state を表示する。
 - result summary は verdict、judged_at、実行時間、memory、OJ link を `dl` で表示する。
 - testcase detail が存在する場合だけ caption と column heading を持つ `table` を表示する。
@@ -2052,7 +2065,9 @@ dependency / symbol analysis status の label:
 - callout は状態の対象、公開可能な理由、影響、次に確認する内部または OJ link を
   文章で示す。
 - dependency analysis と symbol analysis は同じ外観を使えても、対象名を text で明示する。
-- timestamp は RFC 3339 の `datetime` を持つ `<time>` として描画する。
+- timestamp は RFC 3339 原値の `datetime` を持つ `<time>` として描画する。browse / card の
+  表示 text は UTC の `YYYY-MM-DD`、detail / evidence は `YYYY-MM-DD HH:mm UTC` とする。
+  parse 不能な値は表示時に例外へせず原文を表示する。
 - callout には非公開情報を除去した公開 DTO の message だけを渡す。
 
 ### 12.9 detail list components
@@ -2074,8 +2089,10 @@ dependencies / used by / relations
 
 verification evidence
 `- section > ul > li > article
-   |- solution link / status
-   `- judged time / OJ link
+   |- solution link
+   |- judged time / OJ link
+   |- status
+   `- optional stale reason
 
 diagnostics
 `- section > ul > li
@@ -2982,7 +2999,8 @@ OJ capability に応じて `not_configured` または `unavailable` になる。
 - 解法ページが entry source と submitted-source hash を区別する表示 test
 - solution detail の section 順と library detail との source component 共通化 test
 - not_configured、never、stale の solution detail 表示分岐 test
-- verifies と depends on の分離、および非公開 dependency の非漏洩 test
+- Solution detail が `verifies` を表示せず direct depends on だけを表示し、公開 site data 内では
+  両 relation を分離して保持する test
 - Web の depends on / used by が direct edge だけを表示する test
 - preprocess 有無による Repository source 表示と注意書き test
 - testcase detail table の caption、column heading、optional 表示 test
@@ -3367,7 +3385,7 @@ OJ capability に応じて `not_configured` または `unavailable` になる。
 - 言語 / directory は直下の子 directory と公開 library を分けて表示する階層 browser とする。
 - library detail は tab を使わない単一 article とし、固定 ID の section を上から並べる。
 - source viewer は行ごとの `L*` permalink と検索可能な text を持つ固定 HTML contract にする。
-- solution detail は同じ article / source contract を使い、library 関係と verify result を表示する。
+- solution detail は同じ article / source contract を使い、direct dependency と verify result を表示する。
 - verification と dependency / symbol analysis は別々の text 付き status component で表示する。
 - detail の構造化情報は共通 list component とし、testcase detail だけを table にする。
 - URL は各 path segment を個別に percent-encode し、内部 ID とは分離する。
