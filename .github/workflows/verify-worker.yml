@@ -241,6 +241,28 @@ jobs:
           ref: automation/verify
           fetch-depth: 1
 
+      - name: Sanity-check state branch invariants
+        # `verify-start` / `verify-poll` assume the state branch is
+        # `main@base_sha` + a `verification/results/**` delta, so its tree
+        # still contains `templates/`, `config.toml`, `libraries/`, and
+        # `solutions/`. A stray force-push to `automation/verify` (or a
+        # tree-construction bug in `verify-persist`) would surface here
+        # with a clear invariant-violation message instead of leaking
+        # through as an opaque `find_project_root` error later.
+        run: |
+          set -euo pipefail
+          missing=()
+          for entry in templates config.toml libraries solutions; do
+            if [ ! -e "$entry" ]; then
+              missing+=("$entry")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "automation/verify state branch is missing expected entries: ${missing[*]}" >&2
+            echo "This branch must mirror main@base_sha except for verification/results/**." >&2
+            exit 1
+          fi
+
       - name: Download plan artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -390,6 +412,7 @@ jobs:
       contents: read
     outputs:
       terminal_sha: ${{ steps.hash_terminal.outputs.terminal_sha }}
+      has_terminal: ${{ steps.check_terminal.outputs.has_terminal }}
     steps:
       # See the note on the submit job's Checkout step. `verify-poll` reads
       # the `Trackable` record `persist_handle` committed to
@@ -400,6 +423,28 @@ jobs:
         with:
           ref: automation/verify
           fetch-depth: 1
+
+      - name: Sanity-check state branch invariants
+        # `verify-start` / `verify-poll` assume the state branch is
+        # `main@base_sha` + a `verification/results/**` delta, so its tree
+        # still contains `templates/`, `config.toml`, `libraries/`, and
+        # `solutions/`. A stray force-push to `automation/verify` (or a
+        # tree-construction bug in `verify-persist`) would surface here
+        # with a clear invariant-violation message instead of leaking
+        # through as an opaque `find_project_root` error later.
+        run: |
+          set -euo pipefail
+          missing=()
+          for entry in templates config.toml libraries solutions; do
+            if [ ! -e "$entry" ]; then
+              missing+=("$entry")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "automation/verify state branch is missing expected entries: ${missing[*]}" >&2
+            echo "This branch must mirror main@base_sha except for verification/results/**." >&2
+            exit 1
+          fi
 
       - name: Download plan artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
@@ -475,14 +520,33 @@ jobs:
           set -euo pipefail
           ./work/ce internal verify-poll --solution "$SOLUTION_ID" > work/terminal.json
 
+      - name: Reject empty terminal payload
+        id: check_terminal
+        run: |
+          set -euo pipefail
+          # Redirecting stdout with `> work/terminal.json` truncates the
+          # file before `verify-poll` runs. If `verify-poll` errored out
+          # before printing (e.g. `find_project_root` failed) the file is
+          # zero bytes and would break `verify-persist --candidate-in`
+          # with an opaque JSON parse error. Fail fast here with a clear
+          # message so persist_terminal skips instead of chasing garbage.
+          if [ ! -s work/terminal.json ]; then
+            echo "verify-poll produced an empty terminal.json — refusing to persist"
+            echo "has_terminal=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "has_terminal=true" >> "$GITHUB_OUTPUT"
+
       - name: Emit terminal digest
         id: hash_terminal
+        if: steps.check_terminal.outputs.has_terminal == 'true'
         run: |
           set -euo pipefail
           SHA=$(sha256sum work/terminal.json | awk '{print $1}')
           echo "terminal_sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Upload terminal artifact
+        if: steps.check_terminal.outputs.has_terminal == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: verify-terminal-${{ needs.prepare.outputs.artifact_suffix }}
@@ -502,10 +566,15 @@ jobs:
     # Runs even when `poll` re-raised a non-terminal outcome, so the
     # emitted `InfrastructureFailure` / `HandleLost` record still gets
     # written to `automation/verify` instead of leaving the branch stuck
-    # at `Trackable`.
+    # at `Trackable`. `needs.poll.result` must be either `success` or
+    # `failure`; `skipped` (e.g. because `submit` or `persist_handle`
+    # failed upstream) means no `verify-terminal-*` artifact exists to
+    # download, so we skip this job too.
     if: >-
       !cancelled()
       && needs.prepare.result == 'success'
+      && (needs.poll.result == 'success' || needs.poll.result == 'failure')
+      && needs.poll.outputs.has_terminal == 'true'
       && needs.prepare.outputs.has_work == 'true'
       && inputs.mode == 'live'
     environment: verify-state

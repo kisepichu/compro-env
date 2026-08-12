@@ -84,9 +84,18 @@ jobs:
           PUSH_AFTER: ${{ github.event.after }}
         run: |
           set -euo pipefail
+          ZERO_SHA=0000000000000000000000000000000000000000
           if [ "$EVENT_NAME" = "push" ]; then
             BEFORE="$PUSH_BEFORE"
             AFTER="$PUSH_AFTER"
+            # On branch creation or after certain force-push / rewind
+            # recoveries, `github.event.before` is the all-zeros SHA and
+            # `git diff $ZERO $AFTER` fails. Treat that as "full diff"
+            # by falling back to the AFTER commit's parent, or AFTER
+            # itself if there is no parent.
+            if [ "$BEFORE" = "$ZERO_SHA" ]; then
+              BEFORE=$(git rev-parse "$AFTER^" 2>/dev/null || echo "$AFTER")
+            fi
           else
             # schedule / workflow_dispatch: classify HEAD^..HEAD so the worker
             # still gets valid inputs; classification result is ignored because
@@ -142,6 +151,11 @@ jobs:
     with:
       before: ${{ needs.dispatch.outputs.before }}
       after: ${{ needs.dispatch.outputs.after }}
-      mode: ${{ inputs.mode || 'live' }}
+      # Default to `dry-run` for `push` / `schedule` triggers so that when
+      # automatic candidate selection lands, unattended cron ticks and
+      # normal main pushes cannot hit LibraryChecker without an operator
+      # opting in. Only an explicit `workflow_dispatch` with `mode: live`
+      # takes the OJ path.
+      mode: ${{ inputs.mode || 'dry-run' }}
       solution: ${{ inputs.solution || '' }}
     secrets: inherit

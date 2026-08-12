@@ -27,6 +27,7 @@ use usecases::config::Config as _;
 use usecases::online_judge::{CredentialKind, Credentials};
 use usecases::service::Service;
 use usecases::submission::SubmissionStart;
+use usecases::submission_lifecycle::PollEvent;
 
 // The Unix-only runner lives at `crate::command_runner_impl::UnixCommandRunner`;
 // on other targets we fall back to a stub that reports the platform as
@@ -469,26 +470,23 @@ pub fn run() -> Result<()> {
                     &usecases::submission_lifecycle::NoRetryHint,
                     usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
                 )?;
-                // Emit the current record so the persist_terminal job has
-                // something to hand to `verify-persist`. Terminal states
-                // (Completed / Unavailable) exit 0 and let persist_terminal
-                // run. Non-terminal states (BudgetExhausted, HandleLost,
-                // InfrastructureError) exit 1: the poll job fails, downstream
-                // persist_terminal is skipped, and the scheduled dispatcher
-                // resumes from the state already saved to the branch by the
-                // previous persist_handle. Spec §15.1's "intermediate poll
-                // transitions save back" is achieved by the next tick's
-                // prepare/persist chain, not by this poll job on failure.
+                // Emit the current record so persist_terminal can hand it
+                // to `verify-persist`. Terminal states (Completed /
+                // Unavailable) exit 0. Non-terminal states
+                // (BudgetExhausted / HandleLost / InfrastructureError)
+                // exit 1 so the CI job status reflects the outcome; the
+                // workflow gates persist_terminal on `!cancelled()` +
+                // `has_terminal`, so the emitted record is committed to
+                // `automation/verify` before the job status flips red.
+                use std::io::Write as _;
                 let record = poll_event_record(&event);
                 let json = serde_json::to_string(record)
                     .map_err(|e| anyhow::anyhow!("failed to serialize poll record: {e}"))?;
                 println!("{json}");
-                use usecases::submission_lifecycle::PollEvent;
                 let exit_code = match event {
                     PollEvent::Completed { .. } | PollEvent::Unavailable { .. } => 0,
                     _ => 1,
                 };
-                use std::io::Write;
                 let _ = std::io::stdout().flush();
                 std::process::exit(exit_code);
             }
@@ -1177,10 +1175,7 @@ fn start_event_record(
 }
 
 /// Extracts the `VerificationRecord` payload from a [`PollEvent`].
-fn poll_event_record(
-    event: &usecases::submission_lifecycle::PollEvent,
-) -> &domain::verification::VerificationRecord {
-    use usecases::submission_lifecycle::PollEvent;
+fn poll_event_record(event: &PollEvent) -> &domain::verification::VerificationRecord {
     match event {
         PollEvent::Completed { record }
         | PollEvent::Unavailable { record }
