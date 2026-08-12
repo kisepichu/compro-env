@@ -88,8 +88,14 @@ impl GitHubVerificationStateWriter {
 - [x] Prove no workflow path can currently call an OJ or mint an App token.
 - [x] Run rollout Rust/Web verification and `git diff --check`.
 - [x] Invoke `/commit` with `docs: record safe automation completion`.
-- [ ] Invoke `/pr --base main`; link plan 060 and state that it unblocks plan 061.
-- [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+- [x] Invoke `/pr --base main`; link plan 060 and state that it unblocks plan 061.
+- [x] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+      (Review effectively closed: PR #68. Three rounds of Copilot/Claude findings
+      resolved across commits 5e5f7a6, a7644e5, b7b55b1 with matching tests.
+      Two follow-up re-review runs hit the `claude-review.yml` action's
+      25-turn budget without emitting new findings — infrastructure-side, not
+      code-side. CI green, `mergeStateStatus: CLEAN`. Merge action handed to
+      the human at that point per the "destructive shared-state" guidance.)
 
 **Completion notes:**
 
