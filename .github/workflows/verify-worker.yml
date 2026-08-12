@@ -302,16 +302,13 @@ jobs:
         run: |
           set -euo pipefail
           HANDLE_SHA=$(sha256sum work/handle.json | awk '{print $1}')
-          printf "%s" "$HANDLE_SHA" > work/handle.sha256
           echo "handle_sha=$HANDLE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Upload handle artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: verify-handle-${{ needs.prepare.outputs.artifact_suffix }}
-          path: |
-            work/handle.json
-            work/handle.sha256
+          path: work/handle.json
           if-no-files-found: error
           retention-days: 7
 
@@ -470,16 +467,13 @@ jobs:
         run: |
           set -euo pipefail
           SHA=$(sha256sum work/terminal.json | awk '{print $1}')
-          printf "%s" "$SHA" > work/terminal.sha256
           echo "terminal_sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Upload terminal artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: verify-terminal-${{ needs.prepare.outputs.artifact_suffix }}
-          path: |
-            work/terminal.json
-            work/terminal.sha256
+          path: work/terminal.json
           if-no-files-found: error
           retention-days: 7
 

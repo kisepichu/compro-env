@@ -118,21 +118,31 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
 ## Operating the workflow
 
 - **Every `main` push** runs the dispatcher. If classification returns
-  `source-or-config`, the worker executes the full six-job chain. Any
-  other class skips the worker.
-- **Every 5 minutes (schedule)** the dispatcher wakes and always calls
-  the worker so pending `Starting` and `AcceptanceUnknown` records —
-  and any dangling handle records — can advance.
-- **Manual dispatch** via `workflow_dispatch`: pick `mode: dry-run`
-  for a no-OJ pass that exercises `prepare` and `persist_starting`
-  only, or `mode: live` for a real Library Checker submission.
+  `source-or-config`, the worker is called — but `prepare` still needs
+  a `solution` input to do anything (see below), so today's push
+  effectively short-circuits to `has_work=false` until automatic
+  candidate selection lands.
+- **Every 5 minutes (schedule)** the dispatcher wakes and calls the
+  worker with `solution: ''`. Until automatic candidate selection is
+  implemented, the worker exits at `prepare` with `has_work=false` and
+  every downstream job is skipped. **Scheduled ticks are currently
+  no-ops.** Operators watching the cron will see a green
+  five-minute-interval workflow run doing nothing until either a
+  `workflow_dispatch` supplies a `solution` or the follow-up plan wires
+  in the candidate picker.
+- **Manual dispatch** via `workflow_dispatch`: supply a `solution` (e.g.
+  `librarychecker-aplusb/aplusb/rust`) plus `mode: dry-run` for a
+  no-OJ pass that exercises `prepare` and `persist_starting` only, or
+  `mode: live` for a real Library Checker submission. A blank
+  `solution` is a no-op (same as schedule).
 - **Result-only pushes** (updates under `verification/results/**`)
   are classified as `result-only`; the dispatcher skips the worker and
   only `pages.yml` republishes the site.
-- **Retry backoff** is `5 → 10 → 20 → 40 → 80` minutes, capped at 6
-  hours. The record's `next_retry_at` encodes the schedule; the
-  5-minute cron is dense enough to honor it without additional
-  triggers.
+- **Retry backoff** target is `5 → 10 → 20 → 40 → 80` minutes, capped
+  at 6 hours. The record's `next_retry_at` encodes the schedule and
+  the 5-minute cron is dense enough to honor it — but the actual
+  retry consumption path is gated on the same follow-up as automatic
+  candidate selection.
 
 ## Debugging failures
 
