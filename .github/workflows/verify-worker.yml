@@ -420,8 +420,10 @@ jobs:
           LC_REFRESH: ${{ secrets.LIBRARYCHECKER_REFRESH_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.config/ce"
+          # umask must precede mkdir so the parent directory is 0700 as well;
+          # otherwise other runner users can enumerate the file name.
           umask 077
+          mkdir -p "$HOME/.config/ce"
           {
             printf '[librarychecker]\n'
             printf 'id_token = ""\n'
