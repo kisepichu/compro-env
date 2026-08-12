@@ -25,6 +25,7 @@ import {
   homePath,
   librariesRootPath,
   libraryPath,
+  solutionPath,
   toInternalPath,
   type UrlConfig,
 } from "../url.ts";
@@ -39,6 +40,10 @@ import {
 } from "./document.ts";
 import { escapeAttribute, escapeHtml } from "./escape.ts";
 import { renderStatus } from "./status.ts";
+import {
+  formatCompactTimestamp,
+  formatDetailedTimestamp,
+} from "./time.ts";
 
 // ---- Route enumeration ----
 
@@ -148,10 +153,7 @@ export function renderLibrariesRootMainInner(
       : `<ul class="language-list">${langs.map((l) => renderLanguageCard(config, l)).join("")}</ul>`;
   return (
     `<header class="page-header"><h1>Libraries</h1></header>` +
-    `<section class="languages" aria-labelledby="languages-heading">` +
-      `<h2 id="languages-heading">Languages</h2>` +
-      languagesHtml +
-    `</section>`
+    languagesHtml
   );
 }
 
@@ -290,7 +292,7 @@ function renderLibraryCard(
     `<li><article class="library-card">` +
       `<h3><a href="${escapeAttribute(href)}">${escapeHtml(lib.title)}</a></h3>` +
       `<p class="library-file-name"><code>${escapeHtml(fileName)}</code></p>` +
-      `<p class="library-updated"><time datetime="${escapeAttribute(lib.updated_at)}">${escapeHtml(lib.updated_at)}</time></p>` +
+      `<p class="library-updated"><time datetime="${escapeAttribute(lib.updated_at)}">${escapeHtml(formatCompactTimestamp(lib.updated_at))}</time></p>` +
       renderStatus("library-verification", lib.verification.aggregate_status) +
     `</article></li>`
   );
@@ -340,10 +342,6 @@ export function renderLibraryDirectoryMainInner(
     directoryParts.length === 0
       ? displayName
       : directoryParts[directoryParts.length - 1];
-  const subtitleText =
-    directoryParts.length === 0
-      ? languageId
-      : [languageId, ...directoryParts].join("/");
   const directLibraries = librariesAtDirectory(
     siteData,
     languageId,
@@ -370,7 +368,6 @@ export function renderLibraryDirectoryMainInner(
   return (
     `<header class="page-header">` +
       `<h1>${escapeHtml(heading)}</h1>` +
-      `<p class="subtitle"><code>${escapeHtml(subtitleText)}</code></p>` +
       `<dl class="verification-summary">` +
         `<dt>Verified</dt><dd>${counts.verified}</dd>` +
         `<dt>Stale</dt><dd>${counts.stale}</dd>` +
@@ -491,6 +488,8 @@ function renderRelationList(
 }
 
 function renderVerificationEvidenceList(
+  config: UrlConfig,
+  siteData: SiteData,
   evidence: readonly VerificationEvidence[],
 ): string {
   if (evidence.length === 0) {
@@ -498,9 +497,25 @@ function renderVerificationEvidenceList(
   }
   const items = evidence
     .map((ev) => {
+      const solution = siteData.solutions.find(
+        (candidate) =>
+          candidate.page_id === ev.solution_page_id &&
+          candidate.solution_id === ev.solution_id,
+      );
+      if (solution === undefined) {
+        throw new Error(
+          `Verification evidence ${ev.solution_id} does not resolve to a public solution`,
+        );
+      }
+      const solutionHref = solutionPath(
+        config,
+        solution.contest_id,
+        solution.problem_code,
+        solution.solution_name,
+      );
       const time =
         ev.judged_at !== null && ev.judged_at !== undefined
-          ? `<time datetime="${escapeAttribute(ev.judged_at)}">${escapeHtml(ev.judged_at)}</time>`
+          ? `<time datetime="${escapeAttribute(ev.judged_at)}">${escapeHtml(formatDetailedTimestamp(ev.judged_at))}</time>`
           : `<span class="empty-time">not judged yet</span>`;
       const safeOjUrl = sanitizeExternalUrl(ev.oj_submission_url);
       const ojLink =
@@ -514,11 +529,11 @@ function renderVerificationEvidenceList(
       return (
         `<li><article class="verification-evidence">` +
           `<p class="evidence-solution">` +
-            `<span class="solution-id"><code>${escapeHtml(ev.solution_id)}</code></span> ` +
+            `<a class="solution-id" href="${escapeAttribute(solutionHref)}"><code>${escapeHtml(ev.solution_id)}</code></a> ` +
             `<span class="oj">${escapeHtml(ev.online_judge)}</span>` +
           `</p>` +
-          renderStatus("evidence", ev.status) +
           ` <p class="evidence-judged">${time}${ojLink}</p>` +
+          renderStatus("evidence", ev.status) +
           stale +
         `</article></li>`
       );
@@ -653,7 +668,7 @@ async function renderLibraryDetailArticleInner(
       `<p class="library-meta">` +
         `<span class="language">${escapeHtml(lib.language)}</span> ` +
         `<code class="path">${relativePath}</code> ` +
-        `<time datetime="${escapeAttribute(lib.updated_at)}">${escapeHtml(lib.updated_at)}</time>` +
+        `<time datetime="${escapeAttribute(lib.updated_at)}">${escapeHtml(formatDetailedTimestamp(lib.updated_at))}</time>` +
       `</p>` +
       renderStatus("library-verification", lib.verification.aggregate_status) +
       renderStatus("analysis", dependencyAnalysis.state) +
@@ -680,7 +695,7 @@ async function renderLibraryDetailArticleInner(
     `</section>` +
     `<section id="verification" aria-labelledby="verification-heading">` +
       `<h2 id="verification-heading">Verification</h2>` +
-      renderVerificationEvidenceList(lib.verification.evidence) +
+      renderVerificationEvidenceList(config, siteData, lib.verification.evidence) +
     `</section>` +
     `<section id="diagnostics" aria-labelledby="diagnostics-heading">` +
       `<h2 id="diagnostics-heading">Diagnostics</h2>` +

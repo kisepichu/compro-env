@@ -38,7 +38,7 @@ const projectConfig: UrlConfig = {
 };
 
 function parse(html: string): Document {
-  return new JSDOM(html).window.document;
+  return new JSDOM(html, { url: rootConfig.origin }).window.document;
 }
 
 /**
@@ -144,6 +144,13 @@ function assertShell(
     true,
   );
 
+  // Shared visual layer: one same-origin, base-aware stylesheet on every page.
+  const stylesheets = doc.querySelectorAll('link[rel="stylesheet"]');
+  expect(stylesheets.length).toBe(1);
+  expect(stylesheets[0].getAttribute("href")).toBe(
+    `${opts.config.base}assets/site.css`,
+  );
+
   // Robots meta.
   const robots = doc.querySelector('meta[name="robots"]');
   expect(robots).toBeTruthy();
@@ -205,6 +212,37 @@ describe("Home page (/)", () => {
         "Attention required",
       ]),
     );
+  });
+
+  it("keeps RFC 3339 values in datetime while showing compact recent dates", () => {
+    const doc = parse(html);
+    const libraryTime = doc.querySelector(
+      ".recent-libraries .library-updated time",
+    )!;
+    expect(libraryTime.getAttribute("datetime")).toBe(
+      "2026-08-10T12:00:00Z",
+    );
+    expect(libraryTime.textContent).toBe("2026-08-10");
+
+    const solutionTime = doc.querySelector(
+      ".recent-solutions .solution-solved time",
+    )!;
+    expect(solutionTime.getAttribute("datetime")).toBe(
+      "2026-08-10T13:00:00Z",
+    );
+    expect(solutionTime.textContent).toBe("2026-08-10");
+  });
+
+  it("orders recent solution metadata to match recent library rows", () => {
+    const doc = parse(html);
+    const card = doc.querySelector(".recent-solutions .solution-card")!;
+    expect([...card.children].map((child) => child.className || child.tagName)).toEqual([
+      "H3",
+      "solution-language",
+      "solution-contest",
+      "solution-solved",
+      "status-badge",
+    ]);
   });
 
   it("recent libraries are capped at 10 and sorted by (updated_at desc, id asc)", () => {
@@ -270,11 +308,19 @@ describe("Libraries root (/libraries/)", () => {
     expect(cards[0].textContent).toContain("Rust");
   });
 
+  it("places the language list directly after the page header without a redundant heading", () => {
+    const doc = parse(renderLibrariesRootPage(rootConfig, buildFixtureSiteData()));
+    expect(doc.querySelector("main > .page-header + .language-list")).toBeTruthy();
+    expect(doc.querySelector("main > section.languages")).toBeNull();
+    expect(doc.querySelector("main > h2")).toBeNull();
+  });
+
   it("renders an empty-state message when no eligible languages exist", () => {
     const siteData = buildFixtureSiteData({ languages: [] });
     const doc = parse(renderLibrariesRootPage(rootConfig, siteData));
     expect(doc.querySelector(".empty-state")).toBeTruthy();
     expect(doc.querySelector(".empty-state")!.textContent).toMatch(/No languages/);
+    expect(doc.querySelector("main > .page-header + .empty-state")).toBeTruthy();
   });
 
   it("keeps internal links under a project base like /compro-env/", () => {
@@ -319,6 +365,26 @@ describe("Library directory pages", () => {
     const libLinks = doc.querySelectorAll(".library-list > li h3 a");
     expect(libLinks.length).toBe(1);
     expect(libLinks[0].getAttribute("href")).toBe("/libraries/rust/graph/dijkstra.rs/");
+  });
+
+  it("shows compact dates on library file rows", () => {
+    const doc = parse(
+      renderLibraryDirectoryPage(rootConfig, siteData, "rust", ["graph"]),
+    );
+    const time = doc.querySelector(".library-files .library-updated time")!;
+    expect(time.getAttribute("datetime")).toBe("2026-08-10T12:00:00Z");
+    expect(time.textContent).toBe("2026-08-10");
+  });
+
+  it("does not repeat the breadcrumb path below language or category headings", () => {
+    const languageDoc = parse(
+      renderLibraryDirectoryPage(rootConfig, siteData, "rust", []),
+    );
+    const categoryDoc = parse(
+      renderLibraryDirectoryPage(rootConfig, siteData, "rust", ["graph"]),
+    );
+    expect(languageDoc.querySelector(".page-header .subtitle")).toBeNull();
+    expect(categoryDoc.querySelector(".page-header .subtitle")).toBeNull();
   });
 });
 
@@ -369,6 +435,57 @@ describe("Library detail (/libraries/{lang}/{source-path}/)", () => {
     );
   });
 
+  it("shows detailed UTC times in the header and verification evidence", () => {
+    const doc = parse(html);
+    const updated = doc.querySelector(".library-meta time")!;
+    expect(updated.getAttribute("datetime")).toBe("2026-08-10T12:00:00Z");
+    expect(updated.textContent).toBe("2026-08-10 12:00 UTC");
+
+    const judged = doc.querySelector(".evidence-judged time")!;
+    expect(judged.getAttribute("datetime")).toBe("2026-08-10T13:00:00Z");
+    expect(judged.textContent).toBe("2026-08-10 13:00 UTC");
+  });
+
+  it("links verification evidence to its public solution and ends with status", async () => {
+    const doc = parse(
+      await renderLibraryDetailPage(
+        projectConfig,
+        siteData,
+        siteData.libraries[0],
+      ),
+    );
+    const evidence = doc.querySelector(".verification-evidence")!;
+    const solutionLink = evidence.querySelector(".evidence-solution a")!;
+    expect(solutionLink.textContent).toBe("abc300/a/dijkstra_solve");
+    expect(solutionLink.getAttribute("href")).toBe(
+      "/compro-env/solutions/abc300/a/dijkstra_solve/",
+    );
+    expect(
+      [...evidence.children]
+        .map((element) =>
+          element.classList.contains("evidence-solution")
+            ? "solution"
+            : element.classList.contains("evidence-judged")
+              ? "judged"
+              : element.classList.contains("status-badge")
+                ? "status"
+                : element.classList.contains("stale-reason")
+                  ? "stale"
+                  : "unexpected",
+        )
+        .slice(0, 3),
+    ).toEqual(["solution", "judged", "status"]);
+  });
+
+  it("rejects verification evidence that does not resolve to one public solution", async () => {
+    const broken = buildFixtureSiteData();
+    broken.libraries[0].verification.evidence[0].solution_page_id =
+      "solution:missing/a/answer";
+    await expect(
+      renderLibraryDetailPage(rootConfig, broken, broken.libraries[0]),
+    ).rejects.toThrow(/verification evidence.*public solution/i);
+  });
+
   it("omits documentation section when description is null", async () => {
     const html2 = await renderLibraryDetailPage(rootConfig, siteData, siteData.libraries[1]);
     const doc = parse(html2);
@@ -396,6 +513,43 @@ describe("Solution browse and detail", () => {
     expect(heads).toEqual(["abc300", "abc301"]);
   });
 
+  it("places contest cards directly after the page header without a redundant heading", () => {
+    const doc = parse(renderSolutionsRootPage(rootConfig, siteData));
+    expect(doc.querySelector("main > .page-header + .contest-list")).toBeTruthy();
+    expect(doc.querySelector("main > section.contests")).toBeNull();
+    expect(doc.querySelector("main > h2")).toBeNull();
+
+    const emptyDoc = parse(
+      renderSolutionsRootPage(rootConfig, buildFixtureSiteData({ solutions: [] })),
+    );
+    expect(emptyDoc.querySelector("main > .page-header + .empty-state")).toBeTruthy();
+  });
+
+  it("shows compact dates throughout solution browse cards", () => {
+    const rootDoc = parse(renderSolutionsRootPage(rootConfig, siteData));
+    const contestTime = rootDoc.querySelector(".contest-card time")!;
+    expect(contestTime.getAttribute("datetime")).toBe(
+      "2026-08-10T13:00:00Z",
+    );
+    expect(contestTime.textContent).toBe("2026-08-10");
+
+    const contestDoc = parse(renderContestPage(rootConfig, siteData, "abc300"));
+    const problemTime = contestDoc.querySelector(".problem-card time")!;
+    expect(problemTime.getAttribute("datetime")).toBe(
+      "2026-08-10T13:00:00Z",
+    );
+    expect(problemTime.textContent).toBe("2026-08-10");
+
+    const problemDoc = parse(
+      renderProblemPage(rootConfig, siteData, "abc300", "a"),
+    );
+    const solutionTime = problemDoc.querySelector(".solution-card time")!;
+    expect(solutionTime.getAttribute("datetime")).toBe(
+      "2026-08-10T13:00:00Z",
+    );
+    expect(solutionTime.textContent).toBe("2026-08-10");
+  });
+
   it("contest page: h1 = contest_id and lists distinct problems", () => {
     const html = renderContestPage(rootConfig, siteData, "abc300");
     const doc = parse(html);
@@ -413,6 +567,27 @@ describe("Solution browse and detail", () => {
       (li) => li.textContent,
     );
     expect(crumbs).toEqual(["Home", "Solutions", "abc300", "a"]);
+  });
+
+  it("does not repeat contest or problem paths below browse headings", () => {
+    const contestDoc = parse(renderContestPage(rootConfig, siteData, "abc300"));
+    const problemDoc = parse(
+      renderProblemPage(rootConfig, siteData, "abc300", "a"),
+    );
+    expect(contestDoc.querySelector(".page-header .subtitle")).toBeNull();
+    expect(problemDoc.querySelector(".page-header .subtitle")).toBeNull();
+  });
+
+  it("orders problem solution rows with the status at the right edge", () => {
+    const doc = parse(renderProblemPage(rootConfig, siteData, "abc300", "a"));
+    const card = doc.querySelector(".solutions .solution-card")!;
+    expect([...card.children].map((child) => child.className || child.tagName)).toEqual([
+      "H3",
+      "solution-language",
+      "solution-solved",
+      "solution-dep-count",
+      "status-badge",
+    ]);
   });
 
   it("solution detail: article has data-pagefind-body and canonical page id", async () => {
@@ -433,6 +608,51 @@ describe("Solution browse and detail", () => {
     // Status badge with data-status="verified".
     const detailStatus = article.querySelector("header .status-badge")!;
     expect(detailStatus.getAttribute("data-status")).toBe("verified");
+  });
+
+  it("uses one header metadata row and exposes only direct dependencies", async () => {
+    const sol = siteData.solutions[0];
+    const doc = parse(await renderSolutionDetailPage(rootConfig, siteData, sol));
+    const metadata = doc.querySelector(".solution-header-meta")!;
+    expect(
+      [...metadata.children].map((element) =>
+        element.classList.contains("language")
+          ? "language"
+          : element.classList.contains("oj")
+            ? "oj"
+            : element.matches("time")
+              ? "time"
+              : element.classList.contains("status-badge")
+                ? "status"
+                : "unexpected",
+      ),
+    ).toEqual(["language", "oj", "time", "status"]);
+    expect(doc.querySelector(".solution-meta")).toBeNull();
+    expect(doc.querySelector(".solution-language-time")).toBeNull();
+
+    const navLink = doc.querySelector(
+      '.in-page-navigation a[href="#libraries"]',
+    )!;
+    expect(navLink.textContent).toBe("Depends on");
+    const section = doc.getElementById("libraries")!;
+    expect(section.querySelector("h2")!.textContent).toBe("Depends on");
+    expect(section.querySelector("h3")).toBeNull();
+    expect(section.querySelector(".verifies-list")).toBeNull();
+    expect(section.querySelector(".depends-on-list")).toBeTruthy();
+    expect(sol.verifies.length).toBeGreaterThan(0);
+  });
+
+  it("shows detailed UTC times in solution detail metadata and results", async () => {
+    const sol = siteData.solutions[0];
+    const doc = parse(await renderSolutionDetailPage(rootConfig, siteData, sol));
+
+    const solved = doc.querySelector(".solution-header-meta time")!;
+    expect(solved.getAttribute("datetime")).toBe("2026-08-10T13:00:00Z");
+    expect(solved.textContent).toBe("2026-08-10 13:00 UTC");
+
+    const judged = doc.querySelector("#verification .verification-summary time")!;
+    expect(judged.getAttribute("datetime")).toBe("2026-08-10T13:00:00Z");
+    expect(judged.textContent).toBe("2026-08-10 13:00 UTC");
   });
 
   it("solution detail with 'never' status keeps verification section as empty state", async () => {
@@ -557,6 +777,11 @@ describe("Status component", () => {
       expect(badge.getAttribute("data-status")).toBe(value);
       expect(badge.textContent!.trim()).toBe(label);
       expect(badge.hasAttribute("role")).toBe(false);
+      const svg = badge.querySelector(
+        'svg[aria-hidden="true"][focusable="false"]',
+      );
+      expect(svg).toBeTruthy();
+      expect(svg!.children.length).toBeGreaterThan(0);
     }
   });
 
@@ -570,6 +795,11 @@ describe("Status component", () => {
       const badge = doc.querySelector(".status-badge")!;
       expect(badge.getAttribute("data-status")).toBe(value);
       expect(badge.textContent!.trim()).toBe(label);
+      const svg = badge.querySelector(
+        'svg[aria-hidden="true"][focusable="false"]',
+      );
+      expect(svg).toBeTruthy();
+      expect(svg!.children.length).toBeGreaterThan(0);
     }
   });
 });

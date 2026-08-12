@@ -14,6 +14,7 @@ import {
   librariesRootPath,
   searchPath,
   solutionsRootPath,
+  toAssetUrl,
   toCanonicalUrl,
   type UrlConfig,
 } from "../url.ts";
@@ -59,6 +60,7 @@ function renderHead(opts: DocumentOptions): string {
     `<meta name="description" content="${escapeAttribute(opts.description)}">`,
     `<meta name="robots" content="${escapeAttribute(robots)}">`,
     `<link rel="canonical" href="${escapeAttribute(canonical)}">`,
+    `<link rel="stylesheet" href="${escapeAttribute(toAssetUrl(opts.config, ["assets", "site.css"]))}">`,
     `<meta property="og:type" content="website">`,
     `<meta property="og:site_name" content="${escapeAttribute(siteTitle)}">`,
     `<meta property="og:title" content="${escapeAttribute(opts.documentTitle)}">`,

@@ -19,11 +19,12 @@ import {
 } from "@/lib/pages/document.ts";
 import { renderSearchMainInner } from "@/lib/pages/search.ts";
 import { loadSiteData } from "@/lib/site-data.ts";
-import { toCanonicalUrl } from "@/lib/url.ts";
+import { toAssetUrl, toCanonicalUrl } from "@/lib/url.ts";
 
 const config = resolveUrlConfig();
 const siteData = loadSiteData();
 const canonical = toCanonicalUrl(config, ["search"]);
+const stylesheetHref = toAssetUrl(config, ["assets", "site.css"]);
 const documentTitle = formatDocumentTitle(siteData, "Search");
 const description = "Search libraries, solutions, and symbols on compro-env.";
 const htmlLang = siteData.site.language || "en";
@@ -45,6 +46,7 @@ const mainInnerHtml = renderSearchMainInner(config);
     <meta name="description" content={description} />
     <meta name="robots" content="noindex,nofollow" />
     <link rel="canonical" href={canonical} />
+    <link rel="stylesheet" href={stylesheetHref} />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content={siteData.site.title} />
     <meta property="og:title" content={documentTitle} />

@@ -41,6 +41,18 @@ const ANALYSIS_LABELS: Record<AnalysisState, string> = {
   failed: "Analysis failed",
 };
 
+const STATUS_SHAPES: Record<StatusValue, string> = {
+  verified: `<circle cx="8" cy="8" r="5"></circle>`,
+  rejected: `<rect x="3" y="3" width="10" height="10"></rect>`,
+  stale: `<path d="M8 2 14 8 8 14 2 8Z"></path>`,
+  unavailable: `<path d="M8 3 14 13H2Z"></path>`,
+  never: `<circle cx="8" cy="8" r="4.25" fill="none" stroke-width="2"></circle>`,
+  not_configured: `<rect x="2" y="7" width="12" height="2"></rect>`,
+  complete: `<rect x="3.5" y="3.5" width="9" height="9" fill="none" stroke-width="2"></rect>`,
+  partial: `<path d="M8 2 14 8 8 14 2 8Z"></path>`,
+  failed: `<rect x="3" y="3" width="10" height="10"></rect>`,
+};
+
 export function statusLabel(
   variant: StatusVariant,
   value: StatusValue,
@@ -58,9 +70,10 @@ export function renderStatus(
   const label = statusLabel(variant, value);
   const data = escapeAttribute(String(value));
   const variantAttr = escapeAttribute(variant);
+  const shape = STATUS_SHAPES[value];
   return (
     `<span class="status-badge" data-variant="${variantAttr}" data-status="${data}">` +
-    `<svg aria-hidden="true" focusable="false" viewBox="0 0 16 16"></svg>` +
+    `<svg aria-hidden="true" focusable="false" viewBox="0 0 16 16">${shape}</svg>` +
     `<span class="status-badge-label">${escapeHtml(label)}</span>` +
     `</span>`
   );

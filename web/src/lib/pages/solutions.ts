@@ -32,6 +32,10 @@ import {
 } from "./document.ts";
 import { escapeAttribute, escapeHtml } from "./escape.ts";
 import { renderStatus } from "./status.ts";
+import {
+  formatCompactTimestamp,
+  formatDetailedTimestamp,
+} from "./time.ts";
 
 // ---- Route enumeration ----
 
@@ -118,7 +122,7 @@ function renderContestCard(config: UrlConfig, group: ContestGroup): string {
       `<dl class="contest-counts">` +
         `<dt>Public problems</dt><dd>${group.problems.size}</dd>` +
         `<dt>Public solutions</dt><dd>${group.count}</dd>` +
-        `<dt>Latest solved</dt><dd><time datetime="${escapeAttribute(group.latestSolvedAt)}">${escapeHtml(group.latestSolvedAt)}</time></dd>` +
+        `<dt>Latest solved</dt><dd><time datetime="${escapeAttribute(group.latestSolvedAt)}">${escapeHtml(formatCompactTimestamp(group.latestSolvedAt))}</time></dd>` +
       `</dl>` +
     `</article></li>`
   );
@@ -135,10 +139,7 @@ export function renderSolutionsRootMainInner(
       : `<ul class="contest-list">${groups.map((g) => renderContestCard(config, g)).join("")}</ul>`;
   return (
     `<header class="page-header"><h1>Solutions</h1></header>` +
-    `<section class="contests" aria-labelledby="contests-heading">` +
-      `<h2 id="contests-heading">Contests</h2>` +
-      contestsHtml +
-    `</section>`
+    contestsHtml
   );
 }
 
@@ -201,7 +202,7 @@ function renderProblemCard(
       `<h3><a href="${escapeAttribute(href)}">${escapeHtml(problem.problemCode)}</a></h3>` +
       `<dl class="problem-counts">` +
         `<dt>Public solutions</dt><dd>${problem.count}</dd>` +
-        `<dt>Latest solved</dt><dd><time datetime="${escapeAttribute(problem.latestSolvedAt)}">${escapeHtml(problem.latestSolvedAt)}</time></dd>` +
+        `<dt>Latest solved</dt><dd><time datetime="${escapeAttribute(problem.latestSolvedAt)}">${escapeHtml(formatCompactTimestamp(problem.latestSolvedAt))}</time></dd>` +
       `</dl>` +
     `</article></li>`
   );
@@ -220,7 +221,6 @@ export function renderContestMainInner(
   return (
     `<header class="page-header">` +
       `<h1>${escapeHtml(contestId)}</h1>` +
-      `<p class="subtitle">Contest</p>` +
     `</header>` +
     `<section class="problems" aria-labelledby="problems-heading">` +
       `<h2 id="problems-heading">Problems</h2>` +
@@ -279,9 +279,9 @@ function renderSolutionCard(
     `<li><article class="solution-card">` +
       `<h3><a href="${escapeAttribute(href)}">${escapeHtml(sol.solution_name)}</a></h3>` +
       `<p class="solution-language">${escapeHtml(sol.language)}</p>` +
-      `<p class="solution-solved"><time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(sol.solved_at)}</time></p>` +
-      renderStatus("solution-verification", sol.verification.status) +
+      `<p class="solution-solved"><time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(formatCompactTimestamp(sol.solved_at))}</time></p>` +
       `<p class="solution-dep-count">Direct dependencies: ${sol.direct_dependencies.length}</p>` +
+      renderStatus("solution-verification", sol.verification.status) +
     `</article></li>`
   );
 }
@@ -300,7 +300,6 @@ export function renderProblemMainInner(
   return (
     `<header class="page-header">` +
       `<h1>${escapeHtml(problemCode)}</h1>` +
-      `<p class="subtitle">${escapeHtml(contestId)} / ${escapeHtml(problemCode)}</p>` +
     `</header>` +
     `<section class="solutions" aria-labelledby="solutions-heading">` +
       `<h2 id="solutions-heading">Solutions</h2>` +
@@ -373,15 +372,9 @@ async function renderSolutionDetailArticleInner(
   sol: SolutionPageData,
 ): Promise<string> {
   const status = sol.verification.status;
-  const contestLink = toInternalPath(config, ["solutions", sol.contest_id]);
-  const problemLink = toInternalPath(config, [
-    "solutions",
-    sol.contest_id,
-    sol.problem_code,
-  ]);
   const inPageItems: { id: string; label: string }[] = [
     { id: "source", label: "Source" },
-    { id: "libraries", label: "Libraries" },
+    { id: "libraries", label: "Depends on" },
   ];
   const showVerification = status !== "not_configured";
   if (showVerification) inPageItems.push({ id: "verification", label: "Verification" });
@@ -437,29 +430,17 @@ async function renderSolutionDetailArticleInner(
     `<header class="page-header">` +
       // Pagefind: title (solution_name) is top-weight per spec §13.
       `<h1 data-pagefind-weight="10">${escapeHtml(sol.solution_name)}</h1>` +
-      `<p class="solution-meta">` +
-        `<a href="${escapeAttribute(contestLink)}">${escapeHtml(sol.contest_id)}</a> / ` +
-        `<a href="${escapeAttribute(problemLink)}">${escapeHtml(sol.problem_code)}</a> ` +
-        `<span class="oj">${escapeHtml(sol.online_judge)}</span>` +
-      `</p>` +
-      `<p class="solution-language-time">` +
+      `<p class="solution-header-meta">` +
         `<span class="language">${escapeHtml(sol.language)}</span> ` +
-        `<time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(sol.solved_at)}</time>` +
+        `<span class="oj">${escapeHtml(sol.online_judge)}</span>` +
+        `<time datetime="${escapeAttribute(sol.solved_at)}">${escapeHtml(formatDetailedTimestamp(sol.solved_at))}</time>` +
+        renderStatus("solution-verification", status) +
       `</p>` +
-      renderStatus("solution-verification", status) +
     `</header>` +
     inPageNav +
     sourceSection +
     `<section id="libraries" aria-labelledby="libraries-heading">` +
-      `<h2 id="libraries-heading">Libraries</h2>` +
-      `<h3>Verifies</h3>` +
-      renderLibraryLinkList(
-        "verifies-list",
-        sol.verifies,
-        config,
-        "This solution does not verify any library.",
-      ) +
-      `<h3>Depends on</h3>` +
+      `<h2 id="libraries-heading">Depends on</h2>` +
       renderLibraryLinkList(
         "depends-on-list",
         sol.direct_dependencies,
@@ -502,7 +483,7 @@ function renderSolutionVerificationSection(sol: SolutionPageData): string {
   const verdict = result.verdict ?? "unknown";
   const judged =
     result.judged_at !== null && result.judged_at !== undefined
-      ? `<dt>Judged</dt><dd><time datetime="${escapeAttribute(result.judged_at)}">${escapeHtml(result.judged_at)}</time></dd>`
+      ? `<dt>Judged</dt><dd><time datetime="${escapeAttribute(result.judged_at)}">${escapeHtml(formatDetailedTimestamp(result.judged_at))}</time></dd>`
       : "";
   const time =
     result.execution_time_ms !== null && result.execution_time_ms !== undefined
