@@ -184,6 +184,16 @@ pub fn validate_result_path(path: &str) -> PersistResult<()> {
             path: path.to_string(),
         });
     }
+    // The leaf must have a non-empty stem — reject `.json` (bare extension).
+    // Otherwise `verification/results/.json` would sail past the prefix and
+    // suffix checks while `is_result_json_path` (the classifier) rejects it,
+    // producing an inconsistent view between the two guards.
+    let leaf = path.rsplit('/').next().unwrap_or("");
+    if leaf.len() <= ".json".len() {
+        return Err(PersistError::InvalidResultPath {
+            path: path.to_string(),
+        });
+    }
     if path.contains("//") || path.contains("\\") || path.contains('\0') {
         return Err(PersistError::InvalidResultPath {
             path: path.to_string(),

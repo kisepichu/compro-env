@@ -1,7 +1,14 @@
 name: verify-worker
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      before:
+        required: true
+        type: string
+      after:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -26,6 +33,9 @@ jobs:
       - name: Classify changed paths
         id: classify
         if: false
+        env:
+          BEFORE: ${{ inputs.before }}
+          AFTER: ${{ inputs.after }}
         run: cargo run --quiet --bin ce -- internal classify-changes --before "$BEFORE" --after "$AFTER"
 
   verify:

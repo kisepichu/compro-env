@@ -380,6 +380,95 @@ fn run_steps_use_env_indirection_for_shas() {
     }
 }
 
+/// #9.6: The integrity workflow's `integrity` job must be gated to PRs whose
+/// head branch is exactly `automation/verify`. Otherwise a human contributor
+/// could modify both a result JSON and the `verify-validate-result-pr`
+/// classifier logic in the same PR and have the integrity gate certify its
+/// own tampering (spec §15.1, §15.3). The bot's App-token writer is the only
+/// actor allowed to push to `automation/verify`.
+#[test]
+fn integrity_workflow_restricted_to_automation_verify_head_ref() {
+    let doc = load_integrity();
+    let jobs_map = jobs(&doc);
+    let job = get(jobs_map, "integrity").expect("missing integrity job");
+    let map = as_map(job, "integrity job");
+    let if_expr = get(map, "if")
+        .and_then(Value::as_str)
+        .expect("integrity job missing `if:` guard");
+    assert_eq!(
+        if_expr, "github.event.pull_request.head.ref == 'automation/verify'",
+        "integrity job must be gated to the automation/verify head ref (spec §15.1, §15.3)"
+    );
+}
+
+/// #9.7: `verify-worker.yml` is `workflow_call`-only and its classify step
+/// references `$BEFORE` / `$AFTER`. Both variables must be wired to
+/// `workflow_call` inputs so plan 061 can enable the step without immediately
+/// failing on empty revisions. The inputs must be `required: true` and
+/// `type: string`, and the classify step must pipe them through an `env:`
+/// block using `${{ inputs.before }}` / `${{ inputs.after }}` (see #9.5 —
+/// direct expression expansion is banned).
+#[test]
+fn verify_worker_defines_before_after_inputs_for_classify() {
+    let doc = load_worker();
+    let root = as_map(&doc, "verify-worker");
+    let on = get(root, "on").expect("missing `on:`");
+    let on_map = as_map(on, "on");
+    let workflow_call = get(on_map, "workflow_call").expect("missing workflow_call trigger");
+    let wc_map = as_map(workflow_call, "workflow_call");
+    let inputs = get(wc_map, "inputs").expect("workflow_call missing `inputs:`");
+    let inputs_map = as_map(inputs, "inputs");
+
+    for name in ["before", "after"] {
+        let input = get(inputs_map, name)
+            .unwrap_or_else(|| panic!("workflow_call.inputs missing {name:?}"));
+        let input_map = as_map(input, name);
+        let required = get(input_map, "required").and_then(Value::as_bool);
+        assert_eq!(
+            required,
+            Some(true),
+            "workflow_call.inputs.{name} must be required: true"
+        );
+        let ty = get(input_map, "type").and_then(Value::as_str);
+        assert_eq!(
+            ty,
+            Some("string"),
+            "workflow_call.inputs.{name} must be type: string"
+        );
+    }
+
+    // Classify step must carry an `env:` block feeding BEFORE / AFTER from
+    // `inputs.*`. Without this the `$BEFORE` / `$AFTER` shell expansions
+    // would be empty when plan 061 removes the `if: false` guard.
+    let jobs_map = jobs(&doc);
+    let classify_job = get(jobs_map, "classify").expect("missing classify job");
+    let classify_steps = steps(classify_job);
+    let classify_step = classify_steps
+        .iter()
+        .find(|s| {
+            s.as_mapping()
+                .and_then(|m| get(m, "id").and_then(Value::as_str))
+                == Some("classify")
+        })
+        .expect("classify job missing step with id: classify");
+    let step_map = as_map(classify_step, "classify step");
+    let env_map = get(step_map, "env")
+        .and_then(Value::as_mapping)
+        .expect("classify step must define an `env:` block wiring BEFORE / AFTER");
+    let before = get(env_map, "BEFORE").and_then(Value::as_str);
+    let after = get(env_map, "AFTER").and_then(Value::as_str);
+    assert_eq!(
+        before,
+        Some("${{ inputs.before }}"),
+        "classify step env.BEFORE must be `${{{{ inputs.before }}}}`"
+    );
+    assert_eq!(
+        after,
+        Some("${{ inputs.after }}"),
+        "classify step env.AFTER must be `${{{{ inputs.after }}}}`"
+    );
+}
+
 /// #10: `verify-worker.yml` is dormant. No other workflow may `uses:` it.
 #[test]
 fn verify_worker_has_no_caller() {

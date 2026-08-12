@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   integrity:
+    if: github.event.pull_request.head.ref == 'automation/verify'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

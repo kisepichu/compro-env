@@ -318,6 +318,18 @@ fn persist_rejects_disallowed_path() {
 }
 
 #[test]
+fn validate_result_path_rejects_bare_json_leaf() {
+    // `verification/results/.json` slips past a naive prefix+suffix check but
+    // is rejected by the classifier's `is_result_json_path`. Keep both guards
+    // in agreement so a future path-construction bug cannot land here.
+    let err = validate_result_path("verification/results/.json").unwrap_err();
+    assert!(
+        matches!(err, PersistError::InvalidResultPath { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
 fn persist_writes_blob_tree_commit_and_updates_ref_when_result_absent() {
     let fx = Fixture::start(happy_script());
     let w = writer(fx.base_url());
