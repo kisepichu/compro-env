@@ -52,6 +52,10 @@ fn load_pages() -> Value {
     load(&workflow_dir().join("pages.yml"))
 }
 
+fn load_dispatcher() -> Value {
+    load(&workflow_dir().join("verify.yml"))
+}
+
 /// Read `.node-version` (Node patch pin per spec §12.15).
 fn node_version_pin() -> String {
     let path = workspace_root().join(".node-version");
@@ -282,12 +286,22 @@ fn environment_names_are_from_allowlist() {
     }
 }
 
-/// #6: Secret-bearing jobs must not check out source or build with cargo.
-/// The whole point of the split is that only the classifier / integrity
-/// jobs touch code (§15.3).
+/// #6 (plan 062): Secret-bearing jobs must not rebuild `ce`. The OJ / App
+/// jobs execute only the pinned `ce` binary artifact — cargo would compile
+/// arbitrary post-merge code with secrets in scope.
+///
+/// Secret jobs may `actions/checkout` a fixed, immutable ref so `ce`'s
+/// runtime helpers (`find_project_root`, `SolutionRepository`) can operate.
+/// The allowed refs are:
+///   - `${{ inputs.after }}`: the immutable SHA `prepare` planned against.
+///   - `automation/verify`: the App-managed state branch, which `submit`
+///     and `poll` read so `ce internal verify-{start,poll}` can see the
+///     record `persist_starting` / `persist_handle` just committed.
+/// The `actions/checkout` SHA pin is covered by test #3.
 #[test]
-fn no_checkout_or_build_in_secret_jobs() {
+fn no_build_or_unpinned_checkout_in_secret_jobs() {
     let banned_cargo_verbs = ["cargo build", "cargo test", "cargo run"];
+    let allowed_ref_needles = ["inputs.after", "automation/verify"];
     for (label, doc) in [
         ("verify-worker", load_worker()),
         ("verify-result-integrity", load_integrity()),
@@ -301,10 +315,24 @@ fn no_checkout_or_build_in_secret_jobs() {
                     Some(m) => m,
                     None => continue,
                 };
-                if let Some(uses) = get(map, "uses").and_then(Value::as_str) {
+                if let Some(uses) = get(map, "uses").and_then(Value::as_str)
+                    && uses.starts_with("actions/checkout@")
+                {
+                    let with = get(map, "with")
+                        .and_then(Value::as_mapping)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{label}: job {job_name:?} step[{idx}] actions/checkout must set `with:` (ref pin required)"
+                            )
+                        });
+                    let refv = get(with, "ref").and_then(Value::as_str);
+                    let matches = refv.is_some_and(|s| {
+                        allowed_ref_needles.iter().any(|needle| s.contains(needle))
+                    });
                     assert!(
-                        !uses.starts_with("actions/checkout"),
-                        "{label}: job {job_name:?} step[{idx}] uses {uses:?} — secret jobs must not checkout"
+                        matches,
+                        "{label}: job {job_name:?} step[{idx}] actions/checkout `ref:` must \
+                         be one of `${{{{ inputs.after }}}}` or `automation/verify`, got {refv:?}"
                     );
                 }
                 if let Some(run) = get(map, "run").and_then(Value::as_str) {
@@ -436,77 +464,73 @@ fn integrity_workflow_restricted_to_automation_verify_head_ref() {
     );
 }
 
-/// #9.7: `verify-worker.yml` is `workflow_call`-only and its classify step
-/// references `$BEFORE` / `$AFTER`. Both variables must be wired to
-/// `workflow_call` inputs so plan 061 can enable the step without immediately
-/// failing on empty revisions. The inputs must be `required: true` and
-/// `type: string`, and the classify step must pipe them through an `env:`
-/// block using `${{ inputs.before }}` / `${{ inputs.after }}` (see #9.5 —
-/// direct expression expansion is banned).
+/// #9.7 (plan 062): The dispatcher `verify.yml` — where classification now
+/// lives (spec §15.3 requires it outside the `verify-heavy` group) — must
+/// pipe the resolved `BEFORE` / `AFTER` values through an `env:` block
+/// before invoking the shell classifier. Direct `${{ github.event... }}`
+/// expansion in `run:` is banned by #9.5; the dispatcher goes further by
+/// funneling both values through named step outputs so downstream steps
+/// consume them from `${{ steps.resolve.outputs.* }}`.
 #[test]
-fn verify_worker_defines_before_after_inputs_for_classify() {
-    let doc = load_worker();
-    let root = as_map(&doc, "verify-worker");
-    let on = get(root, "on").expect("missing `on:`");
-    let on_map = as_map(on, "on");
-    let workflow_call = get(on_map, "workflow_call").expect("missing workflow_call trigger");
-    let wc_map = as_map(workflow_call, "workflow_call");
-    let inputs = get(wc_map, "inputs").expect("workflow_call missing `inputs:`");
-    let inputs_map = as_map(inputs, "inputs");
-
-    for name in ["before", "after"] {
-        let input = get(inputs_map, name)
-            .unwrap_or_else(|| panic!("workflow_call.inputs missing {name:?}"));
-        let input_map = as_map(input, name);
-        let required = get(input_map, "required").and_then(Value::as_bool);
-        assert_eq!(
-            required,
-            Some(true),
-            "workflow_call.inputs.{name} must be required: true"
-        );
-        let ty = get(input_map, "type").and_then(Value::as_str);
-        assert_eq!(
-            ty,
-            Some("string"),
-            "workflow_call.inputs.{name} must be type: string"
-        );
-    }
-
-    // Classify step must carry an `env:` block feeding BEFORE / AFTER from
-    // `inputs.*`. Without this the `$BEFORE` / `$AFTER` shell expansions
-    // would be empty when plan 061 removes the `if: false` guard.
+fn verify_dispatcher_wires_before_after_through_env() {
+    let doc = load_dispatcher();
     let jobs_map = jobs(&doc);
-    let classify_job = get(jobs_map, "classify").expect("missing classify job");
-    let classify_steps = steps(classify_job);
-    let classify_step = classify_steps
+    let dispatch = get(jobs_map, "dispatch").expect("verify.yml missing dispatch job");
+    let dispatch_steps = steps(dispatch);
+    let classify_step = dispatch_steps
         .iter()
         .find(|s| {
             s.as_mapping()
                 .and_then(|m| get(m, "id").and_then(Value::as_str))
                 == Some("classify")
         })
-        .expect("classify job missing step with id: classify");
+        .expect("dispatch job missing step with id: classify");
     let step_map = as_map(classify_step, "classify step");
     let env_map = get(step_map, "env")
         .and_then(Value::as_mapping)
         .expect("classify step must define an `env:` block wiring BEFORE / AFTER");
     let before = get(env_map, "BEFORE").and_then(Value::as_str);
     let after = get(env_map, "AFTER").and_then(Value::as_str);
-    assert_eq!(
-        before,
-        Some("${{ inputs.before }}"),
-        "classify step env.BEFORE must be `${{{{ inputs.before }}}}`"
+    assert!(
+        before.is_some_and(|s| s.contains("steps.resolve.outputs.before")),
+        "classify step env.BEFORE must derive from steps.resolve.outputs.before (got {before:?})"
     );
-    assert_eq!(
-        after,
-        Some("${{ inputs.after }}"),
-        "classify step env.AFTER must be `${{{{ inputs.after }}}}`"
+    assert!(
+        after.is_some_and(|s| s.contains("steps.resolve.outputs.after")),
+        "classify step env.AFTER must derive from steps.resolve.outputs.after (got {after:?})"
     );
+
+    // The worker consumes `after` (it needs the plan base SHA); the dispatcher
+    // resolves both `before` and `after` for its own classification but only
+    // forwards `after`. Assert the worker's `after` input is still
+    // `required: true` and `type: string`.
+    let worker = load_worker();
+    let on = get(as_map(&worker, "verify-worker"), "on").expect("missing `on:`");
+    let workflow_call = get(as_map(on, "on"), "workflow_call").expect("missing workflow_call");
+    let inputs = get(as_map(workflow_call, "workflow_call"), "inputs")
+        .expect("workflow_call missing `inputs:`");
+    let inputs_map = as_map(inputs, "inputs");
+    for name in ["after"] {
+        let input = get(inputs_map, name)
+            .unwrap_or_else(|| panic!("workflow_call.inputs missing {name:?}"));
+        let input_map = as_map(input, name);
+        assert_eq!(
+            get(input_map, "required").and_then(Value::as_bool),
+            Some(true),
+            "workflow_call.inputs.{name} must be required: true"
+        );
+        assert_eq!(
+            get(input_map, "type").and_then(Value::as_str),
+            Some("string"),
+            "workflow_call.inputs.{name} must be type: string"
+        );
+    }
 }
 
-/// #10: `verify-worker.yml` is dormant. No other workflow may `uses:` it.
+/// #10 (plan 062): The dispatcher `verify.yml` is the sole caller of
+/// `verify-worker.yml`. Nothing else may reach the secret-bearing worker.
 #[test]
-fn verify_worker_has_no_caller() {
+fn verify_worker_sole_caller_is_dispatcher() {
     let dir = workflow_dir();
     let entries =
         std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("failed to list {}: {e}", dir.display()));
@@ -525,13 +549,16 @@ fn verify_worker_has_no_caller() {
             .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
         for (idx, line) in content.lines().enumerate() {
             if line.contains(".github/workflows/verify-worker.yml") {
-                callers.push(format!("{}:{}", path.display(), idx + 1));
+                callers.push((name.to_string(), idx + 1));
             }
         }
     }
-    assert!(
-        callers.is_empty(),
-        "verify-worker.yml must have no callers; found: {callers:?}"
+    let caller_files: std::collections::BTreeSet<&str> =
+        callers.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        caller_files,
+        std::collections::BTreeSet::from(["verify.yml"]),
+        "verify-worker.yml must be called only by verify.yml; found: {callers:?}"
     );
 }
 
@@ -1160,5 +1187,616 @@ fn pages_default_permissions_are_read_only() {
             k, "contents",
             "workflow-level permissions must only set `contents`, saw {k:?}"
         );
+    }
+}
+
+// ─── Plan 062: verify activation policy (spec §15.1–§15.4) ───────────────────
+
+const WORKER_JOB_ORDER: [&str; 6] = [
+    "prepare",
+    "persist_starting",
+    "submit",
+    "persist_handle",
+    "poll",
+    "persist_terminal",
+];
+
+const APP_ONLY_JOBS: [&str; 3] = ["persist_starting", "persist_handle", "persist_terminal"];
+const OJ_ONLY_JOBS: [&str; 2] = ["submit", "poll"];
+const LIVE_ONLY_JOBS: [&str; 4] = ["submit", "persist_handle", "poll", "persist_terminal"];
+
+fn seq_str_values<'a>(v: &'a Value) -> Vec<&'a str> {
+    v.as_sequence()
+        .map(|s| s.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default()
+}
+
+fn needs_of<'a>(job: &'a Value) -> Vec<&'a str> {
+    let map = match job.as_mapping() {
+        Some(m) => m,
+        None => return vec![],
+    };
+    match get(map, "needs") {
+        Some(Value::String(s)) => vec![s.as_str()],
+        Some(v) => seq_str_values(v),
+        None => vec![],
+    }
+}
+
+/// #062.1: The dispatcher `verify.yml` triggers on push to main, on a
+/// 5-minute schedule (dense enough for the 5/10/20/40/80-min → 6h retry
+/// budget), and on `workflow_dispatch`. No other trigger is allowed.
+#[test]
+fn dispatcher_triggers_are_push_schedule_manual() {
+    let doc = load_dispatcher();
+    let root = as_map(&doc, "verify.yml");
+    let on = get(root, "on").expect("verify.yml missing `on:`");
+    let on_map = as_map(on, "verify on");
+
+    // Push: main only.
+    let push = get(on_map, "push")
+        .and_then(Value::as_mapping)
+        .expect("verify.yml missing push trigger");
+    let push_branches = get(push, "branches")
+        .and_then(Value::as_sequence)
+        .expect("push.branches must be a sequence");
+    let listed: Vec<&str> = push_branches.iter().filter_map(Value::as_str).collect();
+    assert_eq!(
+        listed,
+        vec!["main"],
+        "verify.yml push branches must be exactly [main]"
+    );
+
+    // Schedule: at least one cron entry, and every entry is 5-minute cadence.
+    let schedule = get(on_map, "schedule")
+        .and_then(Value::as_sequence)
+        .expect("verify.yml missing schedule trigger");
+    assert!(
+        !schedule.is_empty(),
+        "verify.yml schedule must not be empty"
+    );
+    for entry in schedule {
+        let cron = get(as_map(entry, "schedule entry"), "cron")
+            .and_then(Value::as_str)
+            .expect("schedule entry missing cron");
+        assert!(
+            cron.starts_with("*/5 "),
+            "verify.yml schedule cron {cron:?} must be 5-minute cadence \
+             so the 5/10/20/40/80-min retry ladder is honored"
+        );
+    }
+
+    // Manual dispatch must be present.
+    assert!(
+        get(on_map, "workflow_dispatch").is_some(),
+        "verify.yml must accept workflow_dispatch"
+    );
+
+    // No other trigger.
+    for banned in [
+        "pull_request",
+        "pull_request_target",
+        "workflow_call",
+        "issue_comment",
+        "release",
+    ] {
+        assert!(
+            get(on_map, banned).is_none(),
+            "verify.yml must not use trigger {banned:?}"
+        );
+    }
+}
+
+/// #062.2: Every job in the dispatcher is gated on the master activation
+/// switch `vars.VERIFY_ACTIVATED == 'true'`. Pre-G2 the workflow is fully
+/// dormant even though the cron is armed.
+#[test]
+fn dispatcher_jobs_gated_on_verify_activated() {
+    let doc = load_dispatcher();
+    for (job_name, job) in jobs(&doc) {
+        let map = as_map(job, "job");
+        let if_expr = get(map, "if")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("verify.yml job {job_name:?} missing `if:` guard"));
+        assert!(
+            if_expr.contains("vars.VERIFY_ACTIVATED == 'true'"),
+            "verify.yml job {job_name:?} `if:` must gate on \
+             `vars.VERIFY_ACTIVATED == 'true'` (got {if_expr:?})"
+        );
+    }
+}
+
+/// #062.3: The dispatcher itself must live OUTSIDE the `verify-heavy`
+/// concurrency group (spec §15.3). No workflow-level `concurrency:` and no
+/// job-level `concurrency:` on the classify job.
+#[test]
+fn dispatcher_is_outside_verify_heavy_group() {
+    let doc = load_dispatcher();
+    let root = as_map(&doc, "verify.yml");
+    assert!(
+        get(root, "concurrency").is_none(),
+        "verify.yml must not set workflow-level concurrency \
+         (classification must run outside verify-heavy per §15.3)"
+    );
+    for (job_name, job) in jobs(&doc) {
+        let map = as_map(job, "job");
+        if let Some(concurrency) = get(map, "concurrency") {
+            // The invoked reusable worker will set the group; the dispatcher
+            // job itself must not.
+            let name = job_name.as_str().unwrap_or("");
+            if name == "worker" {
+                continue;
+            }
+            panic!("verify.yml job {job_name:?} must not declare concurrency: {concurrency:?}");
+        }
+    }
+}
+
+/// #062.4: The dispatcher is secretless — no job carries an `environment:`
+/// and no `run:` or `env:` mentions `secrets.*`.
+#[test]
+fn dispatcher_is_secretless() {
+    let doc = load_dispatcher();
+    for (job_name, job) in jobs(&doc) {
+        let map = as_map(job, "job");
+        assert!(
+            get(map, "environment").is_none(),
+            "verify.yml job {job_name:?} must not bind an environment"
+        );
+        for (idx, step) in steps(job).iter().enumerate() {
+            let smap = match step.as_mapping() {
+                Some(m) => m,
+                None => continue,
+            };
+            if let Some(run) = get(smap, "run").and_then(Value::as_str) {
+                assert!(
+                    !run.contains("secrets."),
+                    "verify.yml job {job_name:?} step[{idx}] references secrets.* in run"
+                );
+            }
+            if let Some(env_block) = get(smap, "env").and_then(Value::as_mapping) {
+                for (_k, v) in env_block {
+                    if let Some(s) = v.as_str() {
+                        assert!(
+                            !s.contains("secrets."),
+                            "verify.yml job {job_name:?} step[{idx}] wires secrets.* into env"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// #062.5: The dispatcher's `worker` job is what invokes the worker, gated
+/// on `vars.VERIFY_ACTIVATED`, `dispatch.outputs.run_worker == 'true'`, and
+/// the `main` branch. `secrets: inherit` is required so the worker can see
+/// its two environment-scoped secrets.
+#[test]
+fn dispatcher_worker_call_is_correctly_gated() {
+    let doc = load_dispatcher();
+    let jobs_map = jobs(&doc);
+    let worker = get(jobs_map, "worker").expect("verify.yml missing worker job");
+    let map = as_map(worker, "worker job");
+
+    let uses = get(map, "uses")
+        .and_then(Value::as_str)
+        .expect("worker job must be a reusable workflow call");
+    assert_eq!(
+        uses, "./.github/workflows/verify-worker.yml",
+        "worker job must invoke ./.github/workflows/verify-worker.yml"
+    );
+
+    let if_expr = get(map, "if")
+        .and_then(Value::as_str)
+        .expect("worker job missing `if:` guard");
+    for needle in [
+        "vars.VERIFY_ACTIVATED == 'true'",
+        "needs.dispatch.outputs.run_worker == 'true'",
+        "github.ref == 'refs/heads/main'",
+    ] {
+        assert!(
+            if_expr.contains(needle),
+            "worker job `if:` must contain {needle:?} (got {if_expr:?})"
+        );
+    }
+
+    let secrets = get(map, "secrets").and_then(Value::as_str);
+    assert_eq!(
+        secrets,
+        Some("inherit"),
+        "worker job must pass `secrets: inherit`"
+    );
+}
+
+/// #062.6: The worker's concurrency group is `verify-heavy` with
+/// `cancel-in-progress: false` (spec §15.1: 実行中 worker は新しい push で cancel しない).
+#[test]
+fn worker_uses_verify_heavy_group_without_cancellation() {
+    let doc = load_worker();
+    let root = as_map(&doc, "verify-worker.yml");
+    let concurrency = get(root, "concurrency")
+        .and_then(Value::as_mapping)
+        .expect("verify-worker.yml must set workflow-level concurrency");
+    let group = get(concurrency, "group").and_then(Value::as_str);
+    assert_eq!(
+        group,
+        Some("verify-heavy"),
+        "worker concurrency group must be `verify-heavy`"
+    );
+    let cancel = get(concurrency, "cancel-in-progress").and_then(Value::as_bool);
+    assert_eq!(
+        cancel,
+        Some(false),
+        "worker concurrency must NOT cancel in progress"
+    );
+}
+
+/// #062.7: The six-job chain executes in the exact order
+/// `prepare → persist_starting → submit → persist_handle → poll → persist_terminal`,
+/// enforced by `needs:` declarations. No job may be missing or reordered.
+#[test]
+fn worker_job_chain_is_ordered() {
+    let doc = load_worker();
+    let jobs_map = jobs(&doc);
+    for name in WORKER_JOB_ORDER {
+        assert!(
+            jobs_map.contains_key(Value::String(name.into())),
+            "verify-worker.yml missing required job {name:?}"
+        );
+    }
+    for (idx, name) in WORKER_JOB_ORDER.iter().enumerate() {
+        let job = get(jobs_map, name).unwrap();
+        let needs = needs_of(job);
+        if idx == 0 {
+            // prepare has no needs; jobs after prepare must transitively
+            // depend on it.
+            assert!(needs.is_empty(), "job {name:?} must have no needs");
+            continue;
+        }
+        // Each downstream job must depend on `prepare` (for the artifact
+        // hashes) and on the immediately preceding job (for ordering).
+        let prev = WORKER_JOB_ORDER[idx - 1];
+        assert!(
+            needs.contains(&"prepare"),
+            "job {name:?} needs must include `prepare` (got {needs:?})"
+        );
+        assert!(
+            needs.contains(&prev) || prev == "prepare",
+            "job {name:?} needs must include preceding job {prev:?} (got {needs:?})"
+        );
+    }
+}
+
+/// #062.8: The environment bindings partition into App-only vs. OJ-only vs.
+/// none. This is spec §15.4's credential separation — no single job carries
+/// both credentials, and every downstream job carries exactly one.
+#[test]
+fn worker_environments_partition_credentials() {
+    let doc = load_worker();
+    let jobs_map = jobs(&doc);
+
+    // prepare: no environment.
+    let prepare = get(jobs_map, "prepare").expect("missing prepare job");
+    assert!(
+        get(as_map(prepare, "prepare"), "environment").is_none(),
+        "prepare job must not bind an environment (it is secretless per §15.4)"
+    );
+
+    for name in APP_ONLY_JOBS {
+        let job = get(jobs_map, name).unwrap();
+        let env = get(as_map(job, name), "environment").and_then(Value::as_str);
+        assert_eq!(
+            env,
+            Some("verify-state"),
+            "job {name:?} must bind environment `verify-state`"
+        );
+    }
+    for name in OJ_ONLY_JOBS {
+        let job = get(jobs_map, name).unwrap();
+        let env = get(as_map(job, name), "environment").and_then(Value::as_str);
+        assert_eq!(
+            env,
+            Some("oj-library-checker"),
+            "job {name:?} must bind environment `oj-library-checker`"
+        );
+    }
+}
+
+/// #062.9: `submit`, `persist_handle`, `poll`, `persist_terminal` are gated
+/// on `inputs.mode == 'live'`. `dry-run` exercises only prepare and
+/// persist_starting (Task 3 CAS+permissions dry run).
+#[test]
+fn worker_live_only_jobs_are_mode_gated() {
+    let doc = load_worker();
+    let jobs_map = jobs(&doc);
+    for name in LIVE_ONLY_JOBS {
+        let job = get(jobs_map, name).unwrap();
+        let if_expr = get(as_map(job, name), "if")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("job {name:?} must be gated on inputs.mode"));
+        assert!(
+            if_expr.contains("inputs.mode == 'live'"),
+            "job {name:?} `if:` must contain `inputs.mode == 'live'` (got {if_expr:?})"
+        );
+    }
+}
+
+/// #062.10: Every job that downloads a `verify-*` artifact must re-validate
+/// its SHA256 against `needs.prepare.outputs.plan_sha` (and companion outputs
+/// for `ce`, `handle`, `terminal`). This is the "secret jobs download only
+/// reviewed pinned artifacts" invariant from plan 062 Task 1.
+#[test]
+fn worker_secret_jobs_validate_artifact_digests() {
+    let doc = load_worker();
+    let jobs_map = jobs(&doc);
+    for name in WORKER_JOB_ORDER.iter().skip(1) {
+        let job = get(jobs_map, name).unwrap();
+        let mut has_download = false;
+        let mut has_plan_sha_check = false;
+        for step in steps(job) {
+            let map = match step.as_mapping() {
+                Some(m) => m,
+                None => continue,
+            };
+            if let Some(uses) = get(map, "uses").and_then(Value::as_str)
+                && uses.starts_with("actions/download-artifact@")
+            {
+                has_download = true;
+            }
+            if let Some(run) = get(map, "run").and_then(Value::as_str)
+                && run.contains("sha256sum")
+                && run.contains("EXPECTED_PLAN_SHA")
+            {
+                has_plan_sha_check = true;
+            }
+        }
+        assert!(
+            has_download,
+            "job {name:?} must download at least one pinned artifact"
+        );
+        assert!(
+            has_plan_sha_check,
+            "job {name:?} must re-validate plan SHA256 against needs.prepare.outputs.plan_sha \
+             before running ./ce"
+        );
+    }
+}
+
+/// #062.11: OJ-bearing jobs (`submit`, `poll`) never reference App secrets;
+/// App-bearing jobs (`persist_*`) never reference OJ secrets. This is a
+/// per-job cross-check on top of the existing #7 test. Secrets can be
+/// wired through either `env:` (shell) or `with:` (action inputs, e.g.
+/// `private-key: ${{ secrets.VERIFY_APP_PRIVATE_KEY }}` on
+/// `actions/create-github-app-token`), so both blocks are walked.
+#[test]
+fn worker_oj_and_app_secrets_are_disjoint_per_job() {
+    fn walk_step_for_forbidden_secret(
+        step: &Value,
+        job_name: &str,
+        forbidden_prefix: &str,
+        allowed_kind: &str,
+    ) {
+        let map = match step.as_mapping() {
+            Some(m) => m,
+            None => return,
+        };
+        for field in ["env", "with"] {
+            let block = match get(map, field).and_then(Value::as_mapping) {
+                Some(b) => b,
+                None => continue,
+            };
+            for (_, v) in block {
+                if let Some(s) = v.as_str()
+                    && s.contains(forbidden_prefix)
+                {
+                    panic!(
+                        "{allowed_kind}-only job {job_name:?} must not reference \
+                         {forbidden_prefix}* (found in `{field}:` value {s:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    let doc = load_worker();
+    let jobs_map = jobs(&doc);
+    for name in OJ_ONLY_JOBS {
+        let job = get(jobs_map, name).unwrap();
+        for step in steps(job) {
+            walk_step_for_forbidden_secret(step, name, "secrets.VERIFY_APP_", "OJ");
+        }
+    }
+    for name in APP_ONLY_JOBS {
+        let job = get(jobs_map, name).unwrap();
+        for step in steps(job) {
+            walk_step_for_forbidden_secret(step, name, "secrets.LIBRARYCHECKER_", "App");
+        }
+    }
+}
+
+/// #062.12: App-only jobs must mint the App installation token via
+/// `actions/create-github-app-token` (SHA-pinned). The App ID comes from
+/// `vars.VERIFY_APP_ID`; the private key from `secrets.VERIFY_APP_PRIVATE_KEY`.
+#[test]
+fn worker_app_jobs_use_create_github_app_token() {
+    let doc = load_worker();
+    let jobs_map = jobs(&doc);
+    for name in APP_ONLY_JOBS {
+        let job = get(jobs_map, name).unwrap();
+        let mut found = false;
+        for step in steps(job) {
+            let map = match step.as_mapping() {
+                Some(m) => m,
+                None => continue,
+            };
+            let uses = match get(map, "uses").and_then(Value::as_str) {
+                Some(u) => u,
+                None => continue,
+            };
+            if !uses.starts_with("actions/create-github-app-token@") {
+                continue;
+            }
+            found = true;
+            let with = get(map, "with")
+                .and_then(Value::as_mapping)
+                .unwrap_or_else(|| panic!("job {name:?} app-token step must set `with:`"));
+            let app_id = get(with, "app-id").and_then(Value::as_str);
+            assert_eq!(
+                app_id,
+                Some("${{ vars.VERIFY_APP_ID }}"),
+                "job {name:?} app-token app-id must be vars.VERIFY_APP_ID"
+            );
+            let key = get(with, "private-key").and_then(Value::as_str);
+            assert_eq!(
+                key,
+                Some("${{ secrets.VERIFY_APP_PRIVATE_KEY }}"),
+                "job {name:?} app-token private-key must be secrets.VERIFY_APP_PRIVATE_KEY"
+            );
+        }
+        assert!(
+            found,
+            "job {name:?} must mint an App token via actions/create-github-app-token"
+        );
+    }
+}
+
+/// #062.13: The `persist_*` jobs must invoke `ce internal verify-persist`
+/// with the token passed through the process environment (never on the
+/// command line or in job outputs). We assert the shell reads `GH_APP_TOKEN`
+/// via `--token-env GH_APP_TOKEN` and the step wires the token through an
+/// `env:` block, not through `run: echo $TOKEN`.
+#[test]
+fn worker_persist_jobs_pass_token_via_env_only() {
+    let doc = load_worker();
+    let jobs_map = jobs(&doc);
+    for name in APP_ONLY_JOBS {
+        let job = get(jobs_map, name).unwrap();
+        let mut has_persist = false;
+        for step in steps(job) {
+            let map = match step.as_mapping() {
+                Some(m) => m,
+                None => continue,
+            };
+            let run = match get(map, "run").and_then(Value::as_str) {
+                Some(s) => s,
+                None => continue,
+            };
+            if !run.contains("verify-persist") {
+                continue;
+            }
+            has_persist = true;
+            assert!(
+                run.contains("--token-env GH_APP_TOKEN"),
+                "persist step in {name:?} must use `--token-env GH_APP_TOKEN` (got {run:?})"
+            );
+            let env_block = get(map, "env")
+                .and_then(Value::as_mapping)
+                .unwrap_or_else(|| panic!("persist step in {name:?} must define an `env:` block"));
+            let token = get(env_block, "GH_APP_TOKEN").and_then(Value::as_str);
+            assert!(
+                token.is_some_and(|s| s.contains("app_token") && s.contains(".outputs.token")),
+                "persist step in {name:?} env.GH_APP_TOKEN must be wired from the app-token step's \
+                 outputs.token (got {token:?})"
+            );
+        }
+        assert!(has_persist, "job {name:?} must call verify-persist");
+    }
+}
+
+/// #062.14: The worker rejects triggers other than `workflow_call`. The
+/// concurrency group and secret environments would be catastrophic under a
+/// `push` or `pull_request` trigger.
+#[test]
+fn worker_is_workflow_call_only() {
+    let doc = load_worker();
+    let root = as_map(&doc, "verify-worker.yml");
+    let on = get(root, "on").expect("worker missing `on:`");
+    let on_map = as_map(on, "on");
+    assert_eq!(
+        on_map.len(),
+        1,
+        "verify-worker.yml `on:` must contain exactly one trigger"
+    );
+    assert!(
+        get(on_map, "workflow_call").is_some(),
+        "verify-worker.yml must trigger only on workflow_call"
+    );
+}
+
+/// #062.15: The worker exposes `mode` as a `workflow_call` input (accepting
+/// `live` or `dry-run`) and `solution` as an optional string. `after` carries
+/// the plan base SHA. `before` deliberately does NOT appear on the worker —
+/// classification lives in the dispatcher (§15.3) and nothing inside the
+/// worker consumes it. `mode` must default to `dry-run` for defense-in-depth.
+#[test]
+fn worker_declares_mode_and_solution_inputs() {
+    let doc = load_worker();
+    let root = as_map(&doc, "verify-worker.yml");
+    let on = get(root, "on").expect("worker missing `on:`");
+    let on_map = as_map(on, "on");
+    let wc = get(on_map, "workflow_call").expect("worker missing workflow_call");
+    let inputs = get(as_map(wc, "workflow_call"), "inputs")
+        .and_then(Value::as_mapping)
+        .expect("workflow_call must declare inputs");
+    for name in ["after", "mode", "solution"] {
+        let input =
+            get(inputs, name).unwrap_or_else(|| panic!("workflow_call.inputs missing {name:?}"));
+        let m = as_map(input, name);
+        let ty = get(m, "type").and_then(Value::as_str);
+        assert_eq!(
+            ty,
+            Some("string"),
+            "workflow_call.inputs.{name} must be type: string"
+        );
+    }
+
+    // `mode` must default to `dry-run` so a caller that forgets to pass it
+    // cannot silently exercise the OJ path.
+    let mode_map = as_map(
+        get(inputs, "mode").expect("workflow_call.inputs.mode missing"),
+        "mode",
+    );
+    let mode_default = get(mode_map, "default").and_then(Value::as_str);
+    assert_eq!(
+        mode_default,
+        Some("dry-run"),
+        "workflow_call.inputs.mode default must be `dry-run`"
+    );
+
+    // `before` was removed once classification moved to the dispatcher; any
+    // future accidental re-add would signal a stale contract.
+    assert!(
+        get(inputs, "before").is_none(),
+        "workflow_call.inputs.before must not exist — classification lives in the dispatcher"
+    );
+}
+
+/// #062.16: `secret-bearing` jobs must not run `git clone` / `git fetch` /
+/// `git checkout` in shell — the only way to materialize source is through
+/// the pinned `actions/checkout@<sha>` action targeting `${{ inputs.after }}`
+/// (validated by test #6 above).
+#[test]
+fn worker_secret_jobs_never_git_from_shell() {
+    let doc = load_worker();
+    let banned_shell_snippets = ["git clone", "git checkout", "git fetch"];
+    for (job_name, job) in jobs(&doc) {
+        if !is_secret_job(job) {
+            continue;
+        }
+        for (idx, step) in steps(job).iter().enumerate() {
+            let map = match step.as_mapping() {
+                Some(m) => m,
+                None => continue,
+            };
+            if let Some(run) = get(map, "run").and_then(Value::as_str) {
+                for banned in banned_shell_snippets {
+                    assert!(
+                        !run.contains(banned),
+                        "worker: secret job {job_name:?} step[{idx}] runs {banned:?}"
+                    );
+                }
+            }
+        }
     }
 }

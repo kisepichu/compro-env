@@ -54,6 +54,10 @@ pub trait VerifyInput {
 pub trait InternalVerifyPrepareInput {
     fn solution(&self) -> String;
     fn plan_out(&self) -> String;
+    /// Optional `--starting-out FILE`: when set, also emit the `Starting`
+    /// `VerificationRecord` JSON so the App-only persist job can push it
+    /// without contacting the OJ (spec §15.4, dry-run path).
+    fn starting_out(&self) -> Option<String>;
 }
 
 pub trait InternalVerifyStartInput {

@@ -1158,13 +1158,16 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
     use interfaces::controller::input::{
         InternalVerifyPollInput, InternalVerifyPrepareInput, InternalVerifyStartInput,
     };
-    struct PrepIn(String, String);
+    struct PrepIn(String, String, Option<String>);
     impl InternalVerifyPrepareInput for PrepIn {
         fn solution(&self) -> String {
             self.0.clone()
         }
         fn plan_out(&self) -> String {
             self.1.clone()
+        }
+        fn starting_out(&self) -> Option<String> {
+            self.2.clone()
         }
     }
     struct StartIn(String);
@@ -1180,12 +1183,17 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
         }
     }
     let plan_path = env.root.join("plan.json");
+    let starting_path = env.root.join("starting.json");
     let ids = SequenceIdGenerator::new("internal");
     let sleeper = NoopSleeper::new();
     let path = env
         .controller
         .internal_verify_prepare(
-            &PrepIn(LC_SOLUTION.into(), plan_path.display().to_string()),
+            &PrepIn(
+                LC_SOLUTION.into(),
+                plan_path.display().to_string(),
+                Some(starting_path.display().to_string()),
+            ),
             &env.root,
             &env.config,
             &env.manifest,
@@ -1209,6 +1217,19 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
     let plan =
         usecases::verification::plan::SubmissionPlan::from_canonical_json_bytes(&bytes).unwrap();
     assert_eq!(plan.body.solution_id.as_str(), LC_SOLUTION);
+
+    // The `--starting-out` sidecar must round-trip to a `Starting`
+    // VerificationRecord whose plan_hash matches the freshly written plan.
+    let starting_bytes = std::fs::read(&starting_path).expect("starting file should exist");
+    let starting: VerificationRecord = serde_json::from_slice(&starting_bytes)
+        .expect("starting file parses as VerificationRecord");
+    assert_eq!(starting.solution_id.as_str(), LC_SOLUTION);
+    match &starting.state {
+        VerificationState::Starting(s) => {
+            assert_eq!(s.plan_hash, plan.plan_hash);
+        }
+        other => panic!("expected Starting state, got {other:?}"),
+    }
 
     // Now start via internal-verify-start.
     let ids2 = SequenceIdGenerator::new("internal2");

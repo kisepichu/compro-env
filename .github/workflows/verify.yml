@@ -1,0 +1,160 @@
+name: verify
+
+# Dispatcher for the credential-separated verify pipeline (spec §15.1–§15.4).
+# Classifies changes outside the `verify-heavy` concurrency group and calls the
+# reusable worker only when work is warranted. Every job here is secretless;
+# secret-bearing steps live in `verify-worker.yml` behind protected environments.
+#
+# All jobs are gated on the repository variable `VERIFY_ACTIVATED`. The workflow
+# remains dormant until an operator flips it to `true` — see
+# docs/operations/verify-automation.md (human gate G2).
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Every 5 minutes: the retry budget (5/10/20/40/80 min → 6h cap) is honored
+    # by the record's `next_retry_at`; this cron is dense enough to observe it.
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run: skip OJ contact | live: full submission"
+        required: false
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - live
+      solution:
+        description: "Solution ID to verify (e.g. `librarychecker-aplusb/aplusb/main`). Leave blank to skip."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+# Intentionally no workflow-level concurrency: classification must run outside
+# the `verify-heavy` group so a new push cannot displace an in-flight worker.
+
+jobs:
+  dispatch:
+    name: Classify main and decide worker
+    if: vars.VERIFY_ACTIVATED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      before: ${{ steps.resolve.outputs.before }}
+      after: ${{ steps.resolve.outputs.after }}
+      class: ${{ steps.classify.outputs.class }}
+      run_worker: ${{ steps.decide.outputs.run_worker }}
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable @ 2026-08
+        with:
+          toolchain: 1.92.0
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-verify-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-verify-
+            ${{ runner.os }}-cargo-
+
+      - name: Build ce
+        run: cargo build --release --bin ce
+
+      - name: Resolve BEFORE and AFTER
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          ZERO_SHA=0000000000000000000000000000000000000000
+          if [ "$EVENT_NAME" = "push" ]; then
+            BEFORE="$PUSH_BEFORE"
+            AFTER="$PUSH_AFTER"
+            # On branch creation or after certain force-push / rewind
+            # recoveries, `github.event.before` is the all-zeros SHA and
+            # `git diff $ZERO $AFTER` fails. Treat that as "full diff"
+            # by falling back to the AFTER commit's parent, or AFTER
+            # itself if there is no parent.
+            if [ "$BEFORE" = "$ZERO_SHA" ]; then
+              BEFORE=$(git rev-parse "$AFTER^" 2>/dev/null || echo "$AFTER")
+            fi
+          else
+            # schedule / workflow_dispatch: classify HEAD^..HEAD so the worker
+            # still gets valid inputs; classification result is ignored because
+            # schedule/manual always resume the pipeline.
+            BEFORE=$(git rev-parse HEAD^ 2>/dev/null || git rev-parse HEAD)
+            AFTER=$(git rev-parse HEAD)
+          fi
+          echo "before=$BEFORE" >> "$GITHUB_OUTPUT"
+          echo "after=$AFTER" >> "$GITHUB_OUTPUT"
+
+      - name: Classify changes (secretless)
+        id: classify
+        env:
+          BEFORE: ${{ steps.resolve.outputs.before }}
+          AFTER: ${{ steps.resolve.outputs.after }}
+        run: |
+          set -euo pipefail
+          CLASS=$(./target/release/ce internal classify-changes --before "$BEFORE" --after "$AFTER")
+          echo "class=$CLASS" >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to invoke the worker
+        id: decide
+        env:
+          CLASS: ${{ steps.classify.outputs.class }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            schedule|workflow_dispatch)
+              # Always resume on schedule/manual so pending state converges.
+              echo "run_worker=true" >> "$GITHUB_OUTPUT"
+              ;;
+            push)
+              if [ "$CLASS" = "result-only" ] || [ "$CLASS" = "empty" ]; then
+                echo "run_worker=false" >> "$GITHUB_OUTPUT"
+              else
+                echo "run_worker=true" >> "$GITHUB_OUTPUT"
+              fi
+              ;;
+            *)
+              echo "run_worker=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+  worker:
+    name: Invoke verify worker
+    needs: dispatch
+    if: >-
+      vars.VERIFY_ACTIVATED == 'true'
+      && needs.dispatch.outputs.run_worker == 'true'
+      && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/verify-worker.yml
+    with:
+      after: ${{ needs.dispatch.outputs.after }}
+      # Default to `dry-run` for `push` / `schedule` triggers so that when
+      # automatic candidate selection lands, unattended cron ticks and
+      # normal main pushes cannot hit LibraryChecker without an operator
+      # opting in. Only an explicit `workflow_dispatch` with `mode: live`
+      # takes the OJ path.
+      mode: ${{ inputs.mode || 'dry-run' }}
+      solution: ${{ inputs.solution || '' }}
+    secrets: inherit

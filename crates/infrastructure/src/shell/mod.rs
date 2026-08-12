@@ -27,6 +27,7 @@ use usecases::config::Config as _;
 use usecases::online_judge::{CredentialKind, Credentials};
 use usecases::service::Service;
 use usecases::submission::SubmissionStart;
+use usecases::submission_lifecycle::PollEvent;
 
 // The Unix-only runner lives at `crate::command_runner_impl::UnixCommandRunner`;
 // on other targets we fall back to a stub that reports the platform as
@@ -395,7 +396,11 @@ pub fn run() -> Result<()> {
             }
         }
         commands::Commands::Internal { subcommand } => match subcommand {
-            commands::InternalSubcommand::VerifyPrepare { solution, plan_out } => {
+            commands::InternalSubcommand::VerifyPrepare {
+                solution,
+                plan_out,
+                starting_out,
+            } => {
                 let root = find_project_root()?;
                 let config = ProjectLibraryConfigLoader::load(&root)?;
                 let (manifest, snapshot) = build_analysis(&root, &config)?;
@@ -404,6 +409,7 @@ pub fn run() -> Result<()> {
                     &commands::InternalVerifyPrepareCommand {
                         solution: solution.clone(),
                         plan_out: plan_out.clone(),
+                        starting_out: starting_out.clone(),
                     },
                     &root,
                     &config,
@@ -437,7 +443,12 @@ pub fn run() -> Result<()> {
                     &usecases::submission_lifecycle::NoRetryHint,
                     usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
                 )?;
-                println!("{event:?}");
+                // Emit the post-start record as JSON so the App-only persist
+                // job can consume it directly via `--candidate-in` (CI split).
+                let record = start_event_record(&event);
+                let json = serde_json::to_string(record)
+                    .map_err(|e| anyhow::anyhow!("failed to serialize start record: {e}"))?;
+                println!("{json}");
                 Ok(())
             }
             commands::InternalSubcommand::VerifyPoll { solution } => {
@@ -459,11 +470,24 @@ pub fn run() -> Result<()> {
                     &usecases::submission_lifecycle::NoRetryHint,
                     usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
                 )?;
-                use usecases::submission_lifecycle::PollEvent;
+                // Emit the current record so persist_terminal can hand it
+                // to `verify-persist`. Terminal states (Completed /
+                // Unavailable) exit 0. Non-terminal states
+                // (BudgetExhausted / HandleLost / InfrastructureError)
+                // exit 1 so the CI job status reflects the outcome; the
+                // workflow gates persist_terminal on `!cancelled()` +
+                // `has_terminal`, so the emitted record is committed to
+                // `automation/verify` before the job status flips red.
+                use std::io::Write as _;
+                let record = poll_event_record(&event);
+                let json = serde_json::to_string(record)
+                    .map_err(|e| anyhow::anyhow!("failed to serialize poll record: {e}"))?;
+                println!("{json}");
                 let exit_code = match event {
-                    PollEvent::Completed { .. } => 0,
+                    PollEvent::Completed { .. } | PollEvent::Unavailable { .. } => 0,
                     _ => 1,
                 };
+                let _ = std::io::stdout().flush();
                 std::process::exit(exit_code);
             }
             commands::InternalSubcommand::ClassifyChanges {
@@ -1131,6 +1155,33 @@ fn format_status(status: &usecases::service::verify::VerifyStatus) -> String {
         VerifyStatus::Pending { state, summary } => format!("pending [{state}] ({summary})"),
         VerifyStatus::OjBlocked { oj } => format!("skipped: {oj} already has an in-flight attempt"),
         VerifyStatus::InfraError { summary } => format!("infrastructure error ({summary})"),
+    }
+}
+
+/// Extracts the `VerificationRecord` payload from a [`StartEvent`]. Every
+/// variant carries a record — the post-start persisted state — so the CI
+/// boundary can serialize it to JSON without pattern-matching downstream.
+fn start_event_record(
+    event: &usecases::submission_lifecycle::StartEvent,
+) -> &domain::verification::VerificationRecord {
+    use usecases::submission_lifecycle::StartEvent;
+    match event {
+        StartEvent::Trackable { record }
+        | StartEvent::Unavailable { record }
+        | StartEvent::AcceptanceUnknown { record }
+        | StartEvent::ConfirmedNotAccepted { record }
+        | StartEvent::InfrastructureError { record } => record,
+    }
+}
+
+/// Extracts the `VerificationRecord` payload from a [`PollEvent`].
+fn poll_event_record(event: &PollEvent) -> &domain::verification::VerificationRecord {
+    match event {
+        PollEvent::Completed { record }
+        | PollEvent::Unavailable { record }
+        | PollEvent::BudgetExhausted { record }
+        | PollEvent::InfrastructureError { record }
+        | PollEvent::HandleLost { record } => record,
     }
 }
 

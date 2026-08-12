@@ -1,63 +1,642 @@
 name: verify-worker
 
+# Credential-separated verification pipeline (spec §15.1–§15.4).
+#
+# The pipeline alternates between:
+#   - secretless `prepare` (produces immutable artifacts + digests)
+#   - App-only `persist_*` jobs (write to `automation/verify` via App token)
+#   - OJ-only `submit` / `poll` jobs (contact LibraryChecker with a refresh token)
+#
+# Every secret-bearing job runs from a pinned artifact whose SHA256 is emitted
+# by `prepare` and re-validated at the top of the job — no job re-runs cargo,
+# no job checks out source, and OJ / App credentials never share a job env.
+
 on:
   workflow_call:
     inputs:
-      before:
-        required: true
-        type: string
       after:
+        # Immutable commit SHA the plan is frozen against; forwarded from the
+        # dispatcher's `Resolve BEFORE and AFTER` step. Consumed as the CAS
+        # `base_sha` in every `persist_*` job.
         required: true
         type: string
+      mode:
+        # `dry-run` runs prepare → persist_starting only (no OJ contact). `live`
+        # runs the full six-job chain, gating `submit` / `persist_handle` /
+        # `poll` / `persist_terminal` on the OJ credential environment. Only
+        # `persist_starting` is unconditional — the other `persist_*` jobs are
+        # `mode == 'live'`-gated because they consume artifacts that the OJ
+        # steps produce. Default is `dry-run` so a caller that forgets to pass
+        # `mode:` cannot silently exercise the OJ path.
+        required: false
+        type: string
+        default: dry-run
+      solution:
+        # Solution ID (e.g. `librarychecker-aplusb/aplusb/main`). Empty means
+        # "nothing to do this run" (has_work=false, all downstream jobs skip).
+        # Automatic candidate selection is a follow-up plan; for now the
+        # dispatcher forwards a `workflow_dispatch` operator selection or an
+        # empty string from push / schedule triggers.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
 concurrency:
-  group: verify-main
+  # Only heavy verify runs. Classification lives outside this group (spec §15.3)
+  # so a new push cannot displace an in-flight worker.
+  group: verify-heavy
   cancel-in-progress: false
 
 jobs:
-  classify:
+  prepare:
+    name: Prepare immutable plan (secretless)
     runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
-      class: ${{ steps.classify.outputs.class }}
+      has_work: ${{ steps.build_plan.outputs.has_work }}
+      solution_id: ${{ steps.build_plan.outputs.solution_id }}
+      plan_sha: ${{ steps.hash.outputs.plan_sha }}
+      starting_sha: ${{ steps.hash.outputs.starting_sha }}
+      ce_sha: ${{ steps.hash.outputs.ce_sha }}
+      base_sha: ${{ inputs.after }}
+      artifact_suffix: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - name: Checkout
-        if: false
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Checkout with full history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0
-      - name: Classify changed paths
-        id: classify
-        if: false
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable @ 2026-08
+        with:
+          toolchain: 1.92.0
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-verify-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-verify-
+            ${{ runner.os }}-cargo-
+
+      - name: Build ce
+        run: cargo build --release --bin ce
+
+      - name: Freeze plan and starting record
+        id: build_plan
         env:
-          BEFORE: ${{ inputs.before }}
-          AFTER: ${{ inputs.after }}
-        run: cargo run --quiet --bin ce -- internal classify-changes --before "$BEFORE" --after "$AFTER"
+          SOLUTION: ${{ inputs.solution }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          if [ -z "$SOLUTION" ]; then
+            # Empty solution input: nothing to prepare this run. Downstream
+            # jobs will skip via `if: needs.prepare.outputs.has_work == 'true'`.
+            echo "has_work=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ./target/release/ce internal verify-prepare \
+            --solution "$SOLUTION" \
+            --plan-out artifacts/plan.json \
+            --starting-out artifacts/starting.json
+          echo "solution_id=$SOLUTION" >> "$GITHUB_OUTPUT"
+          echo "has_work=true" >> "$GITHUB_OUTPUT"
 
-  verify:
-    needs: classify
-    runs-on: ubuntu-latest
-    environment: oj-library-checker
-    permissions:
-      contents: read
-    if: needs.classify.outputs.class != 'result-only' && github.ref == 'refs/heads/main'
-    steps:
-      - name: Submit and poll (dormant)
-        if: false
-        run: 'echo "ce verify would run here"'
+      - name: Emit artifact digests
+        id: hash
+        if: steps.build_plan.outputs.has_work == 'true'
+        run: |
+          set -euo pipefail
+          PLAN_SHA=$(sha256sum artifacts/plan.json | awk '{print $1}')
+          STARTING_SHA=$(sha256sum artifacts/starting.json | awk '{print $1}')
+          CE_SHA=$(sha256sum target/release/ce | awk '{print $1}')
+          # `plan.sha256` is the only sidecar carried into the artifact:
+          # `verify-persist --plan-hash-in work/plan.sha256` reads it directly.
+          # `starting_sha` and `ce_sha` are enforced via job outputs so their
+          # digest is baked into the workflow run at prepare time.
+          printf "%s" "$PLAN_SHA" > artifacts/plan.sha256
+          cp target/release/ce artifacts/ce
+          echo "plan_sha=$PLAN_SHA" >> "$GITHUB_OUTPUT"
+          echo "starting_sha=$STARTING_SHA" >> "$GITHUB_OUTPUT"
+          echo "ce_sha=$CE_SHA" >> "$GITHUB_OUTPUT"
 
-  persist:
-    needs: verify
-    runs-on: ubuntu-latest
+      - name: Upload plan artifact
+        if: steps.build_plan.outputs.has_work == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: verify-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/plan.json
+            artifacts/plan.sha256
+            artifacts/starting.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload ce binary artifact
+        if: steps.build_plan.outputs.has_work == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: verify-ce-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ce
+          if-no-files-found: error
+          retention-days: 7
+
+  persist_starting:
+    name: Persist Starting state (App-only)
+    needs: prepare
+    if: needs.prepare.outputs.has_work == 'true'
     environment: verify-state
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    if: false
     steps:
-      - name: Persist verification state (dormant)
-        if: false
-        run: 'echo "ce internal verify-persist would run here"'
+      - name: Download plan artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-plan-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Download ce binary artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-ce-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Validate artifact digests
+        env:
+          EXPECTED_PLAN_SHA: ${{ needs.prepare.outputs.plan_sha }}
+          EXPECTED_STARTING_SHA: ${{ needs.prepare.outputs.starting_sha }}
+          EXPECTED_CE_SHA: ${{ needs.prepare.outputs.ce_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_PLAN=$(sha256sum work/plan.json | awk '{print $1}')
+          ACTUAL_STARTING=$(sha256sum work/starting.json | awk '{print $1}')
+          ACTUAL_CE=$(sha256sum work/ce | awk '{print $1}')
+          if [ "$ACTUAL_PLAN" != "$EXPECTED_PLAN_SHA" ]; then
+            echo "plan artifact digest mismatch: expected $EXPECTED_PLAN_SHA, got $ACTUAL_PLAN"
+            exit 1
+          fi
+          if [ "$ACTUAL_STARTING" != "$EXPECTED_STARTING_SHA" ]; then
+            echo "starting artifact digest mismatch: expected $EXPECTED_STARTING_SHA, got $ACTUAL_STARTING"
+            exit 1
+          fi
+          if [ "$ACTUAL_CE" != "$EXPECTED_CE_SHA" ]; then
+            echo "ce artifact digest mismatch: expected $EXPECTED_CE_SHA, got $ACTUAL_CE"
+            exit 1
+          fi
+          chmod +x work/ce
+
+      - name: Mint App installation token
+        id: app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3
+        with:
+          app-id: ${{ vars.VERIFY_APP_ID }}
+          private-key: ${{ secrets.VERIFY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Persist Starting record
+        env:
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-persist \
+            --plan-hash-in work/plan.sha256 \
+            --candidate-in work/starting.json \
+            --repository "$REPOSITORY" \
+            --base-sha "$BASE_SHA" \
+            --token-env GH_APP_TOKEN
+
+  submit:
+    name: Submit plan to OJ (OJ-only)
+    needs: [prepare, persist_starting]
+    if: needs.prepare.outputs.has_work == 'true' && inputs.mode == 'live'
+    environment: oj-library-checker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      handle_sha: ${{ steps.hash_handle.outputs.handle_sha }}
+    steps:
+      # The `ce` internal handlers call find_project_root() +
+      # ProjectLibraryConfigLoader::load() + build_analysis() + the
+      # SolutionRepository at run time. `verify-start` reads the
+      # `Starting` record `persist_starting` just committed to the
+      # `automation/verify` state branch, so checkout targets that branch
+      # instead of main. Its tree is (main@base_sha) + the single
+      # `verification/results/{solution}.json` delta, so config.toml,
+      # templates/, solutions/, and libraries/ still match the SHA the
+      # plan was frozen against. This checkout is read-only source data —
+      # the executable is still the pinned `ce` binary artifact.
+      - name: Checkout automation/verify state branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: automation/verify
+          fetch-depth: 1
+
+      - name: Sanity-check state branch invariants
+        # `verify-start` / `verify-poll` assume the state branch is
+        # `main@base_sha` + a `verification/results/**` delta, so its tree
+        # still contains `templates/`, `config.toml`, `libraries/`, and
+        # `solutions/`. A stray force-push to `automation/verify` (or a
+        # tree-construction bug in `verify-persist`) would surface here
+        # with a clear invariant-violation message instead of leaking
+        # through as an opaque `find_project_root` error later.
+        run: |
+          set -euo pipefail
+          missing=()
+          for entry in templates config.toml libraries solutions; do
+            if [ ! -e "$entry" ]; then
+              missing+=("$entry")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "automation/verify state branch is missing expected entries: ${missing[*]}" >&2
+            echo "This branch must mirror main@base_sha except for verification/results/**." >&2
+            exit 1
+          fi
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-plan-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Download ce binary artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-ce-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Validate artifact digests
+        env:
+          EXPECTED_PLAN_SHA: ${{ needs.prepare.outputs.plan_sha }}
+          EXPECTED_CE_SHA: ${{ needs.prepare.outputs.ce_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_PLAN=$(sha256sum work/plan.json | awk '{print $1}')
+          ACTUAL_CE=$(sha256sum work/ce | awk '{print $1}')
+          if [ "$ACTUAL_PLAN" != "$EXPECTED_PLAN_SHA" ]; then
+            echo "plan artifact digest mismatch"; exit 1
+          fi
+          if [ "$ACTUAL_CE" != "$EXPECTED_CE_SHA" ]; then
+            echo "ce artifact digest mismatch"; exit 1
+          fi
+          chmod +x work/ce
+
+      - name: Configure LibraryChecker session
+        env:
+          LC_REFRESH: ${{ secrets.LIBRARYCHECKER_REFRESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          # umask must precede mkdir so the parent directory is 0700 as well;
+          # otherwise other runner users can enumerate the file name.
+          umask 077
+          mkdir -p "$HOME/.config/ce"
+          # Firebase refresh tokens are base64url + optional dots (JWT-like).
+          # Reject anything else so a malformed secret cannot inject TOML
+          # metacharacters (in particular a single quote would break the
+          # literal string below).
+          if ! printf '%s' "$LC_REFRESH" | LC_ALL=C grep -qE '^[A-Za-z0-9._~+/=-]+$'; then
+            echo "LIBRARYCHECKER_REFRESH_TOKEN contains disallowed characters" >&2
+            exit 1
+          fi
+          # Emit the token as a TOML literal string (single quotes) so no
+          # escape sequences apply. `id_token` is refreshed on demand from
+          # the refresh token so an empty placeholder is fine here.
+          {
+            printf '[librarychecker]\n'
+            printf 'id_token = ""\n'
+            printf "refresh_token = '%s'\n" "$LC_REFRESH"
+          } > "$HOME/.config/ce/session.toml"
+
+      - name: Submit prepared plan
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-start --plan-in work/plan.json > work/handle.json
+
+      - name: Emit handle digest
+        id: hash_handle
+        run: |
+          set -euo pipefail
+          HANDLE_SHA=$(sha256sum work/handle.json | awk '{print $1}')
+          echo "handle_sha=$HANDLE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload handle artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: verify-handle-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work/handle.json
+          if-no-files-found: error
+          retention-days: 7
+
+  persist_handle:
+    name: Persist handle (App-only)
+    needs: [prepare, submit]
+    if: needs.prepare.outputs.has_work == 'true' && inputs.mode == 'live'
+    environment: verify-state
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download ce binary artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-ce-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-plan-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Download handle artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-handle-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Validate artifact digests
+        env:
+          EXPECTED_PLAN_SHA: ${{ needs.prepare.outputs.plan_sha }}
+          EXPECTED_CE_SHA: ${{ needs.prepare.outputs.ce_sha }}
+          EXPECTED_HANDLE_SHA: ${{ needs.submit.outputs.handle_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_PLAN=$(sha256sum work/plan.json | awk '{print $1}')
+          ACTUAL_CE=$(sha256sum work/ce | awk '{print $1}')
+          ACTUAL_HANDLE=$(sha256sum work/handle.json | awk '{print $1}')
+          if [ "$ACTUAL_PLAN" != "$EXPECTED_PLAN_SHA" ]; then echo "plan digest mismatch"; exit 1; fi
+          if [ "$ACTUAL_CE" != "$EXPECTED_CE_SHA" ]; then echo "ce digest mismatch"; exit 1; fi
+          if [ "$ACTUAL_HANDLE" != "$EXPECTED_HANDLE_SHA" ]; then echo "handle digest mismatch"; exit 1; fi
+          chmod +x work/ce
+
+      - name: Mint App installation token
+        id: app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3
+        with:
+          app-id: ${{ vars.VERIFY_APP_ID }}
+          private-key: ${{ secrets.VERIFY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Persist handle record
+        env:
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-persist \
+            --plan-hash-in work/plan.sha256 \
+            --candidate-in work/handle.json \
+            --repository "$REPOSITORY" \
+            --base-sha "$BASE_SHA" \
+            --token-env GH_APP_TOKEN
+
+  poll:
+    name: Poll OJ handle (OJ-only)
+    needs: [prepare, submit, persist_handle]
+    if: needs.prepare.outputs.has_work == 'true' && inputs.mode == 'live'
+    environment: oj-library-checker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      terminal_sha: ${{ steps.hash_terminal.outputs.terminal_sha }}
+      has_terminal: ${{ steps.check_terminal.outputs.has_terminal }}
+    steps:
+      # See the note on the submit job's Checkout step. `verify-poll` reads
+      # the `Trackable` record `persist_handle` committed to
+      # `automation/verify`; the base project tree there matches the plan
+      # base SHA.
+      - name: Checkout automation/verify state branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: automation/verify
+          fetch-depth: 1
+
+      - name: Sanity-check state branch invariants
+        # `verify-start` / `verify-poll` assume the state branch is
+        # `main@base_sha` + a `verification/results/**` delta, so its tree
+        # still contains `templates/`, `config.toml`, `libraries/`, and
+        # `solutions/`. A stray force-push to `automation/verify` (or a
+        # tree-construction bug in `verify-persist`) would surface here
+        # with a clear invariant-violation message instead of leaking
+        # through as an opaque `find_project_root` error later.
+        run: |
+          set -euo pipefail
+          missing=()
+          for entry in templates config.toml libraries solutions; do
+            if [ ! -e "$entry" ]; then
+              missing+=("$entry")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "automation/verify state branch is missing expected entries: ${missing[*]}" >&2
+            echo "This branch must mirror main@base_sha except for verification/results/**." >&2
+            exit 1
+          fi
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-plan-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Download ce binary artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-ce-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Download handle artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-handle-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Validate artifact digests
+        env:
+          EXPECTED_PLAN_SHA: ${{ needs.prepare.outputs.plan_sha }}
+          EXPECTED_CE_SHA: ${{ needs.prepare.outputs.ce_sha }}
+          EXPECTED_HANDLE_SHA: ${{ needs.submit.outputs.handle_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_PLAN=$(sha256sum work/plan.json | awk '{print $1}')
+          ACTUAL_CE=$(sha256sum work/ce | awk '{print $1}')
+          ACTUAL_HANDLE=$(sha256sum work/handle.json | awk '{print $1}')
+          if [ "$ACTUAL_PLAN" != "$EXPECTED_PLAN_SHA" ]; then echo "plan digest mismatch"; exit 1; fi
+          if [ "$ACTUAL_CE" != "$EXPECTED_CE_SHA" ]; then echo "ce digest mismatch"; exit 1; fi
+          if [ "$ACTUAL_HANDLE" != "$EXPECTED_HANDLE_SHA" ]; then echo "handle digest mismatch"; exit 1; fi
+          chmod +x work/ce
+
+      - name: Configure LibraryChecker session
+        env:
+          LC_REFRESH: ${{ secrets.LIBRARYCHECKER_REFRESH_TOKEN }}
+        run: |
+          set -euo pipefail
+          # umask must precede mkdir so the parent directory is 0700 as well;
+          # otherwise other runner users can enumerate the file name.
+          umask 077
+          mkdir -p "$HOME/.config/ce"
+          # Firebase refresh tokens are base64url + optional dots (JWT-like).
+          # Reject anything else so a malformed secret cannot inject TOML
+          # metacharacters (in particular a single quote would break the
+          # literal string below).
+          if ! printf '%s' "$LC_REFRESH" | LC_ALL=C grep -qE '^[A-Za-z0-9._~+/=-]+$'; then
+            echo "LIBRARYCHECKER_REFRESH_TOKEN contains disallowed characters" >&2
+            exit 1
+          fi
+          # Emit the token as a TOML literal string (single quotes) so no
+          # escape sequences apply. `id_token` is refreshed on demand from
+          # the refresh token so an empty placeholder is fine here.
+          {
+            printf '[librarychecker]\n'
+            printf 'id_token = ""\n'
+            printf "refresh_token = '%s'\n" "$LC_REFRESH"
+          } > "$HOME/.config/ce/session.toml"
+
+      - name: Poll handle to terminal or unavailable
+        id: pollstep
+        # verify-poll exits 1 on non-terminal outcomes (BudgetExhausted,
+        # HandleLost, InfrastructureError) but still emits a valid
+        # VerificationRecord to stdout. Keep the emitted record so
+        # persist_terminal can commit the failure back to
+        # `automation/verify`; the terminating "Surface poll outcome"
+        # step below re-raises the failure at the job level.
+        continue-on-error: true
+        env:
+          SOLUTION_ID: ${{ needs.prepare.outputs.solution_id }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-poll --solution "$SOLUTION_ID" > work/terminal.json
+
+      - name: Reject empty terminal payload
+        id: check_terminal
+        run: |
+          set -euo pipefail
+          # Redirecting stdout with `> work/terminal.json` truncates the
+          # file before `verify-poll` runs. If `verify-poll` errored out
+          # before printing (e.g. `find_project_root` failed) the file is
+          # zero bytes and would break `verify-persist --candidate-in`
+          # with an opaque JSON parse error. Fail fast here with a clear
+          # message so persist_terminal skips instead of chasing garbage.
+          if [ ! -s work/terminal.json ]; then
+            echo "verify-poll produced an empty terminal.json — refusing to persist"
+            echo "has_terminal=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "has_terminal=true" >> "$GITHUB_OUTPUT"
+
+      - name: Emit terminal digest
+        id: hash_terminal
+        if: steps.check_terminal.outputs.has_terminal == 'true'
+        run: |
+          set -euo pipefail
+          SHA=$(sha256sum work/terminal.json | awk '{print $1}')
+          echo "terminal_sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload terminal artifact
+        if: steps.check_terminal.outputs.has_terminal == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: verify-terminal-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work/terminal.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Surface poll outcome
+        if: steps.pollstep.outcome == 'failure'
+        run: |
+          echo "::warning::verify-poll ended in a non-terminal state; the emitted record has been queued for persist_terminal."
+          exit 1
+
+  persist_terminal:
+    name: Persist terminal result (App-only)
+    needs: [prepare, poll]
+    # Runs even when `poll` re-raised a non-terminal outcome, so the
+    # emitted `InfrastructureFailure` / `HandleLost` record still gets
+    # written to `automation/verify` instead of leaving the branch stuck
+    # at `Trackable`. `needs.poll.result` must be either `success` or
+    # `failure`; `skipped` (e.g. because `submit` or `persist_handle`
+    # failed upstream) means no `verify-terminal-*` artifact exists to
+    # download, so we skip this job too.
+    if: >-
+      !cancelled()
+      && needs.prepare.result == 'success'
+      && (needs.poll.result == 'success' || needs.poll.result == 'failure')
+      && needs.poll.outputs.has_terminal == 'true'
+      && needs.prepare.outputs.has_work == 'true'
+      && inputs.mode == 'live'
+    environment: verify-state
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download plan artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-plan-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Download ce binary artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-ce-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Download terminal artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: verify-terminal-${{ needs.prepare.outputs.artifact_suffix }}
+          path: work
+
+      - name: Validate artifact digests
+        env:
+          EXPECTED_PLAN_SHA: ${{ needs.prepare.outputs.plan_sha }}
+          EXPECTED_CE_SHA: ${{ needs.prepare.outputs.ce_sha }}
+          EXPECTED_TERMINAL_SHA: ${{ needs.poll.outputs.terminal_sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_PLAN=$(sha256sum work/plan.json | awk '{print $1}')
+          ACTUAL_CE=$(sha256sum work/ce | awk '{print $1}')
+          ACTUAL_TERMINAL=$(sha256sum work/terminal.json | awk '{print $1}')
+          if [ "$ACTUAL_PLAN" != "$EXPECTED_PLAN_SHA" ]; then echo "plan digest mismatch"; exit 1; fi
+          if [ "$ACTUAL_CE" != "$EXPECTED_CE_SHA" ]; then echo "ce digest mismatch"; exit 1; fi
+          if [ "$ACTUAL_TERMINAL" != "$EXPECTED_TERMINAL_SHA" ]; then echo "terminal digest mismatch"; exit 1; fi
+          chmod +x work/ce
+
+      - name: Mint App installation token
+        id: app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3
+        with:
+          app-id: ${{ vars.VERIFY_APP_ID }}
+          private-key: ${{ secrets.VERIFY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Persist terminal record
+        env:
+          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-persist \
+            --plan-hash-in work/plan.sha256 \
+            --candidate-in work/terminal.json \
+            --repository "$REPOSITORY" \
+            --base-sha "$BASE_SHA" \
+            --token-env GH_APP_TOKEN
