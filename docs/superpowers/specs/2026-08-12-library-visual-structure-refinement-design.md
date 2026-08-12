@@ -169,3 +169,12 @@ renderer test で次を固定する。
 - root `/` と project base `/compro-env/` の build / semantic checks が通る。
 
 CSS は Home の subgrid と verification evidence の column 順を新しい DOM contract に合わせる。route、breadcrumb、Pagefind 属性、source line ID、status label は変更しない。
+
+## 6. G1 visual review feedback: Home recent row alignment
+
+Human gate G1 で、Home の recent row にある language と path / contest-problem を少し左へ寄せる。
+desktop subgrid の title と path 系の可変幅比だけを `1fr : 1.4fr` から `0.8fr : 1.6fr` へ変更し、
+Recently updated libraries と Recently solved solutions の開始位置を揃える。
+
+DOM 順、column gap、language の `4.5rem`、date / status の `max-content`、mobile の flex fallback は
+変更しない。これにより右端の日時と status を維持したまま、title の余白だけを metadata 側へ移す。

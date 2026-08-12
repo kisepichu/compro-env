@@ -670,3 +670,71 @@ npm run site:preview
 The user inspects Home, Libraries root/category/detail, Solutions root/contest/problem/detail, and Search at desktop and narrow widths. Specifically confirm compact/detailed time text, evidence links, right-aligned statuses, keyboard focus, sticky in-page navigation, and that removed duplicate metadata is absent.
 
 Do not create the PR until the user approves this visual gate or all feedback is incorporated and the verification steps are rerun.
+
+---
+
+### Task 6: Incorporate the final G1 Home alignment feedback
+
+**Files:**
+- Create: `web/tests/site-css.test.ts`
+- Modify: `web/public/assets/site.css`
+
+**Interfaces:**
+- Consumes: the existing desktop subgrid selectors for Home recent library and solution lists.
+- Produces: matching `0.8fr : 1.6fr` title-to-path track ratios without changing DOM or mobile layout.
+
+- [ ] **Step 1: Write a failing stylesheet contract test**
+
+Read `web/public/assets/site.css`, extract the `grid-template-columns` declaration for
+`.recent-libraries .library-list` and `.recent-solutions .solution-list`, normalize whitespace, and assert both equal:
+
+```text
+minmax(0, 0.8fr) 4.5rem minmax(0, 1.6fr) max-content max-content
+```
+
+- [ ] **Step 2: Run the focused test and observe RED**
+
+Run:
+
+```bash
+npm test -- tests/site-css.test.ts
+```
+
+Expected: both assertions fail because the current tracks are `1fr : 1.4fr`.
+
+- [ ] **Step 3: Apply the minimal desktop CSS change**
+
+Change only the two Home recent list declarations to:
+
+```css
+grid-template-columns:
+  minmax(0, 0.8fr) 4.5rem minmax(0, 1.6fr) max-content max-content;
+```
+
+- [ ] **Step 4: Run focused and full Web verification**
+
+Run:
+
+```bash
+npm test -- tests/site-css.test.ts
+npm test
+npm run verify:builds
+npm run site:build
+```
+
+Expected: all tests pass, both base builds produce 13 HTML pages, and `site-verify: OK` is printed.
+
+- [ ] **Step 5: Re-run stylesheet safety and commit**
+
+Run the comment-stripping stylesheet scan from Task 1 and `git diff --check`, then commit only the CSS contract test and stylesheet:
+
+```bash
+git add web/public/assets/site.css web/tests/site-css.test.ts
+git commit -m "style: align home recent metadata columns"
+```
+
+- [ ] **Step 6: Record G1 approval and continue the rollout**
+
+The user's approval covers all earlier G1 checks plus this requested spacing adjustment. After fresh verification,
+deliver the branch through the rollout's `/pr --base main` workflow; do not reopen the visual gate unless the
+implementation diverges from this exact ratio-only change.
