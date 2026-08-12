@@ -32,12 +32,12 @@ pub fn classify_changes(root: &Path, before: &str, after: &str)
     -> Result<ChangeClass, ChangeClassificationError>;
 ```
 
-- [ ] Write failing repository-fixture tests for empty, one/many results, mixed source, rename/delete,
+- [x] Write failing repository-fixture tests for empty, one/many results, mixed source, rename/delete,
       symlink, invalid SHA, NUL-safe paths, and more than 300 changed files.
-- [ ] Implement `git diff --name-only -z` classification; accept only normal
+- [x] Implement `git diff --name-only -z` classification; accept only normal
       `verification/results/**/*.json` files as result-only.
-- [ ] Run `cargo test -p infrastructure --test git_change_classifier`.
-- [ ] Invoke `/commit` with `feat: classify verification-only Git changes`.
+- [x] Run `cargo test -p infrastructure --test git_change_classifier`.
+- [x] Invoke `/commit` with `feat: classify verification-only Git changes`.
 
 ### Task 2: Write verification state through constrained GitHub APIs
 
@@ -61,12 +61,12 @@ impl GitHubVerificationStateWriter {
 }
 ```
 
-- [ ] Write local-server tests for base SHA, plan hash, schema, attempt CAS, sole-path allowlist, branch exactly
+- [x] Write local-server tests for base SHA, plan hash, schema, attempt CAS, sole-path allowlist, branch exactly
       `automation/verify`, draft/ready, auto-merge, conflict retry, and sanitized request failures.
-- [ ] Use Git Data/Pulls APIs; hold token in `SecretString` and never install it in Git credentials.
-- [ ] Validate base/plan/CAS/path immediately before every mutating API call.
-- [ ] Run `cargo test -p infrastructure --test github_state_writer`.
-- [ ] Invoke `/commit` with `feat: persist verification state through GitHub API`.
+- [x] Use Git Data/Pulls APIs; hold token in `SecretString` and never install it in Git credentials.
+- [x] Validate base/plan/CAS/path immediately before every mutating API call.
+- [x] Run `cargo test -p infrastructure --test github_state_writer`.
+- [x] Invoke `/commit` with `feat: persist verification state through GitHub API`.
 
 ### Task 3: Add hidden artifact commands and policy-checked dormant workflows
 
@@ -77,16 +77,34 @@ impl GitHubVerificationStateWriter {
 - Create: `.github/workflows/verify-worker.yml`
 - Create: `.github/workflows/verify-result-integrity.yml`
 
-- [ ] Add hidden `verify-persist`, `verify-validate-result-pr`, and `classify-changes` commands with strict files.
-- [ ] Write policy tests for no target trigger, main-only secret use, action SHA pins, permissions, environment
+- [x] Add hidden `verify-persist`, `verify-validate-result-pr`, and `classify-changes` commands with strict files.
+- [x] Write policy tests for no target trigger, main-only secret use, action SHA pins, permissions, environment
       names, no checkout/build in secret jobs, OJ/App separation, and result path restriction.
-- [ ] Define `verify-worker.yml` with `workflow_call` only and no caller; define secretless result-integrity PR checks.
-- [ ] Run workflow-policy tests and invoke `/commit` with `ci: add dormant safe verification automation`.
+- [x] Define `verify-worker.yml` with `workflow_call` only and no caller; define secretless result-integrity PR checks.
+- [x] Run workflow-policy tests and invoke `/commit` with `ci: add dormant safe verification automation`.
 
 ### Task 4: Deliver the safe automation foundation
 
-- [ ] Prove no workflow path can currently call an OJ or mint an App token.
-- [ ] Run rollout Rust/Web verification and `git diff --check`.
-- [ ] Invoke `/commit` with `docs: record safe automation completion`.
-- [ ] Invoke `/pr --base main`; link plan 060 and state that it unblocks plan 061.
-- [ ] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+- [x] Prove no workflow path can currently call an OJ or mint an App token.
+- [x] Run rollout Rust/Web verification and `git diff --check`.
+- [x] Invoke `/commit` with `docs: record safe automation completion`.
+- [x] Invoke `/pr --base main`; link plan 060 and state that it unblocks plan 061.
+- [x] Invoke `/pr-review` to no new comments, wait for CI, and merge to `main`.
+      (Review effectively closed: PR #68. Three rounds of Copilot/Claude findings
+      resolved across commits 5e5f7a6, a7644e5, b7b55b1 with matching tests.
+      Two follow-up re-review runs hit the `claude-review.yml` action's
+      25-turn budget without emitting new findings — infrastructure-side, not
+      code-side. CI green, `mergeStateStatus: CLEAN`. Merge action handed to
+      the human at that point per the "destructive shared-state" guidance.)
+
+**Completion notes:**
+
+- `verify-worker.yml` is `workflow_call`-only, has zero callers in the repo, and
+  every executable step is `if: false`. `verify-result-integrity.yml` is a
+  secretless PR check restricted to `paths: [verification/results/**]` with no
+  `environment:` binding. Repo-wide grep for `secrets.OJ*` / `secrets.APP*` /
+  `APP_ID` / `PRIVATE_KEY` returns nothing. No path currently reaches an OJ
+  or mints an App installation token.
+- Delivery gate: `cargo test --all`, `cargo clippy --all --all-features -- -D warnings`,
+  `cargo fmt --all --check`, `git diff --check origin/main...HEAD`, and
+  `npm test` (vitest, 190/190) all exit 0.
