@@ -446,6 +446,46 @@ describe("Library detail (/libraries/{lang}/{source-path}/)", () => {
     expect(judged.textContent).toBe("2026-08-10 13:00 UTC");
   });
 
+  it("links verification evidence to its public solution and ends with status", async () => {
+    const doc = parse(
+      await renderLibraryDetailPage(
+        projectConfig,
+        siteData,
+        siteData.libraries[0],
+      ),
+    );
+    const evidence = doc.querySelector(".verification-evidence")!;
+    const solutionLink = evidence.querySelector(".evidence-solution a")!;
+    expect(solutionLink.textContent).toBe("abc300/a/dijkstra_solve");
+    expect(solutionLink.getAttribute("href")).toBe(
+      "/compro-env/solutions/abc300/a/dijkstra_solve/",
+    );
+    expect(
+      [...evidence.children]
+        .map((element) =>
+          element.classList.contains("evidence-solution")
+            ? "solution"
+            : element.classList.contains("evidence-judged")
+              ? "judged"
+              : element.classList.contains("status-badge")
+                ? "status"
+                : element.classList.contains("stale-reason")
+                  ? "stale"
+                  : "unexpected",
+        )
+        .slice(0, 3),
+    ).toEqual(["solution", "judged", "status"]);
+  });
+
+  it("rejects verification evidence that does not resolve to one public solution", async () => {
+    const broken = buildFixtureSiteData();
+    broken.libraries[0].verification.evidence[0].solution_page_id =
+      "solution:missing/a/answer";
+    await expect(
+      renderLibraryDetailPage(rootConfig, broken, broken.libraries[0]),
+    ).rejects.toThrow(/verification evidence.*public solution/i);
+  });
+
   it("omits documentation section when description is null", async () => {
     const html2 = await renderLibraryDetailPage(rootConfig, siteData, siteData.libraries[1]);
     const doc = parse(html2);
@@ -570,11 +610,43 @@ describe("Solution browse and detail", () => {
     expect(detailStatus.getAttribute("data-status")).toBe("verified");
   });
 
+  it("uses one header metadata row and exposes only direct dependencies", async () => {
+    const sol = siteData.solutions[0];
+    const doc = parse(await renderSolutionDetailPage(rootConfig, siteData, sol));
+    const metadata = doc.querySelector(".solution-header-meta")!;
+    expect(
+      [...metadata.children].map((element) =>
+        element.classList.contains("language")
+          ? "language"
+          : element.classList.contains("oj")
+            ? "oj"
+            : element.matches("time")
+              ? "time"
+              : element.classList.contains("status-badge")
+                ? "status"
+                : "unexpected",
+      ),
+    ).toEqual(["language", "oj", "time", "status"]);
+    expect(doc.querySelector(".solution-meta")).toBeNull();
+    expect(doc.querySelector(".solution-language-time")).toBeNull();
+
+    const navLink = doc.querySelector(
+      '.in-page-navigation a[href="#libraries"]',
+    )!;
+    expect(navLink.textContent).toBe("Depends on");
+    const section = doc.getElementById("libraries")!;
+    expect(section.querySelector("h2")!.textContent).toBe("Depends on");
+    expect(section.querySelector("h3")).toBeNull();
+    expect(section.querySelector(".verifies-list")).toBeNull();
+    expect(section.querySelector(".depends-on-list")).toBeTruthy();
+    expect(sol.verifies.length).toBeGreaterThan(0);
+  });
+
   it("shows detailed UTC times in solution detail metadata and results", async () => {
     const sol = siteData.solutions[0];
     const doc = parse(await renderSolutionDetailPage(rootConfig, siteData, sol));
 
-    const solved = doc.querySelector(".solution-language-time time")!;
+    const solved = doc.querySelector(".solution-header-meta time")!;
     expect(solved.getAttribute("datetime")).toBe("2026-08-10T13:00:00Z");
     expect(solved.textContent).toBe("2026-08-10 13:00 UTC");
 

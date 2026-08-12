@@ -25,6 +25,7 @@ import {
   homePath,
   librariesRootPath,
   libraryPath,
+  solutionPath,
   toInternalPath,
   type UrlConfig,
 } from "../url.ts";
@@ -487,6 +488,8 @@ function renderRelationList(
 }
 
 function renderVerificationEvidenceList(
+  config: UrlConfig,
+  siteData: SiteData,
   evidence: readonly VerificationEvidence[],
 ): string {
   if (evidence.length === 0) {
@@ -494,6 +497,22 @@ function renderVerificationEvidenceList(
   }
   const items = evidence
     .map((ev) => {
+      const solution = siteData.solutions.find(
+        (candidate) =>
+          candidate.page_id === ev.solution_page_id &&
+          candidate.solution_id === ev.solution_id,
+      );
+      if (solution === undefined) {
+        throw new Error(
+          `Verification evidence ${ev.solution_id} does not resolve to a public solution`,
+        );
+      }
+      const solutionHref = solutionPath(
+        config,
+        solution.contest_id,
+        solution.problem_code,
+        solution.solution_name,
+      );
       const time =
         ev.judged_at !== null && ev.judged_at !== undefined
           ? `<time datetime="${escapeAttribute(ev.judged_at)}">${escapeHtml(formatDetailedTimestamp(ev.judged_at))}</time>`
@@ -510,11 +529,11 @@ function renderVerificationEvidenceList(
       return (
         `<li><article class="verification-evidence">` +
           `<p class="evidence-solution">` +
-            `<span class="solution-id"><code>${escapeHtml(ev.solution_id)}</code></span> ` +
+            `<a class="solution-id" href="${escapeAttribute(solutionHref)}"><code>${escapeHtml(ev.solution_id)}</code></a> ` +
             `<span class="oj">${escapeHtml(ev.online_judge)}</span>` +
           `</p>` +
-          renderStatus("evidence", ev.status) +
           ` <p class="evidence-judged">${time}${ojLink}</p>` +
+          renderStatus("evidence", ev.status) +
           stale +
         `</article></li>`
       );
@@ -676,7 +695,7 @@ async function renderLibraryDetailArticleInner(
     `</section>` +
     `<section id="verification" aria-labelledby="verification-heading">` +
       `<h2 id="verification-heading">Verification</h2>` +
-      renderVerificationEvidenceList(lib.verification.evidence) +
+      renderVerificationEvidenceList(config, siteData, lib.verification.evidence) +
     `</section>` +
     `<section id="diagnostics" aria-labelledby="diagnostics-heading">` +
       `<h2 id="diagnostics-heading">Diagnostics</h2>` +

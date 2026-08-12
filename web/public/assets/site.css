@@ -892,8 +892,7 @@ h3 {
 }
 
 .library-meta,
-.solution-meta,
-.solution-language-time {
+.solution-header-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -904,8 +903,8 @@ h3 {
 }
 
 .library-meta .language,
-.solution-language-time .language,
-.solution-meta .oj {
+.solution-header-meta .language,
+.solution-header-meta .oj {
   padding: 2px 8px;
   background: var(--c-surface-sunken);
   border: 1px solid var(--c-border);
@@ -918,6 +917,16 @@ h3 {
   min-width: 0;
   color: var(--c-text);
   overflow-wrap: anywhere;
+}
+
+.solution-header-meta .status-badge {
+  margin: 0;
+}
+
+@media (min-width: 720px) {
+  .solution-header-meta .status-badge {
+    margin-left: auto;
+  }
 }
 
 .in-page-navigation {
@@ -983,7 +992,6 @@ h3 {
 .symbols-list,
 .depends-on-list,
 .used-by-list,
-.verifies-list,
 .relations-list,
 .evidence-list,
 .diagnostics-list {
@@ -995,7 +1003,6 @@ h3 {
 .symbols-list > li,
 .depends-on-list > li,
 .used-by-list > li,
-.verifies-list > li,
 .relations-list > li,
 .evidence-list > li,
 .diagnostics-list > li {
@@ -1010,7 +1017,6 @@ h3 {
 .symbols-list > li:first-child,
 .depends-on-list > li:first-child,
 .used-by-list > li:first-child,
-.verifies-list > li:first-child,
 .relations-list > li:first-child,
 .evidence-list > li:first-child,
 .diagnostics-list > li:first-child {
@@ -1035,8 +1041,7 @@ h3 {
 .symbols-list .qualified,
 .symbols-list .signature,
 .depends-on-list .path,
-.used-by-list .path,
-.verifies-list .path {
+.used-by-list .path {
   min-width: 0;
   font-size: var(--fs-small);
   color: var(--c-text-muted);
@@ -1044,8 +1049,7 @@ h3 {
 }
 
 .depends-on-list .language,
-.used-by-list .language,
-.verifies-list .language {
+.used-by-list .language {
   font-size: var(--fs-small);
   color: var(--c-text-muted);
 }
@@ -1125,8 +1129,8 @@ h3 {
   padding: var(--space-3) var(--space-4);
 }
 
-/* Everything from the verdict badge rightwards is the result, so it sits
-   against the right edge; the solution identity stays left. */
+/* Evidence follows solution -> judged/OJ -> status. The final status sits
+   against the right edge while the solution identity stays left. */
 .verification-evidence .status-badge {
   margin-left: auto;
 }
@@ -1929,9 +1933,9 @@ table.testcases th:nth-child(4) {
  * 17. Verification evidence columns
  *
  * Placed last so it overrides the flex fallback in section 10 without
- * needing extra specificity. Identity stays left; status, judged time
- * and the OJ link share one column set across every row and end flush
- * with the card edge.
+ * needing extra specificity. Solution identity stays left, judged time
+ * and its OJ link occupy the middle, and status ends flush with the
+ * card edge.
  * ---------------------------------------------------------------- */
 
 @media (min-width: 720px) {
