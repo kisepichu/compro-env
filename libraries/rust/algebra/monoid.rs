@@ -27,17 +27,17 @@ impl Monoid for AddMonoid {
 
 #[cfg(test)]
 mod tests {
-    // Glob `use` marks the file `partial` in the rust library-adapter; use explicit imports.
-    use super::{AddMonoid, Monoid};
-
+    // Keep `use super::…` at fn scope; module-level `use` marks the file `partial` in the rust library-adapter.
     #[test]
     fn add_monoid_identity() {
+        use super::{AddMonoid, Monoid};
         assert_eq!(AddMonoid::op(&AddMonoid::id(), &7), 7);
         assert_eq!(AddMonoid::op(&7, &AddMonoid::id()), 7);
     }
 
     #[test]
     fn add_monoid_associativity() {
+        use super::{AddMonoid, Monoid};
         let a = AddMonoid::op(&AddMonoid::op(&1, &2), &3);
         let b = AddMonoid::op(&1, &AddMonoid::op(&2, &3));
         assert_eq!(a, b);
