@@ -115,9 +115,11 @@ jobs:
           PLAN_SHA=$(sha256sum artifacts/plan.json | awk '{print $1}')
           STARTING_SHA=$(sha256sum artifacts/starting.json | awk '{print $1}')
           CE_SHA=$(sha256sum target/release/ce | awk '{print $1}')
+          # `plan.sha256` is the only sidecar carried into the artifact:
+          # `verify-persist --plan-hash-in work/plan.sha256` reads it directly.
+          # `starting_sha` and `ce_sha` are enforced via job outputs so their
+          # digest is baked into the workflow run at prepare time.
           printf "%s" "$PLAN_SHA" > artifacts/plan.sha256
-          printf "%s" "$STARTING_SHA" > artifacts/starting.sha256
-          printf "%s" "$CE_SHA" > artifacts/ce.sha256
           cp target/release/ce artifacts/ce
           echo "plan_sha=$PLAN_SHA" >> "$GITHUB_OUTPUT"
           echo "starting_sha=$STARTING_SHA" >> "$GITHUB_OUTPUT"
@@ -132,7 +134,6 @@ jobs:
             artifacts/plan.json
             artifacts/plan.sha256
             artifacts/starting.json
-            artifacts/starting.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -141,9 +142,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: verify-ce-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            artifacts/ce
-            artifacts/ce.sha256
+          path: artifacts/ce
           if-no-files-found: error
           retention-days: 7
 
@@ -155,8 +154,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    outputs:
-      base_sha: ${{ needs.prepare.outputs.base_sha }}
     steps:
       - name: Download plan artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1

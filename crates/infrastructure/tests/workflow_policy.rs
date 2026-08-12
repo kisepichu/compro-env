@@ -1559,47 +1559,52 @@ fn worker_secret_jobs_validate_artifact_digests() {
 
 /// #062.11: OJ-bearing jobs (`submit`, `poll`) never reference App secrets;
 /// App-bearing jobs (`persist_*`) never reference OJ secrets. This is a
-/// per-job cross-check on top of the existing #7 test.
+/// per-job cross-check on top of the existing #7 test. Secrets can be
+/// wired through either `env:` (shell) or `with:` (action inputs, e.g.
+/// `private-key: ${{ secrets.VERIFY_APP_PRIVATE_KEY }}` on
+/// `actions/create-github-app-token`), so both blocks are walked.
 #[test]
 fn worker_oj_and_app_secrets_are_disjoint_per_job() {
+    fn walk_step_for_forbidden_secret(
+        step: &Value,
+        job_name: &str,
+        forbidden_prefix: &str,
+        allowed_kind: &str,
+    ) {
+        let map = match step.as_mapping() {
+            Some(m) => m,
+            None => return,
+        };
+        for field in ["env", "with"] {
+            let block = match get(map, field).and_then(Value::as_mapping) {
+                Some(b) => b,
+                None => continue,
+            };
+            for (_, v) in block {
+                if let Some(s) = v.as_str()
+                    && s.contains(forbidden_prefix)
+                {
+                    panic!(
+                        "{allowed_kind}-only job {job_name:?} must not reference \
+                         {forbidden_prefix}* (found in `{field}:` value {s:?})"
+                    );
+                }
+            }
+        }
+    }
+
     let doc = load_worker();
     let jobs_map = jobs(&doc);
     for name in OJ_ONLY_JOBS {
         let job = get(jobs_map, name).unwrap();
         for step in steps(job) {
-            let map = match step.as_mapping() {
-                Some(m) => m,
-                None => continue,
-            };
-            if let Some(env_block) = get(map, "env").and_then(Value::as_mapping) {
-                for (_, v) in env_block {
-                    if let Some(s) = v.as_str() {
-                        assert!(
-                            !s.contains("secrets.VERIFY_APP_"),
-                            "OJ-only job {name:?} must not reference secrets.VERIFY_APP_*"
-                        );
-                    }
-                }
-            }
+            walk_step_for_forbidden_secret(step, name, "secrets.VERIFY_APP_", "OJ");
         }
     }
     for name in APP_ONLY_JOBS {
         let job = get(jobs_map, name).unwrap();
         for step in steps(job) {
-            let map = match step.as_mapping() {
-                Some(m) => m,
-                None => continue,
-            };
-            if let Some(env_block) = get(map, "env").and_then(Value::as_mapping) {
-                for (_, v) in env_block {
-                    if let Some(s) = v.as_str() {
-                        assert!(
-                            !s.contains("secrets.LIBRARYCHECKER_"),
-                            "App-only job {name:?} must not reference secrets.LIBRARYCHECKER_*"
-                        );
-                    }
-                }
-            }
+            walk_step_for_forbidden_secret(step, name, "secrets.LIBRARYCHECKER_", "App");
         }
     }
 }
