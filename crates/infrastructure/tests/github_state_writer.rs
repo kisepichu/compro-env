@@ -239,17 +239,29 @@ fn writer(base_url: String) -> GitHubVerificationStateWriter {
 
 // Common happy-path scripts ─────────────────────────────────────────────────
 
+fn base_commit_tree_sha() -> &'static str {
+    "cccccccccccccccccccccccccccccccccccccccc"
+}
+
 fn happy_script() -> Vec<Reply> {
     vec![
         // 1. CAS GET → 404 (result absent)
         Reply::empty(404),
         // 2. POST blob
         Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
-        // 3. POST tree
+        // 3. GET commit → resolve base tree
+        Reply::json(
+            200,
+            serde_json::json!({
+                "sha": base_sha(),
+                "tree": { "sha": base_commit_tree_sha() }
+            }),
+        ),
+        // 4. POST tree
         Reply::json(201, serde_json::json!({ "sha": tree_sha() })),
-        // 4. POST commit
+        // 5. POST commit
         Reply::json(201, serde_json::json!({ "sha": commit_sha() })),
-        // 5. PATCH ref
+        // 6. PATCH ref
         Reply::json(
             200,
             serde_json::json!({
@@ -319,7 +331,7 @@ fn persist_writes_blob_tree_commit_and_updates_ref_when_result_absent() {
     assert_eq!(out.commit_sha, commit_sha());
 
     let recorded = fx.recorded();
-    assert_eq!(recorded.len(), 5, "expected 5 requests, got {recorded:#?}");
+    assert_eq!(recorded.len(), 6, "expected 6 requests, got {recorded:#?}");
 
     // Every request must have carried the Bearer token.
     for r in &recorded {
@@ -353,11 +365,18 @@ fn persist_writes_blob_tree_commit_and_updates_ref_when_result_absent() {
     let round: VerificationRecord = serde_json::from_str(sent_content).unwrap();
     assert_eq!(round.attempt_id.as_str(), "attempt-1");
 
-    // 3. POST tree.
-    assert_eq!(recorded[2].method, "POST");
-    assert_eq!(recorded[2].url, "/repos/owner/repo/git/trees");
-    let tree_body: serde_json::Value = serde_json::from_str(&recorded[2].body).unwrap();
-    assert_eq!(tree_body["base_tree"], base_sha());
+    // 3. GET commit → resolve base tree.
+    assert_eq!(recorded[2].method, "GET");
+    assert_eq!(
+        recorded[2].url,
+        format!("/repos/owner/repo/git/commits/{}", base_sha())
+    );
+
+    // 4. POST tree — base_tree must be the resolved TREE sha, not the commit sha.
+    assert_eq!(recorded[3].method, "POST");
+    assert_eq!(recorded[3].url, "/repos/owner/repo/git/trees");
+    let tree_body: serde_json::Value = serde_json::from_str(&recorded[3].body).unwrap();
+    assert_eq!(tree_body["base_tree"], base_commit_tree_sha());
     let leaves = tree_body["tree"].as_array().unwrap();
     assert_eq!(leaves.len(), 1);
     assert_eq!(leaves[0]["path"], "verification/results/abc999/a/main.json");
@@ -365,10 +384,10 @@ fn persist_writes_blob_tree_commit_and_updates_ref_when_result_absent() {
     assert_eq!(leaves[0]["type"], "blob");
     assert_eq!(leaves[0]["sha"], blob_sha());
 
-    // 4. POST commit.
-    assert_eq!(recorded[3].method, "POST");
-    assert_eq!(recorded[3].url, "/repos/owner/repo/git/commits");
-    let commit_body: serde_json::Value = serde_json::from_str(&recorded[3].body).unwrap();
+    // 5. POST commit.
+    assert_eq!(recorded[4].method, "POST");
+    assert_eq!(recorded[4].url, "/repos/owner/repo/git/commits");
+    let commit_body: serde_json::Value = serde_json::from_str(&recorded[4].body).unwrap();
     assert_eq!(commit_body["tree"], tree_sha());
     assert_eq!(commit_body["parents"][0], base_sha());
     assert!(
@@ -378,13 +397,13 @@ fn persist_writes_blob_tree_commit_and_updates_ref_when_result_absent() {
             .contains("abc999/a/main")
     );
 
-    // 5. PATCH ref.
-    assert_eq!(recorded[4].method, "PATCH");
+    // 6. PATCH ref.
+    assert_eq!(recorded[5].method, "PATCH");
     assert_eq!(
-        recorded[4].url,
+        recorded[5].url,
         "/repos/owner/repo/git/refs/heads/automation/verify"
     );
-    let patch_body: serde_json::Value = serde_json::from_str(&recorded[4].body).unwrap();
+    let patch_body: serde_json::Value = serde_json::from_str(&recorded[5].body).unwrap();
     assert_eq!(patch_body["sha"], commit_sha());
     assert_eq!(patch_body["force"], false);
 }
@@ -417,39 +436,79 @@ fn persist_fails_when_attempt_cas_mismatch() {
     assert_eq!(recorded[0].method, "GET");
 }
 
+/// Helper: SHA of the branch head after a concurrent writer advanced it.
+fn new_head_sha() -> &'static str {
+    "5555555555555555555555555555555555555555"
+}
+
+fn new_head_tree_sha() -> &'static str {
+    "6666666666666666666666666666666666666666"
+}
+
+fn rebuilt_tree_sha() -> &'static str {
+    "7777777777777777777777777777777777777777"
+}
+
+fn rebuilt_commit_sha() -> &'static str {
+    "8888888888888888888888888888888888888888"
+}
+
 #[test]
 fn persist_retries_once_on_ref_update_conflict() {
-    // First PATCH → 422. Writer refetches ref, re-checks CAS, retries PATCH → 200.
+    // First PATCH → 422. Writer refetches ref to learn the new HEAD, re-runs
+    // the CAS check against that HEAD (still 404 = OK because we did not
+    // expect a predecessor), resolves HEAD's tree, rebuilds the tree +
+    // commit on that new parent, and re-PATCHes → 200.
     let script = vec![
-        // 1. CAS GET → 404
+        // 1. CAS GET → 404 (result absent at base_sha)
         Reply::empty(404),
-        // 2. blob
+        // 2. POST blob
         Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
-        // 3. tree
+        // 3. GET commit → resolve base tree
+        Reply::json(
+            200,
+            serde_json::json!({
+                "sha": base_sha(),
+                "tree": { "sha": base_commit_tree_sha() }
+            }),
+        ),
+        // 4. POST tree
         Reply::json(201, serde_json::json!({ "sha": tree_sha() })),
-        // 4. commit
+        // 5. POST commit
         Reply::json(201, serde_json::json!({ "sha": commit_sha() })),
-        // 5. PATCH → 422 (non-fast-forward)
+        // 6. PATCH → 422 (non-fast-forward)
         Reply::json(
             422,
             serde_json::json!({ "message": "Update is not a fast-forward" }),
         ),
-        // 6. GET ref (refetch)
+        // 7. GET ref → new_head
         Reply::json(
             200,
             serde_json::json!({
                 "ref": "refs/heads/automation/verify",
-                "object": { "sha": "5555555555555555555555555555555555555555" }
+                "object": { "sha": new_head_sha() }
             }),
         ),
-        // 7. CAS re-check → still 404
+        // 8. CAS re-check at new_head → 404 (still no record)
         Reply::empty(404),
-        // 8. PATCH retry → 200
+        // 9. GET commit → resolve new_head's tree
+        Reply::json(
+            200,
+            serde_json::json!({
+                "sha": new_head_sha(),
+                "tree": { "sha": new_head_tree_sha() }
+            }),
+        ),
+        // 10. POST tree (rebuilt on new base_tree)
+        Reply::json(201, serde_json::json!({ "sha": rebuilt_tree_sha() })),
+        // 11. POST commit (parent = new_head)
+        Reply::json(201, serde_json::json!({ "sha": rebuilt_commit_sha() })),
+        // 12. PATCH → 200
         Reply::json(
             200,
             serde_json::json!({
                 "ref": "refs/heads/automation/verify",
-                "object": { "sha": commit_sha() }
+                "object": { "sha": rebuilt_commit_sha() }
             }),
         ),
     ];
@@ -457,40 +516,249 @@ fn persist_retries_once_on_ref_update_conflict() {
     let w = writer(fx.base_url());
 
     let req = valid_request(starting_record("attempt-1", None));
-    w.persist(&req).expect("persist succeeds after retry");
+    let out = w.persist(&req).expect("persist succeeds after retry");
+
+    // The returned SHAs reflect the rebuilt tree + commit, not the discarded
+    // originals.
+    assert_eq!(out.blob_sha, blob_sha());
+    assert_eq!(out.tree_sha, rebuilt_tree_sha());
+    assert_eq!(out.commit_sha, rebuilt_commit_sha());
 
     let recorded = fx.recorded();
-    // 8 requests total; 2 PATCH attempts.
+    assert_eq!(
+        recorded.len(),
+        12,
+        "expected 12 requests, got {recorded:#?}"
+    );
+
+    // Initial 6-request sequence (same as happy path).
+    assert_eq!(recorded[0].method, "GET");
+    assert!(
+        recorded[0]
+            .url
+            .starts_with("/repos/owner/repo/contents/verification/results/abc999/a/main.json?ref=")
+    );
+    assert!(recorded[0].url.ends_with(&format!("?ref={}", base_sha())));
+
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/repos/owner/repo/git/blobs");
+
+    assert_eq!(recorded[2].method, "GET");
+    assert_eq!(
+        recorded[2].url,
+        format!("/repos/owner/repo/git/commits/{}", base_sha())
+    );
+
+    assert_eq!(recorded[3].method, "POST");
+    assert_eq!(recorded[3].url, "/repos/owner/repo/git/trees");
+    let tree1_body: serde_json::Value = serde_json::from_str(&recorded[3].body).unwrap();
+    assert_eq!(tree1_body["base_tree"], base_commit_tree_sha());
+
+    assert_eq!(recorded[4].method, "POST");
+    assert_eq!(recorded[4].url, "/repos/owner/repo/git/commits");
+    let commit1_body: serde_json::Value = serde_json::from_str(&recorded[4].body).unwrap();
+    assert_eq!(commit1_body["tree"], tree_sha());
+    assert_eq!(commit1_body["parents"][0], base_sha());
+
+    assert_eq!(recorded[5].method, "PATCH");
+    assert_eq!(
+        recorded[5].url,
+        "/repos/owner/repo/git/refs/heads/automation/verify"
+    );
+    let patch1_body: serde_json::Value = serde_json::from_str(&recorded[5].body).unwrap();
+    assert_eq!(patch1_body["sha"], commit_sha());
+
+    // Rebuild sequence.
+    // 7. GET ref
+    assert_eq!(recorded[6].method, "GET");
+    assert_eq!(
+        recorded[6].url,
+        "/repos/owner/repo/git/refs/heads/automation/verify"
+    );
+
+    // 8. CAS re-check at new_head
+    assert_eq!(recorded[7].method, "GET");
+    assert!(
+        recorded[7]
+            .url
+            .starts_with("/repos/owner/repo/contents/verification/results/abc999/a/main.json?ref="),
+        "CAS refetch url: {}",
+        recorded[7].url,
+    );
+    assert!(
+        recorded[7]
+            .url
+            .ends_with(&format!("?ref={}", new_head_sha())),
+        "CAS refetch should be at new_head, got: {}",
+        recorded[7].url,
+    );
+
+    // 9. GET commit for new_head
+    assert_eq!(recorded[8].method, "GET");
+    assert_eq!(
+        recorded[8].url,
+        format!("/repos/owner/repo/git/commits/{}", new_head_sha())
+    );
+
+    // 10. POST tree with new base_tree
+    assert_eq!(recorded[9].method, "POST");
+    assert_eq!(recorded[9].url, "/repos/owner/repo/git/trees");
+    let tree2_body: serde_json::Value = serde_json::from_str(&recorded[9].body).unwrap();
+    assert_eq!(tree2_body["base_tree"], new_head_tree_sha());
+    let leaves = tree2_body["tree"].as_array().unwrap();
+    assert_eq!(leaves.len(), 1);
+    // Same blob is reused — no new blob was created.
+    assert_eq!(leaves[0]["sha"], blob_sha());
+
+    // 11. POST commit with new_head as parent
+    assert_eq!(recorded[10].method, "POST");
+    assert_eq!(recorded[10].url, "/repos/owner/repo/git/commits");
+    let commit2_body: serde_json::Value = serde_json::from_str(&recorded[10].body).unwrap();
+    assert_eq!(commit2_body["tree"], rebuilt_tree_sha());
+    assert_eq!(commit2_body["parents"][0], new_head_sha());
+
+    // 12. PATCH with rebuilt commit sha
+    assert_eq!(recorded[11].method, "PATCH");
+    assert_eq!(
+        recorded[11].url,
+        "/repos/owner/repo/git/refs/heads/automation/verify"
+    );
+    let patch2_body: serde_json::Value = serde_json::from_str(&recorded[11].body).unwrap();
+    assert_eq!(patch2_body["sha"], rebuilt_commit_sha());
+    assert_eq!(patch2_body["force"], false);
+
+    // No blob was recreated during the rebuild — only one blob POST total.
+    let blob_posts = recorded
+        .iter()
+        .filter(|r| r.method == "POST" && r.url == "/repos/owner/repo/git/blobs")
+        .count();
+    assert_eq!(blob_posts, 1, "blob should not be recreated on rebuild");
+}
+
+#[test]
+fn persist_conflict_becomes_cas_mismatch_when_new_head_holds_different_attempt() {
+    // Setup: our candidate replaces "attempt-original". At base_sha the CAS
+    // finds "attempt-original" (matches) and we proceed. The PATCH then 422s
+    // because a concurrent writer advanced the branch. When we refetch the
+    // head and re-run CAS against it, the record there has a *different*
+    // attempt id from what we planned to replace — a genuine divergence, not
+    // a race we can rebuild through — so the writer must surface it as
+    // AttemptCasMismatch (not RefUpdateConflict) and MUST NOT PATCH again.
+    let base_record = starting_record("attempt-original", None);
+    let new_head_record = starting_record("attempt-conflicting", None);
+    let script = vec![
+        // 1. CAS GET at base_sha → matches expected predecessor
+        contents_response_for(&base_record),
+        // 2. POST blob
+        Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
+        // 3. GET commit → resolve base tree
+        Reply::json(
+            200,
+            serde_json::json!({
+                "sha": base_sha(),
+                "tree": { "sha": base_commit_tree_sha() }
+            }),
+        ),
+        // 4. POST tree
+        Reply::json(201, serde_json::json!({ "sha": tree_sha() })),
+        // 5. POST commit
+        Reply::json(201, serde_json::json!({ "sha": commit_sha() })),
+        // 6. PATCH → 422
+        Reply::json(422, serde_json::json!({ "message": "non-ff" })),
+        // 7. GET ref → new_head
+        Reply::json(
+            200,
+            serde_json::json!({
+                "ref": "refs/heads/automation/verify",
+                "object": { "sha": new_head_sha() }
+            }),
+        ),
+        // 8. CAS re-check at new_head → record has a *different* attempt id
+        //    from what our candidate expects to replace.
+        contents_response_for(&new_head_record),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let req = valid_request(starting_record("attempt-2", Some("attempt-original")));
+    let err = w.persist(&req).unwrap_err();
+    match err {
+        PersistError::AttemptCasMismatch { expected, actual } => {
+            assert_eq!(expected.as_deref(), Some("attempt-original"));
+            assert_eq!(actual.as_deref(), Some("attempt-conflicting"));
+        }
+        other => panic!("expected AttemptCasMismatch, got {other:?}"),
+    }
+
+    let recorded = fx.recorded();
+    // Exactly 8: initial 6 through the first 422, then GET ref + CAS re-check.
+    // No second PATCH, no tree/commit rebuild.
+    assert_eq!(recorded.len(), 8, "expected 8 requests, got {recorded:#?}");
     let patch_count = recorded
         .iter()
         .filter(|r| {
             r.method == "PATCH" && r.url == "/repos/owner/repo/git/refs/heads/automation/verify"
         })
         .count();
-    assert_eq!(patch_count, 2, "recorded: {recorded:#?}");
-    assert_eq!(recorded.len(), 8, "recorded: {recorded:#?}");
+    assert_eq!(patch_count, 1, "no rebuild PATCH should occur");
+    // The refetch CAS must have queried at new_head (not base_sha).
+    assert!(
+        recorded[7]
+            .url
+            .ends_with(&format!("?ref={}", new_head_sha())),
+        "CAS refetch url: {}",
+        recorded[7].url,
+    );
 }
 
 #[test]
 fn persist_fails_after_second_ref_conflict() {
+    // First PATCH → 422. Full rebuild path runs (get_ref, CAS OK, resolve
+    // tree, new tree, new commit), then the second PATCH also 422s.
+    // Total 12 requests, terminal error is RefUpdateConflict — no further
+    // retry.
     let script = vec![
+        // 1. CAS GET → 404
         Reply::empty(404),
+        // 2. POST blob
         Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
+        // 3. GET commit → base tree
+        Reply::json(
+            200,
+            serde_json::json!({
+                "sha": base_sha(),
+                "tree": { "sha": base_commit_tree_sha() }
+            }),
+        ),
+        // 4. POST tree
         Reply::json(201, serde_json::json!({ "sha": tree_sha() })),
+        // 5. POST commit
         Reply::json(201, serde_json::json!({ "sha": commit_sha() })),
-        // First PATCH → 422
+        // 6. PATCH → 422
         Reply::json(422, serde_json::json!({ "message": "non-ff" })),
-        // GET ref
+        // 7. GET ref → new_head
         Reply::json(
             200,
             serde_json::json!({
                 "ref": "refs/heads/automation/verify",
-                "object": { "sha": "5555555555555555555555555555555555555555" }
+                "object": { "sha": new_head_sha() }
             }),
         ),
-        // CAS re-check
+        // 8. CAS re-check at new_head → 404 (OK)
         Reply::empty(404),
-        // Second PATCH → 422 again
+        // 9. GET commit → new_head's tree
+        Reply::json(
+            200,
+            serde_json::json!({
+                "sha": new_head_sha(),
+                "tree": { "sha": new_head_tree_sha() }
+            }),
+        ),
+        // 10. POST tree
+        Reply::json(201, serde_json::json!({ "sha": rebuilt_tree_sha() })),
+        // 11. POST commit
+        Reply::json(201, serde_json::json!({ "sha": rebuilt_commit_sha() })),
+        // 12. PATCH → 422 again
         Reply::json(422, serde_json::json!({ "message": "non-ff" })),
     ];
     let fx = Fixture::start(script);
@@ -502,8 +770,21 @@ fn persist_fails_after_second_ref_conflict() {
         matches!(err, PersistError::RefUpdateConflict),
         "got {err:?}"
     );
+
     let recorded = fx.recorded();
-    assert_eq!(recorded.len(), 8, "recorded: {recorded:#?}");
+    assert_eq!(
+        recorded.len(),
+        12,
+        "expected 12 requests, got {recorded:#?}"
+    );
+    // Exactly two PATCH attempts — no third retry.
+    let patch_count = recorded
+        .iter()
+        .filter(|r| {
+            r.method == "PATCH" && r.url == "/repos/owner/repo/git/refs/heads/automation/verify"
+        })
+        .count();
+    assert_eq!(patch_count, 2, "expected exactly 2 PATCH attempts");
 }
 
 #[test]

@@ -305,17 +305,27 @@ impl GitHubVerificationStateWriter {
     /// Persist a verification record to `verification/results/<solution_id>.json`
     /// on the sole `automation/verify` branch, using GitHub's Git Data API.
     ///
-    /// The call performs five HTTP requests on the happy path:
+    /// The call performs six HTTP requests on the happy path:
     /// 1. `GET /repos/{owner}/{repo}/contents/{path}?ref={base_sha}` — CAS.
     /// 2. `POST /repos/{owner}/{repo}/git/blobs` — write JSON blob.
-    /// 3. `POST /repos/{owner}/{repo}/git/trees` — create tree on top of `base_sha`.
-    /// 4. `POST /repos/{owner}/{repo}/git/commits` — commit with `base_sha` parent.
-    /// 5. `PATCH /repos/{owner}/{repo}/git/refs/heads/automation/verify` —
+    /// 3. `GET /repos/{owner}/{repo}/git/commits/{base_sha}` — resolve the base
+    ///    commit to its tree SHA. GitHub's `POST /git/trees` expects a tree
+    ///    SHA in `base_tree`, not a commit SHA, so we must resolve first.
+    /// 4. `POST /repos/{owner}/{repo}/git/trees` — create tree on top of the
+    ///    resolved `base_tree`.
+    /// 5. `POST /repos/{owner}/{repo}/git/commits` — commit with `base_sha` parent.
+    /// 6. `PATCH /repos/{owner}/{repo}/git/refs/heads/automation/verify` —
     ///    fast-forward the branch to the new commit.
     ///
-    /// On a 422 (non-fast-forward) response for step 5, the writer refetches
-    /// the ref, re-runs the CAS check, and retries the PATCH once. After a
-    /// second 422 the call fails with [`PersistError::RefUpdateConflict`].
+    /// On a 422 (non-fast-forward) response for the PATCH the writer rebuilds
+    /// against whichever commit now sits at HEAD: it fetches the new head SHA,
+    /// re-runs the CAS check against that head, resolves the new head's tree,
+    /// posts a fresh tree (reusing the blob it already created) and a fresh
+    /// commit with the new head as parent, then retries the PATCH once. If
+    /// the CAS re-check reveals a divergent attempt id, the call fails with
+    /// [`PersistError::AttemptCasMismatch`] (the state has genuinely diverged).
+    /// If the rebuilt PATCH also fails with 422, the call fails with
+    /// [`PersistError::RefUpdateConflict`] and no further retry is attempted.
     ///
     /// The writer never creates or updates a pull request as part of
     /// `persist`; use [`set_pull_request_state`] for that. The returned
@@ -353,17 +363,24 @@ impl GitHubVerificationStateWriter {
         // Step 2: blob.
         let blob_sha = self.create_blob(owner, repo, &serialized, &result_path, &request.branch)?;
 
-        // Step 3: tree on top of base.
+        // Step 3: resolve the base commit SHA to its tree SHA. GitHub's
+        // `POST /git/trees` endpoint documents `base_tree` as the SHA of an
+        // existing tree object, not a commit — even though the API sometimes
+        // tolerates a commit SHA in practice, we do not rely on undocumented
+        // behavior.
+        let base_tree_sha = self.resolve_commit_tree(owner, repo, &request.base_sha)?;
+
+        // Step 4: tree on top of the resolved base tree.
         let tree_sha = self.create_tree(
             owner,
             repo,
-            &request.base_sha,
+            &base_tree_sha,
             &result_path,
             &blob_sha,
             &request.branch,
         )?;
 
-        // Step 4: commit.
+        // Step 5: commit.
         let commit_message = format!("verify: persist {}", request.candidate.solution_id.as_str());
         let commit_sha = self.create_commit(
             owner,
@@ -375,13 +392,15 @@ impl GitHubVerificationStateWriter {
             &request.branch,
         )?;
 
-        // Step 5: fast-forward the ref (with one retry on 422).
-        self.update_ref_with_retry(
+        // Step 6: fast-forward the ref, rebuilding once on 422 conflict.
+        let (final_tree_sha, final_commit_sha) = self.update_ref_with_retry(
             owner,
             repo,
             &commit_sha,
+            &tree_sha,
+            &blob_sha,
+            &commit_message,
             &result_path,
-            &request.base_sha,
             &request.branch,
             &request.candidate,
         )?;
@@ -389,8 +408,8 @@ impl GitHubVerificationStateWriter {
         Ok(PersistedState {
             result_path,
             blob_sha,
-            tree_sha,
-            commit_sha,
+            tree_sha: final_tree_sha,
+            commit_sha: final_commit_sha,
             pull_request_number: 0,
         })
     }
@@ -543,18 +562,20 @@ impl GitHubVerificationStateWriter {
         &self,
         owner: &str,
         repo: &str,
-        base_sha: &str,
+        base_tree_sha: &str,
         result_path: &str,
         blob_sha: &str,
         branch: &str,
     ) -> PersistResult<String> {
         validate_branch(branch)?;
-        validate_base_sha(base_sha)?;
+        // Tree SHAs are 40-hex, same shape as commit SHAs — the guard is
+        // still meaningful defense in depth.
+        validate_base_sha(base_tree_sha)?;
         validate_result_path(result_path)?;
 
         let url = format!("{}/repos/{owner}/{repo}/git/trees", self.base_url);
         let body = json!({
-            "base_tree": base_sha,
+            "base_tree": base_tree_sha,
             "tree": [{
                 "path": result_path,
                 "mode": "100644",
@@ -564,6 +585,44 @@ impl GitHubVerificationStateWriter {
         });
         let resp = self.authed(self.http.post(&url)).json(&body).send()?;
         Self::read_sha(resp, "POST trees")
+    }
+
+    /// Fetch `.tree.sha` from `GET /repos/{owner}/{repo}/git/commits/{sha}`.
+    ///
+    /// Used to translate a base commit SHA (what callers know) into the
+    /// tree SHA that GitHub's Git Data API expects for `base_tree` when
+    /// creating a new tree.
+    fn resolve_commit_tree(
+        &self,
+        owner: &str,
+        repo: &str,
+        commit_sha: &str,
+    ) -> PersistResult<String> {
+        validate_base_sha(commit_sha)?;
+
+        let url = format!(
+            "{}/repos/{owner}/{repo}/git/commits/{commit_sha}",
+            self.base_url
+        );
+        let resp = self.authed(self.http.get(&url)).send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            let _ = resp.text();
+            return Err(PersistError::UpstreamStatus {
+                status: status.as_u16(),
+                op: "GET git/commits/{sha}",
+            });
+        }
+        #[derive(Deserialize)]
+        struct TreeRef {
+            sha: String,
+        }
+        #[derive(Deserialize)]
+        struct CommitBody {
+            tree: TreeRef,
+        }
+        let body: CommitBody = resp.json().map_err(PersistError::from)?;
+        Ok(body.tree.sha)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -591,31 +650,73 @@ impl GitHubVerificationStateWriter {
         Self::read_sha(resp, "POST commits")
     }
 
+    /// PATCH the ref, and if GitHub reports a non-fast-forward conflict,
+    /// rebuild the tree and commit against the branch's current HEAD before
+    /// retrying exactly once.
+    ///
+    /// Returns the tree SHA and commit SHA that ultimately became the branch
+    /// tip — these may differ from the initial ones when the rebuild path
+    /// runs. The blob is never re-created; the same JSON payload is reused.
+    ///
+    /// A naive "retry the same commit SHA" is guaranteed to 422 again in any
+    /// real concurrent-write scenario because that commit's parent still
+    /// points at the stale base, so the retry is only useful once we rebase
+    /// on the new head.
     #[allow(clippy::too_many_arguments)]
     fn update_ref_with_retry(
         &self,
         owner: &str,
         repo: &str,
-        commit_sha: &str,
+        initial_commit_sha: &str,
+        initial_tree_sha: &str,
+        blob_sha: &str,
+        commit_message: &str,
         result_path: &str,
-        base_sha: &str,
         branch: &str,
         candidate: &VerificationRecord,
-    ) -> PersistResult<()> {
+    ) -> PersistResult<(String, String)> {
         validate_branch(branch)?;
         validate_result_path(result_path)?;
 
-        match self.patch_ref(owner, repo, commit_sha)? {
-            RefPatchOutcome::Ok => Ok(()),
+        match self.patch_ref(owner, repo, initial_commit_sha)? {
+            RefPatchOutcome::Ok => {
+                Ok((initial_tree_sha.to_string(), initial_commit_sha.to_string()))
+            }
             RefPatchOutcome::Conflict => {
-                // Refetch the ref (defensive; we ignore the returned SHA and
-                // rely on GitHub's own fast-forward check), then re-verify
-                // the CAS before retrying the PATCH.
-                self.get_ref(owner, repo)?;
-                self.cas_check(owner, repo, result_path, base_sha, candidate)?;
+                // Someone pushed a new commit to automation/verify ahead of
+                // us. Resolve the current head and rebuild on top of it.
+                let new_head = self.get_ref_sha(owner, repo)?;
 
-                match self.patch_ref(owner, repo, commit_sha)? {
-                    RefPatchOutcome::Ok => Ok(()),
+                // Re-validate the CAS invariant against the new head. If the
+                // stored attempt id has diverged (either differs from what
+                // we planned to replace, or a record now exists where none
+                // did, or a record we expected has been deleted), that is a
+                // genuine attempt collision — not a race we can rebuild
+                // through — so we surface it as AttemptCasMismatch.
+                self.cas_check(owner, repo, result_path, &new_head, candidate)?;
+
+                // Resolve the new head to its tree SHA so we can layer our
+                // blob onto it.
+                let new_base_tree = self.resolve_commit_tree(owner, repo, &new_head)?;
+
+                // Rebuild the tree with the same blob (blob content is
+                // deterministic in the record we're persisting).
+                let new_tree_sha =
+                    self.create_tree(owner, repo, &new_base_tree, result_path, blob_sha, branch)?;
+
+                // Rebuild the commit with the new head as parent.
+                let new_commit_sha = self.create_commit(
+                    owner,
+                    repo,
+                    commit_message,
+                    &new_tree_sha,
+                    &new_head,
+                    result_path,
+                    branch,
+                )?;
+
+                match self.patch_ref(owner, repo, &new_commit_sha)? {
+                    RefPatchOutcome::Ok => Ok((new_tree_sha, new_commit_sha)),
                     RefPatchOutcome::Conflict => Err(PersistError::RefUpdateConflict),
                 }
             }
@@ -653,23 +754,31 @@ impl GitHubVerificationStateWriter {
         })
     }
 
-    fn get_ref(&self, owner: &str, repo: &str) -> PersistResult<()> {
+    /// Fetch the current tip SHA of `refs/heads/automation/verify`.
+    fn get_ref_sha(&self, owner: &str, repo: &str) -> PersistResult<String> {
         let url = format!(
             "{}/repos/{owner}/{repo}/git/refs/heads/{REQUIRED_BRANCH}",
             self.base_url
         );
         let resp = self.authed(self.http.get(&url)).send()?;
         let status = resp.status();
-        if status.is_success() {
+        if !status.is_success() {
             let _ = resp.text();
-            Ok(())
-        } else {
-            let _ = resp.text();
-            Err(PersistError::UpstreamStatus {
+            return Err(PersistError::UpstreamStatus {
                 status: status.as_u16(),
                 op: "GET refs/heads/automation/verify",
-            })
+            });
         }
+        #[derive(Deserialize)]
+        struct RefObject {
+            sha: String,
+        }
+        #[derive(Deserialize)]
+        struct RefBody {
+            object: RefObject,
+        }
+        let body: RefBody = resp.json().map_err(PersistError::from)?;
+        Ok(body.object.sha)
     }
 
     fn patch_pr(&self, owner: &str, repo: &str, pr: u64, ready: bool) -> PersistResult<()> {
