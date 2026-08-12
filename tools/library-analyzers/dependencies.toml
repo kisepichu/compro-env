@@ -15,63 +15,69 @@
 git = []
 locals = []
 
+# LLVM/Clang and Lean archive blocks temporarily commented out so
+# `tools/library-analyzers/prepare` skips their downloads and
+# `library-adapter-build` observes `PreparedInstallMissing` and skips
+# the cpp / lean adapters (`PreparedInstallMissing` is the intended
+# "operator ran a Rust-only build on purpose" path per the comments
+# on the skip blocks in `crates/infrastructure/src/bin/library-adapter-build.rs`).
+# This lets the plan-062 verify dry-run validate the credential-separated
+# pipeline against the Rust adapter alone while the analyzer env
+# plumbing follow-up lands (see also PR #77 for the config-side twin).
+#
+# Re-enable these once the follow-up threads `plan.handshake_environment`
+# into `handshake_adapter` and adds `<CE_LEAN_ROOT>/bin` to PATH so the
+# lean-analyzer handshake can find `lean`.
+#
 # LLVM/Clang 22.1.0 official release archives (plan 045).
+# [[archives]]
+# name = "llvm-linux-x64"
+# url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/LLVM-22.1.0-Linux-X64.tar.xz"
+# sha256 = "8d662e425e46c48b45f5f970770b5e37f323607c8c2cbc371593fc9c4ba1e7b3"
+# format = "tar.xz"
+# target_os = "linux"
+# target_arch = "x86_64"
 #
-# Source: <https://github.com/llvm/llvm-project/releases/tag/llvmorg-22.1.0>.
-# Digests must stay in sync with
-# `crates/infrastructure/src/library_adapter/cpp_toolchain.rs`.
-[[archives]]
-name = "llvm-linux-x64"
-url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/LLVM-22.1.0-Linux-X64.tar.xz"
-sha256 = "8d662e425e46c48b45f5f970770b5e37f323607c8c2cbc371593fc9c4ba1e7b3"
-format = "tar.xz"
-target_os = "linux"
-target_arch = "x86_64"
-
-[[archives]]
-name = "llvm-linux-arm64"
-url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/LLVM-22.1.0-Linux-ARM64.tar.xz"
-sha256 = "e3b4205fe45d5561dec9d46465873a79c26b25b028b310515b38c34f668c6aec"
-format = "tar.xz"
-target_os = "linux"
-target_arch = "aarch64"
-
-[[archives]]
-name = "llvm-macos-arm64"
-url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/LLVM-22.1.0-macOS-ARM64.tar.xz"
-sha256 = "cd5e615f4dab23d0239359cd343202c5f6ceeaf072c245a3c685d73afac09646"
-format = "tar.xz"
-target_os = "macos"
-target_arch = "aarch64"
-
+# [[archives]]
+# name = "llvm-linux-arm64"
+# url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/LLVM-22.1.0-Linux-ARM64.tar.xz"
+# sha256 = "e3b4205fe45d5561dec9d46465873a79c26b25b028b310515b38c34f668c6aec"
+# format = "tar.xz"
+# target_os = "linux"
+# target_arch = "aarch64"
+#
+# [[archives]]
+# name = "llvm-macos-arm64"
+# url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/LLVM-22.1.0-macOS-ARM64.tar.xz"
+# sha256 = "cd5e615f4dab23d0239359cd343202c5f6ceeaf072c245a3c685d73afac09646"
+# format = "tar.xz"
+# target_os = "macos"
+# target_arch = "aarch64"
+#
 # Lean 4.30.0 official release archives (plan 048).
+# [[archives]]
+# name = "lean-linux-x64"
+# url = "https://github.com/leanprover/lean4/releases/download/v4.30.0/lean-4.30.0-linux.tar.zst"
+# sha256 = "4dad74141c2c119ca1aa626656be83b8e14238afba97271fd7bf1eb3f081b319"
+# format = "tar.zst"
+# target_os = "linux"
+# target_arch = "x86_64"
 #
-# Source: <https://github.com/leanprover/lean4/releases/tag/v4.30.0>.
-# Digests must stay in sync with
-# `crates/infrastructure/src/library_adapter/lean_toolchain.rs`.
-[[archives]]
-name = "lean-linux-x64"
-url = "https://github.com/leanprover/lean4/releases/download/v4.30.0/lean-4.30.0-linux.tar.zst"
-sha256 = "4dad74141c2c119ca1aa626656be83b8e14238afba97271fd7bf1eb3f081b319"
-format = "tar.zst"
-target_os = "linux"
-target_arch = "x86_64"
-
-[[archives]]
-name = "lean-linux-arm64"
-url = "https://github.com/leanprover/lean4/releases/download/v4.30.0/lean-4.30.0-linux_aarch64.tar.zst"
-sha256 = "c99c6f0edd446956d4758c59d4383e8e6411ff6cc71a01f9caabe5eba454121d"
-format = "tar.zst"
-target_os = "linux"
-target_arch = "aarch64"
-
-[[archives]]
-name = "lean-macos-arm64"
-url = "https://github.com/leanprover/lean4/releases/download/v4.30.0/lean-4.30.0-darwin_aarch64.tar.zst"
-sha256 = "072dca4a38fbc0d3cedb96fea886cc243b424f2bd16247596200b9a9ab93f0f5"
-format = "tar.zst"
-target_os = "macos"
-target_arch = "aarch64"
+# [[archives]]
+# name = "lean-linux-arm64"
+# url = "https://github.com/leanprover/lean4/releases/download/v4.30.0/lean-4.30.0-linux_aarch64.tar.zst"
+# sha256 = "c99c6f0edd446956d4758c59d4383e8e6411ff6cc71a01f9caabe5eba454121d"
+# format = "tar.zst"
+# target_os = "linux"
+# target_arch = "aarch64"
+#
+# [[archives]]
+# name = "lean-macos-arm64"
+# url = "https://github.com/leanprover/lean4/releases/download/v4.30.0/lean-4.30.0-darwin_aarch64.tar.zst"
+# sha256 = "072dca4a38fbc0d3cedb96fea886cc243b424f2bd16247596200b9a9ab93f0f5"
+# format = "tar.zst"
+# target_os = "macos"
+# target_arch = "aarch64"
 
 # Declarative toolchain pins fold into the dependency-id so a mismatched host
 # rustup toolchain never impersonates the pinned one. Plan 043 pins the Rust
@@ -82,12 +88,9 @@ name = "rustc"
 version = "1.92.0"
 components = ["rustfmt", "clippy"]
 
-# Lean 4.30.0 toolchain pin (plan 048). The declarative pin folds into the
-# dependency-id so a mismatched host Elan toolchain never impersonates the
-# pinned one. The `lean-toolchain` file next to the analyzer's `lakefile.toml`
-# also pins `leanprover/lean4:v4.30.0` so `lake env` inside the adapter
-# selects the same release.
-[[toolchains]]
-name = "lean"
-version = "4.30.0"
-components = ["lake"]
+# Lean 4.30.0 toolchain pin (plan 048). Temporarily commented out with the
+# archive block above; re-enable together.
+# [[toolchains]]
+# name = "lean"
+# version = "4.30.0"
+# components = ["lake"]
