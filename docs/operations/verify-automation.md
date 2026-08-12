@@ -28,10 +28,12 @@ group (§15.3):
 
 **Worker — `verify-worker.yml`**
 
-`workflow_call`-only, with inputs `before`, `after`, and `mode`
-(default `live`). All jobs live in the `verify-heavy` concurrency
-group with `cancel-in-progress: false`. The six jobs form a strict
-`needs:` chain:
+`workflow_call`-only, with inputs `after` (immutable plan base SHA),
+`mode` (default `dry-run`; only an explicit `workflow_dispatch` with
+`mode: live` picks the OJ path), and `solution` (empty means no work
+this run). All jobs live in the `verify-heavy` concurrency group with
+`cancel-in-progress: false`. The six jobs form a strict `needs:`
+chain:
 
 1. **`prepare`** — secretless. Checks out, builds `ce`, runs
    `ce internal verify-prepare --plan-out plan.json
@@ -174,6 +176,16 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
   `persist_terminal` still runs on this path via `!cancelled()` so the
   emitted record lands on `automation/verify`; the workflow just
   surfaces a warning so operators know a follow-up tick is expected.
+- Non-`Trackable` `verify-start` outcomes (`Unavailable` /
+  `AcceptanceUnknown` / `ConfirmedNotAccepted` / `InfrastructureError`)
+  are still captured: `submit` emits their `VerificationRecord` to
+  `handle.json`, `persist_handle` commits it to `automation/verify`,
+  and the downstream `poll` bails on the non-handle state so
+  `persist_terminal` skips. The state on `automation/verify` accurately
+  reflects the observed outcome — no infinite retry occurs because the
+  scheduler is a no-op until automatic candidate selection lands. To
+  resume, re-run `workflow_dispatch` with a `solution` argument; the
+  new attempt's `persist_starting` CAS-replaces the failed record.
 - Secret leakage in a failed job: nothing to remediate inside the
   workflow. Invalidate the affected token (App key or Library Checker
   refresh token) and follow the rotation steps below.
