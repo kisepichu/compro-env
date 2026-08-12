@@ -1181,32 +1181,11 @@ fn list_result_json_paths(
         }
         let s = std::str::from_utf8(chunk)
             .map_err(|e| anyhow::anyhow!("non-utf8 path in git diff output: {e}"))?;
-        if is_result_json_path(s) {
+        if crate::git_change_classifier::is_result_json_path(std::path::Path::new(s)) {
             paths.push(s.to_string());
         }
     }
     Ok(paths)
-}
-
-fn is_result_json_path(path: &str) -> bool {
-    let mut comps = std::path::Path::new(path).components();
-    match comps.next().and_then(|c| c.as_os_str().to_str()) {
-        Some("verification") => {}
-        _ => return false,
-    }
-    match comps.next().and_then(|c| c.as_os_str().to_str()) {
-        Some("results") => {}
-        _ => return false,
-    }
-    let remainder: Vec<_> = comps.collect();
-    if remainder.is_empty() {
-        return false;
-    }
-    let leaf = match remainder.last().and_then(|c| c.as_os_str().to_str()) {
-        Some(s) => s,
-        None => return false,
-    };
-    leaf.len() > ".json".len() && leaf.ends_with(".json")
 }
 
 /// Validates that the plan-hash artifact exists as a regular file whose

@@ -146,6 +146,11 @@ pub enum PersistError {
     )]
     UpstreamStatus { status: u16, op: &'static str },
 
+    #[error(
+        "GitHub GraphQL mutation for {op} reported {count} error(s); details redacted to avoid leaking secrets"
+    )]
+    GraphqlError { op: &'static str, count: usize },
+
     #[error("GitHub API response for {op} was missing expected field {field}")]
     MalformedResponse {
         op: &'static str,
@@ -422,6 +427,13 @@ impl GitHubVerificationStateWriter {
     /// the `enablePullRequestAutoMerge` GraphQL mutation to
     /// `{base_url}/graphql`.
     ///
+    /// GitHub's GraphQL mutation requires the PR's opaque base64-shaped
+    /// **node id** (e.g. `PR_kwDO...`), not the numeric PR number, so when
+    /// `auto_merge` is requested the writer first resolves the number to
+    /// its node id via `GET /repos/{owner}/{repo}/pulls/{n}` (reading the
+    /// `.node_id` field) before performing the PATCH and the mutation. Only
+    /// the auto-merge path incurs the extra REST call.
+    ///
     /// The writer must have a bound repository before this call — either
     /// through a prior [`persist`] or an explicit [`bind_repository`]. That
     /// way the exact-match signature stays free of extra parameters while
@@ -439,9 +451,14 @@ impl GitHubVerificationStateWriter {
                 pull_request_number,
                 auto_merge,
             } => {
-                self.patch_pr(&owner, &repo, pull_request_number, true)?;
                 if auto_merge {
-                    self.enable_auto_merge(pull_request_number)?;
+                    // Resolve the node id BEFORE we mutate anything so a
+                    // lookup failure does not leave the PR half-marked ready.
+                    let node_id = self.resolve_pr_node_id(&owner, &repo, pull_request_number)?;
+                    self.patch_pr(&owner, &repo, pull_request_number, true)?;
+                    self.enable_auto_merge(&node_id)?;
+                } else {
+                    self.patch_pr(&owner, &repo, pull_request_number, true)?;
                 }
             }
         }
@@ -798,33 +815,75 @@ impl GitHubVerificationStateWriter {
         }
     }
 
-    fn enable_auto_merge(&self, pr: u64) -> PersistResult<()> {
+    /// Resolve a numeric PR number to GitHub's opaque node id.
+    ///
+    /// GraphQL identifies pull requests by their base64-shaped node id
+    /// (e.g. `PR_kwDO...`); the numeric number is only usable through the
+    /// REST endpoints. Reads `.node_id` from
+    /// `GET /repos/{owner}/{repo}/pulls/{pr}`.
+    fn resolve_pr_node_id(&self, owner: &str, repo: &str, pr: u64) -> PersistResult<String> {
+        let url = format!("{}/repos/{owner}/{repo}/pulls/{pr}", self.base_url);
+        let resp = self.authed(self.http.get(&url)).send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            let _ = resp.text();
+            return Err(PersistError::UpstreamStatus {
+                status: status.as_u16(),
+                op: "GET pulls/{n} (resolve node_id)",
+            });
+        }
+        #[derive(Deserialize)]
+        struct PullResponse {
+            node_id: Option<String>,
+        }
+        let body: PullResponse = resp.json().map_err(PersistError::from)?;
+        body.node_id.ok_or(PersistError::MalformedResponse {
+            op: "GET pulls/{n} (resolve node_id)",
+            field: "node_id",
+        })
+    }
+
+    fn enable_auto_merge(&self, pull_request_node_id: &str) -> PersistResult<()> {
         // GitHub's REST API does not expose auto-merge as a plain endpoint;
         // the sanctioned path is the `enablePullRequestAutoMerge` GraphQL
         // mutation. We route it to `{base_url}/graphql` so tests can share
         // the same tiny_http fixture as the REST calls.
         let url = format!("{}/graphql", self.base_url);
-        // We would normally look up the PR node id first, but the test
-        // fixture only observes the call arrived. The mutation body is
-        // shaped like a real GraphQL request so future callers only need
-        // to swap the placeholder node id for a real one.
-        let mutation = r#"mutation($pr: ID!) { enablePullRequestAutoMerge(input: { pullRequestId: $pr, mergeMethod: SQUASH }) { clientMutationId } }"#;
+        let mutation = r#"mutation($pullRequestId: ID!) { enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }) { clientMutationId } }"#;
         let body = json!({
             "query": mutation,
-            "variables": { "pr": pr.to_string() },
+            "variables": { "pullRequestId": pull_request_node_id },
         });
         let resp = self.authed(self.http.post(&url)).json(&body).send()?;
         let status = resp.status();
-        if status.is_success() {
+        // GraphQL uniformly returns 200 on protocol success even when the
+        // mutation itself failed; the real signal lives in the response body's
+        // top-level `errors` array. We must NOT surface the raw body — it can
+        // echo internal repo/token metadata — so only the count of errors is
+        // exposed to the caller.
+        if !status.is_success() {
             let _ = resp.text();
-            Ok(())
-        } else {
-            let _ = resp.text();
-            Err(PersistError::UpstreamStatus {
+            return Err(PersistError::UpstreamStatus {
                 status: status.as_u16(),
                 op: "POST graphql (enablePullRequestAutoMerge)",
-            })
+            });
         }
+        let text = resp.text().map_err(PersistError::from)?;
+        #[derive(Deserialize)]
+        struct GraphqlBody {
+            #[serde(default)]
+            errors: Option<Vec<serde_json::Value>>,
+        }
+        let parsed: GraphqlBody = serde_json::from_str(&text).map_err(PersistError::from)?;
+        if let Some(errs) = parsed.errors
+            && !errs.is_empty()
+        {
+            return Err(PersistError::GraphqlError {
+                op: "POST graphql (enablePullRequestAutoMerge)",
+                count: errs.len(),
+            });
+        }
+        Ok(())
     }
 
     fn read_sha(resp: reqwest::blocking::Response, op: &'static str) -> PersistResult<String> {

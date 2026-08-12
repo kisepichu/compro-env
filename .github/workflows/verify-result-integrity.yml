@@ -21,4 +21,7 @@ jobs:
       - name: Build ce
         run: cargo build --release --bin ce
       - name: Validate result-only PR
-        run: ./target/release/ce internal verify-validate-result-pr --before ${{ github.event.pull_request.base.sha }} --after ${{ github.event.pull_request.head.sha }}
+        env:
+          BEFORE_SHA: ${{ github.event.pull_request.base.sha }}
+          AFTER_SHA: ${{ github.event.pull_request.head.sha }}
+        run: ./target/release/ce internal verify-validate-result-pr --before "$BEFORE_SHA" --after "$AFTER_SHA"

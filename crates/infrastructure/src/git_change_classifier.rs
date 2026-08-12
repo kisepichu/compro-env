@@ -63,7 +63,7 @@ pub fn classify_changes(
         // in `paths`. Defensive: if git ever hands us multiple paths, all
         // must be allow-listed.
         for path in &record.paths {
-            if !is_result_json(path) {
+            if !is_result_json_path(path) {
                 result_only = false;
                 break;
             }
@@ -80,7 +80,15 @@ pub fn classify_changes(
     })
 }
 
-fn is_result_json(path: &Path) -> bool {
+/// Returns `true` when `path` looks like `verification/results/**/*.json`.
+///
+/// Consolidated helper used by both the diff classifier (which passes
+/// filesystem paths) and the internal `verify-validate-result-pr` command
+/// (which passes git-normalized string paths through `Path::new(...)`). The
+/// path must have `verification/results/` as its first two components, at
+/// least one further component after `results/`, and end in `.json`
+/// (rejecting a bare `.json` filename).
+pub(crate) fn is_result_json_path(path: &Path) -> bool {
     // Require `verification/results/` prefix, at least one further component,
     // and a `.json` suffix on the final component.
     let mut comps = path.components();

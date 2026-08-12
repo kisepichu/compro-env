@@ -347,7 +347,40 @@ fn result_only_path_restriction_on_integrity_check() {
     );
 }
 
-/// #9: `verify-worker.yml` is dormant. No other workflow may `uses:` it.
+/// #9.5: `run:` shell strings must never inline a `${{ github.event... }}`
+/// expression — those get expanded by Actions before the shell sees them, so
+/// a hostile branch name or PR title could inject shell metacharacters. The
+/// standard hardening is to pipe the expression through an `env:` block and
+/// reference the shell variable instead. `if:` guards are safe because they
+/// are evaluated by Actions, not the shell.
+#[test]
+fn run_steps_use_env_indirection_for_shas() {
+    for (label, doc) in [
+        ("verify-worker", load_worker()),
+        ("verify-result-integrity", load_integrity()),
+    ] {
+        for (job_name, job) in jobs(&doc) {
+            for (idx, step) in steps(job).iter().enumerate() {
+                let map = match step.as_mapping() {
+                    Some(m) => m,
+                    None => continue,
+                };
+                let run = match get(map, "run").and_then(Value::as_str) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                assert!(
+                    !run.contains("${{ github.event") && !run.contains("${{github.event"),
+                    "{label}: job {job_name:?} step[{idx}] run contains a direct \
+                     `${{{{ github.event... }}}}` expansion: {run:?} — route it \
+                     through an `env:` block and reference \"$VAR\" from the shell"
+                );
+            }
+        }
+    }
+}
+
+/// #10: `verify-worker.yml` is dormant. No other workflow may `uses:` it.
 #[test]
 fn verify_worker_has_no_caller() {
     let dir = workflow_dir();

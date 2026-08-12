@@ -811,11 +811,24 @@ fn set_pull_request_state_marks_draft() {
 }
 
 #[test]
-fn set_pull_request_state_marks_ready_and_enables_auto_merge() {
+fn set_pull_request_state_ready_resolves_node_id_then_enables_auto_merge() {
+    // GraphQL requires the PR's opaque base64-shaped node id, not the numeric
+    // number. The writer must fetch `.node_id` from the REST endpoint first,
+    // then PATCH `draft: false`, then POST the GraphQL mutation with the
+    // resolved node id as the `pullRequestId` variable.
     let script = vec![
-        // 1. PATCH /pulls/{n} { draft: false }
+        // 1. GET /pulls/{n} → { node_id: "PR_kwDOTEST" }
+        Reply::json(
+            200,
+            serde_json::json!({
+                "number": 7,
+                "node_id": "PR_kwDOTEST",
+                "draft": true
+            }),
+        ),
+        // 2. PATCH /pulls/{n} { draft: false }
         Reply::json(200, serde_json::json!({ "number": 7, "draft": false })),
-        // 2. POST /graphql (enablePullRequestAutoMerge)
+        // 3. POST /graphql (enablePullRequestAutoMerge)
         Reply::json(
             200,
             serde_json::json!({
@@ -836,23 +849,108 @@ fn set_pull_request_state_marks_ready_and_enables_auto_merge() {
     .expect("mark ready + auto-merge");
 
     let recorded = fx.recorded();
-    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded.len(), 3, "expected 3 requests, got {recorded:#?}");
 
-    // First: PATCH pulls/7 with { draft: false }
-    assert_eq!(recorded[0].method, "PATCH");
+    // First: GET pulls/7 to resolve the node id.
+    assert_eq!(recorded[0].method, "GET");
     assert_eq!(recorded[0].url, "/repos/owner/repo/pulls/7");
-    let body0: serde_json::Value = serde_json::from_str(&recorded[0].body).unwrap();
-    assert_eq!(body0["draft"], false);
 
-    // Second: POST /graphql with enablePullRequestAutoMerge
-    assert_eq!(recorded[1].method, "POST");
-    assert_eq!(recorded[1].url, "/graphql");
+    // Second: PATCH pulls/7 with { draft: false }
+    assert_eq!(recorded[1].method, "PATCH");
+    assert_eq!(recorded[1].url, "/repos/owner/repo/pulls/7");
     let body1: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
-    let query = body1["query"].as_str().unwrap();
+    assert_eq!(body1["draft"], false);
+
+    // Third: POST /graphql with enablePullRequestAutoMerge, node id in vars.
+    assert_eq!(recorded[2].method, "POST");
+    assert_eq!(recorded[2].url, "/graphql");
+    let body2: serde_json::Value = serde_json::from_str(&recorded[2].body).unwrap();
+    let query = body2["query"].as_str().unwrap();
     assert!(
         query.contains("enablePullRequestAutoMerge"),
         "graphql body missing mutation: {query}"
     );
+    // The mutation body must reference the resolved base64-shaped node id,
+    // NOT the numeric PR number.
+    let sent_id = body2["variables"]["pullRequestId"].as_str().unwrap();
+    assert_eq!(
+        sent_id, "PR_kwDOTEST",
+        "graphql variable pullRequestId must be the resolved node_id (was: {sent_id})"
+    );
+    assert!(
+        !sent_id.chars().all(|c| c.is_ascii_digit()),
+        "pullRequestId variable must not be the raw numeric PR number (was: {sent_id})"
+    );
+}
+
+#[test]
+fn set_pull_request_state_ready_errors_when_graphql_returns_errors() {
+    // GraphQL returns HTTP 200 even when the mutation itself failed — the
+    // real signal lives in the response body's `errors` array. The writer
+    // must inspect the body, surface a `GraphqlError`, and MUST NOT include
+    // the raw upstream error text (which may echo repo/token metadata).
+    let script = vec![
+        // 1. GET /pulls/{n} → node_id
+        Reply::json(
+            200,
+            serde_json::json!({
+                "number": 7,
+                "node_id": "PR_kwDOTEST",
+                "draft": true
+            }),
+        ),
+        // 2. PATCH /pulls/{n}
+        Reply::json(200, serde_json::json!({ "number": 7, "draft": false })),
+        // 3. POST /graphql — HTTP 200 but errors present in body
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": null,
+                "errors": [{ "message": "internal repo secret_token_abc" }]
+            }),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+    w.bind_repository("owner/repo").expect("bind repo");
+
+    let err = w
+        .set_pull_request_state(BotPullRequestState::Ready {
+            pull_request_number: 7,
+            auto_merge: true,
+        })
+        .expect_err("GraphQL errors must surface as an Err, not a silent Ok(())");
+
+    // Must be the dedicated GraphqlError variant, not a generic upstream 200.
+    let display = format!("{err}");
+    let debug = format!("{err:?}");
+    match &err {
+        PersistError::GraphqlError { op, count } => {
+            assert_eq!(*count, 1);
+            assert!(
+                op.contains("enablePullRequestAutoMerge"),
+                "expected op to reference the mutation, got {op:?}"
+            );
+        }
+        other => panic!("expected GraphqlError, got {other:?}"),
+    }
+
+    // The mock GraphQL body contained a fake token — the Display and Debug
+    // renderings of the error must NOT include it.
+    assert!(
+        !display.contains("secret_token_abc"),
+        "Display leaked GraphQL body: {display}"
+    );
+    assert!(
+        !debug.contains("secret_token_abc"),
+        "Debug leaked GraphQL body: {debug}"
+    );
+
+    // Sanity check: the full 3-request sequence was actually issued (the
+    // writer did not short-circuit before contacting graphql).
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 3, "expected 3 requests, got {recorded:#?}");
+    assert_eq!(recorded[2].url, "/graphql");
 }
 
 #[test]
