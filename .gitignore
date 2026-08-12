@@ -9,3 +9,11 @@ web/dist-root/
 web/dist-compro-env/
 web/.astro/
 tools/library-analyzers/lean/.lake/
+
+# Plan 061: production verify results and Pages artifacts stay ignored.
+# The real `verification/results/` tree is populated by the CI verify worker
+# only; nothing here should be checked in until the automation is live.
+/verification/results/**
+# GitHub Pages artifact staging (Task 3 / pages.yml) is transient.
+/target/pages-artifact/
+/pages-artifact/
