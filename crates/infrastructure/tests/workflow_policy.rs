@@ -290,16 +290,18 @@ fn environment_names_are_from_allowlist() {
 /// jobs execute only the pinned `ce` binary artifact — cargo would compile
 /// arbitrary post-merge code with secrets in scope.
 ///
-/// A checkout of the SAME immutable SHA that `prepare` planned against is
-/// allowed for `submit` / `poll`: the internal `ce` handlers still read
-/// `config.toml`, `templates/`, `solutions/`, `libraries/`, and
-/// `verification/results/` from the working tree, and those files come out
-/// of a reviewed, protected `main` commit. The `actions/checkout` SHA pin is
-/// covered by test #3; #062.checkout below asserts the `ref:` is
-/// `${{ inputs.after }}`.
+/// Secret jobs may `actions/checkout` a fixed, immutable ref so `ce`'s
+/// runtime helpers (`find_project_root`, `SolutionRepository`) can operate.
+/// The allowed refs are:
+///   - `${{ inputs.after }}`: the immutable SHA `prepare` planned against.
+///   - `automation/verify`: the App-managed state branch, which `submit`
+///     and `poll` read so `ce internal verify-{start,poll}` can see the
+///     record `persist_starting` / `persist_handle` just committed.
+/// The `actions/checkout` SHA pin is covered by test #3.
 #[test]
 fn no_build_or_unpinned_checkout_in_secret_jobs() {
     let banned_cargo_verbs = ["cargo build", "cargo test", "cargo run"];
+    let allowed_ref_needles = ["inputs.after", "automation/verify"];
     for (label, doc) in [
         ("verify-worker", load_worker()),
         ("verify-result-integrity", load_integrity()),
@@ -324,10 +326,13 @@ fn no_build_or_unpinned_checkout_in_secret_jobs() {
                             )
                         });
                     let refv = get(with, "ref").and_then(Value::as_str);
+                    let matches = refv.is_some_and(|s| {
+                        allowed_ref_needles.iter().any(|needle| s.contains(needle))
+                    });
                     assert!(
-                        refv.is_some_and(|s| s.contains("inputs.after")),
-                        "{label}: job {job_name:?} step[{idx}] actions/checkout must pin \
-                         `ref:` to `${{{{ inputs.after }}}}`, got {refv:?}"
+                        matches,
+                        "{label}: job {job_name:?} step[{idx}] actions/checkout `ref:` must \
+                         be one of `${{{{ inputs.after }}}}` or `automation/verify`, got {refv:?}"
                     );
                 }
                 if let Some(run) = get(map, "run").and_then(Value::as_str) {

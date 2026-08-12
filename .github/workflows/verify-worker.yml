@@ -225,17 +225,20 @@ jobs:
     outputs:
       handle_sha: ${{ steps.hash_handle.outputs.handle_sha }}
     steps:
-      # The `ce` internal handlers still call find_project_root() +
-      # ProjectLibraryConfigLoader::load() + build_analysis(); they read
-      # config.toml, templates/, solutions/, libraries/, verification/results/
-      # from the current working tree. Check out the exact SHA that `prepare`
-      # planned against so the OJ submission sees the identical project state
-      # that produced the plan hash. This checkout is read-only source data —
+      # The `ce` internal handlers call find_project_root() +
+      # ProjectLibraryConfigLoader::load() + build_analysis() + the
+      # SolutionRepository at run time. `verify-start` reads the
+      # `Starting` record `persist_starting` just committed to the
+      # `automation/verify` state branch, so checkout targets that branch
+      # instead of main. Its tree is (main@base_sha) + the single
+      # `verification/results/{solution}.json` delta, so config.toml,
+      # templates/, solutions/, and libraries/ still match the SHA the
+      # plan was frozen against. This checkout is read-only source data —
       # the executable is still the pinned `ce` binary artifact.
-      - name: Checkout at plan base SHA
+      - name: Checkout automation/verify state branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
-          ref: ${{ inputs.after }}
+          ref: automation/verify
           fetch-depth: 1
 
       - name: Download plan artifact
@@ -388,12 +391,14 @@ jobs:
     outputs:
       terminal_sha: ${{ steps.hash_terminal.outputs.terminal_sha }}
     steps:
-      # See the note on the submit job's Checkout step — verify-poll needs a
-      # populated project tree for find_project_root() + build_analysis().
-      - name: Checkout at plan base SHA
+      # See the note on the submit job's Checkout step. `verify-poll` reads
+      # the `Trackable` record `persist_handle` committed to
+      # `automation/verify`; the base project tree there matches the plan
+      # base SHA.
+      - name: Checkout automation/verify state branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
-          ref: ${{ inputs.after }}
+          ref: automation/verify
           fetch-depth: 1
 
       - name: Download plan artifact
@@ -456,6 +461,14 @@ jobs:
           } > "$HOME/.config/ce/session.toml"
 
       - name: Poll handle to terminal or unavailable
+        id: pollstep
+        # verify-poll exits 1 on non-terminal outcomes (BudgetExhausted,
+        # HandleLost, InfrastructureError) but still emits a valid
+        # VerificationRecord to stdout. Keep the emitted record so
+        # persist_terminal can commit the failure back to
+        # `automation/verify`; the terminating "Surface poll outcome"
+        # step below re-raises the failure at the job level.
+        continue-on-error: true
         env:
           SOLUTION_ID: ${{ needs.prepare.outputs.solution_id }}
         run: |
@@ -477,10 +490,24 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Surface poll outcome
+        if: steps.pollstep.outcome == 'failure'
+        run: |
+          echo "::warning::verify-poll ended in a non-terminal state; the emitted record has been queued for persist_terminal."
+          exit 1
+
   persist_terminal:
     name: Persist terminal result (App-only)
     needs: [prepare, poll]
-    if: needs.prepare.outputs.has_work == 'true' && inputs.mode == 'live'
+    # Runs even when `poll` re-raised a non-terminal outcome, so the
+    # emitted `InfrastructureFailure` / `HandleLost` record still gets
+    # written to `automation/verify` instead of leaving the branch stuck
+    # at `Trackable`.
+    if: >-
+      !cancelled()
+      && needs.prepare.result == 'success'
+      && needs.prepare.outputs.has_work == 'true'
+      && inputs.mode == 'live'
     environment: verify-state
     runs-on: ubuntu-latest
     permissions:

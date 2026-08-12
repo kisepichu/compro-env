@@ -156,9 +156,19 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
 - `PATCH refs/heads/automation/verify remained non-fast-forward`
   after retries is a CAS conflict on the state ref. The worker will
   reattempt on the next 5-minute tick — no operator action needed.
-- `no verification record stored for <id>` from `poll` means the poll
-  job ran before `persist_handle` completed. This is a sequencing bug;
-  file it and re-run the workflow so `persist_handle` can settle.
+- `no verification record stored for <id>` from `poll` means the
+  `automation/verify` state branch does not have the record
+  `persist_handle` was supposed to commit for this attempt. Either the
+  `persist_handle` job failed silently, or the `poll` job's Checkout
+  targeted the wrong ref (the workflow pins it to `automation/verify`
+  precisely to see `persist_handle`'s commit). Check `persist_handle`'s
+  run log first; if it succeeded, re-run `poll` against the same run.
+- `::warning::verify-poll ended in a non-terminal state` from the
+  `poll` job is emitted by design when the OJ returned
+  `BudgetExhausted` / `HandleLost` / `InfrastructureError`.
+  `persist_terminal` still runs on this path via `!cancelled()` so the
+  emitted record lands on `automation/verify`; the workflow just
+  surfaces a warning so operators know a follow-up tick is expected.
 - Secret leakage in a failed job: nothing to remediate inside the
   workflow. Invalidate the affected token (App key or Library Checker
   refresh token) and follow the rotation steps below.

@@ -1160,11 +1160,6 @@ fn format_status(status: &usecases::service::verify::VerifyStatus) -> String {
     }
 }
 
-/// Locates the project root by searching upward for the `templates/` directory.
-///
-/// `Cargo.toml` is not used as a sentinel because every Rust contest workspace and
-/// solution package under `solutions/{contest_id}/rust/...` also contains a `Cargo.toml`,
-/// which would resolve to the wrong root when running from a contest subdirectory.
 /// Extracts the `VerificationRecord` payload from a [`StartEvent`]. Every
 /// variant carries a record — the post-start persisted state — so the CI
 /// boundary can serialize it to JSON without pattern-matching downstream.
@@ -1195,6 +1190,11 @@ fn poll_event_record(
     }
 }
 
+/// Locates the project root by searching upward for the `templates/` directory.
+///
+/// `Cargo.toml` is not used as a sentinel because every Rust contest workspace and
+/// solution package under `solutions/{contest_id}/rust/...` also contains a `Cargo.toml`,
+/// which would resolve to the wrong root when running from a contest subdirectory.
 fn find_project_root() -> Result<std::path::PathBuf> {
     let mut dir = std::env::current_dir()?;
     loop {
