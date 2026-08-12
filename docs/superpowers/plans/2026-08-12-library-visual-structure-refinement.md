@@ -681,7 +681,7 @@ Do not create the PR until the user approves this visual gate or all feedback is
 
 **Interfaces:**
 - Consumes: the existing desktop subgrid selectors for Home recent library and solution lists.
-- Produces: matching `0.8fr : 1.6fr` title-to-path track ratios without changing DOM or mobile layout.
+- Produces: matching `0.6fr : 1.8fr` title-to-path track ratios plus a `12rem` flex fallback without changing DOM or mobile layout.
 
 - [ ] **Step 1: Apply the minimal desktop CSS change**
 
@@ -689,7 +689,7 @@ Change only the two Home recent list declarations to:
 
 ```css
 grid-template-columns:
-  minmax(0, 0.8fr) 4.5rem minmax(0, 1.6fr) max-content max-content;
+  minmax(0, 0.6fr) 4.5rem minmax(0, 1.8fr) max-content max-content;
 ```
 
 - [ ] **Step 2: Run full Web verification**

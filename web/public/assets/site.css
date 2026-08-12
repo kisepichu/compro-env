@@ -682,6 +682,12 @@ h3 {
   font-size: var(--fs-body);
 }
 
+/* Keep Home metadata close to the title even when subgrid is unavailable. */
+.recent-libraries .library-card h3,
+.recent-solutions .solution-card h3 {
+  flex-basis: 12rem;
+}
+
 .recent-libraries .library-card .library-path,
 .recent-libraries .library-card .library-language,
 .library-files .library-card .library-file-name,
@@ -758,13 +764,13 @@ h3 {
     /* title | language | path | updated | status */
     .recent-libraries .library-list {
       grid-template-columns:
-        minmax(0, 0.8fr) 4.5rem minmax(0, 1.6fr) max-content max-content;
+        minmax(0, 0.6fr) 4.5rem minmax(0, 1.8fr) max-content max-content;
     }
 
     /* title | language | contest / problem | solved | status */
     .recent-solutions .solution-list {
       grid-template-columns:
-        minmax(0, 0.8fr) 4.5rem minmax(0, 1.6fr) max-content max-content;
+        minmax(0, 0.6fr) 4.5rem minmax(0, 1.8fr) max-content max-content;
     }
 
     /* title | file name | updated | status */
