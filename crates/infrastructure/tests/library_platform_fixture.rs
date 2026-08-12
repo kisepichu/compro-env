@@ -53,14 +53,26 @@ fn production_config_and_libraries_are_present() {
 }
 
 #[test]
-fn config_toml_configures_three_languages_and_librarychecker_mapping() {
+fn config_toml_configures_rust_and_librarychecker_mapping() {
+    // Rust must always stay enabled. cpp and lean are temporarily commented
+    // out in `config.toml` (see the block above the `[library.languages.cpp]`
+    // section) while the analyzer handshake / runtime env plumbing lands.
+    // Re-tighten this test to require all three once that follow-up merges.
     let root = repository_root();
     let config = infrastructure::library_project::config::ProjectLibraryConfigLoader::load(&root)
         .expect("root config.toml loads");
     let langs: Vec<&str> = config.languages.keys().map(|k| k.as_str()).collect();
+    // Guard against accidental re-enable: cpp / lean must stay commented
+    // out until the env-plumbing follow-up (see the commit message that
+    // added this test rename). If someone uncomments a language block
+    // without also fixing the handshake env, this exact-count assertion
+    // trips before the workflow does.
+    assert_eq!(
+        langs.len(),
+        1,
+        "cpp/lean are temporarily disabled — languages must be exactly \\[rust\\], got {langs:?}"
+    );
     assert!(langs.contains(&"rust"), "missing rust language: {langs:?}");
-    assert!(langs.contains(&"cpp"), "missing cpp language: {langs:?}");
-    assert!(langs.contains(&"lean"), "missing lean language: {langs:?}");
 
     let rust = domain::library::LanguageId::parse("rust").unwrap();
     let rust_cfg = config.languages.get(&rust).unwrap();

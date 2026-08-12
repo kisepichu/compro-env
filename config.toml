@@ -25,39 +25,47 @@ timeout_seconds = 600
 [library.languages.rust.online_judges.librarychecker]
 language_id = "rust"
 
-[library.languages.cpp]
-display_name = "C++"
-root = "libraries/cpp"
-include = ["**/*.hpp", "**/*.cpp"]
-exclude = []
-check_command = "clang++ -std=c++20 -Wall -Wextra -Werror -fsyntax-only libraries/cpp/algebra/monoid.hpp"
-check_timeout_seconds = 600
-syntax_highlight = "cpp"
-entry_file = "main.cpp"
-expected_toolchains = [
-  { name = "clang", version = "22.1.0" },
-]
-
-[library.languages.cpp.analyzer]
-command = ["./target/library-analyzers/bin/cpp-analyzer"]
-timeout_seconds = 600
-
-[library.languages.cpp.online_judges.librarychecker]
-language_id = "cpp"
-
-[library.languages.lean]
-display_name = "Lean"
-root = "libraries/lean"
-include = ["**/*.lean"]
-exclude = []
-check_command = "lake build"
-check_timeout_seconds = 900
-syntax_highlight = "lean"
-entry_file = "Main.lean"
-expected_toolchains = [
-  { name = "lean", version = "4.30.0" },
-]
-
-[library.languages.lean.analyzer]
-command = ["./target/library-analyzers/bin/lean-analyzer"]
-timeout_seconds = 900
+# C++ and Lean adapters temporarily disabled while adapter env plumbing
+# lands (see follow-up: handshake_environment on `LanguageBuildPlan` is
+# ignored by `handshake_adapter`, and `build_lean_env` does not put
+# `<CE_LEAN_ROOT>/bin` on PATH — combined, lean-analyzer's handshake dies
+# with `could not execute external process 'lean'`). Re-enable once the
+# per-language handshake / runtime env is properly threaded through
+# `library-adapter-build` and `build_analysis`.
+#
+# [library.languages.cpp]
+# display_name = "C++"
+# root = "libraries/cpp"
+# include = ["**/*.hpp", "**/*.cpp"]
+# exclude = []
+# check_command = "clang++ -std=c++20 -Wall -Wextra -Werror -fsyntax-only libraries/cpp/algebra/monoid.hpp"
+# check_timeout_seconds = 600
+# syntax_highlight = "cpp"
+# entry_file = "main.cpp"
+# expected_toolchains = [
+#   { name = "clang", version = "22.1.0" },
+# ]
+#
+# [library.languages.cpp.analyzer]
+# command = ["./target/library-analyzers/bin/cpp-analyzer"]
+# timeout_seconds = 600
+#
+# [library.languages.cpp.online_judges.librarychecker]
+# language_id = "cpp"
+#
+# [library.languages.lean]
+# display_name = "Lean"
+# root = "libraries/lean"
+# include = ["**/*.lean"]
+# exclude = []
+# check_command = "lake build"
+# check_timeout_seconds = 900
+# syntax_highlight = "lean"
+# entry_file = "Main.lean"
+# expected_toolchains = [
+#   { name = "lean", version = "4.30.0" },
+# ]
+#
+# [library.languages.lean.analyzer]
+# command = ["./target/library-analyzers/bin/lean-analyzer"]
+# timeout_seconds = 900
