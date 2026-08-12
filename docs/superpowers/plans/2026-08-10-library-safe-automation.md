@@ -32,12 +32,12 @@ pub fn classify_changes(root: &Path, before: &str, after: &str)
     -> Result<ChangeClass, ChangeClassificationError>;
 ```
 
-- [ ] Write failing repository-fixture tests for empty, one/many results, mixed source, rename/delete,
+- [x] Write failing repository-fixture tests for empty, one/many results, mixed source, rename/delete,
       symlink, invalid SHA, NUL-safe paths, and more than 300 changed files.
-- [ ] Implement `git diff --name-only -z` classification; accept only normal
+- [x] Implement `git diff --name-only -z` classification; accept only normal
       `verification/results/**/*.json` files as result-only.
-- [ ] Run `cargo test -p infrastructure --test git_change_classifier`.
-- [ ] Invoke `/commit` with `feat: classify verification-only Git changes`.
+- [x] Run `cargo test -p infrastructure --test git_change_classifier`.
+- [x] Invoke `/commit` with `feat: classify verification-only Git changes`.
 
 ### Task 2: Write verification state through constrained GitHub APIs
 
