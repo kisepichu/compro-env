@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "solution_id": "librarychecker-aplusb/aplusb/rust",
+  "attempt_id": "attempt-2026-08-12-001",
+  "replaces_attempt_id": null,
+  "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "state": {
+    "kind": "completed",
+    "data": {
+      "verdict": {
+        "kind": "accepted",
+        "raw": "AC"
+      },
+      "verified_libraries": [
+        "libraries/rust/algebra/monoid.rs"
+      ],
+      "language": {
+        "language_id": "rust",
+        "oj_language_id": "rust"
+      },
+      "verified_at": "2026-08-12T10:15:00+00:00",
+      "capabilities": {
+        "submission_mode": "unattended_trackable",
+        "result_detail": "testcase_details",
+        "recovery_mode": "best_effort"
+      },
+      "submitted_source_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "input_hashes": {
+        "libraries/rust/algebra/monoid.rs": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "solutions/librarychecker-aplusb/aplusb/rust/src/main.rs": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "summary": {
+        "max_execution_time_ms": 12,
+        "max_memory_bytes": 4096
+      },
+      "test_cases": [
+        {
+          "name": "example_00",
+          "verdict": {
+            "kind": "accepted",
+            "raw": "AC"
+          },
+          "execution_time_ms": 8,
+          "memory_bytes": 3072
+        },
+        {
+          "name": "example_01",
+          "verdict": {
+            "kind": "accepted",
+            "raw": "AC"
+          },
+          "execution_time_ms": 12,
+          "memory_bytes": 4096
+        }
+      ],
+      "handle": {
+        "oj": "librarychecker",
+        "submission_id": "20260812-0001",
+        "submission_url": "https://judge.yosupo.jp/submission/20260812-0001",
+        "locator": null,
+        "submitted_at": "2026-08-12T10:14:30+00:00"
+      },
+      "extra": {}
+    }
+  }
+}

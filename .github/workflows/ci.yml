@@ -4,23 +4,31 @@ on:
   push:
     branches: ["**"]
   pull_request:
-    branches: [main, dev]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  check:
-    name: Test, Clippy, and Format
+  rust:
+    name: Cargo test + clippy + fmt
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable @ 2026-08
+        with:
+          toolchain: 1.92.0
           components: clippy, rustfmt
 
       - name: Cache cargo registry and build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -38,3 +46,62 @@ jobs:
 
       - name: cargo fmt check
         run: cargo fmt --all --check
+
+  site:
+    name: Static site build (root + /compro-env/)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Install Node (pinned via .node-version)
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6.5.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Verify Node version matches .node-version
+        run: |
+          expected="$(cat .node-version)"
+          actual="$(node --version | sed 's/^v//')"
+          if [ "$expected" != "$actual" ]; then
+            echo "Node mismatch: expected $expected, got $actual" >&2
+            exit 1
+          fi
+          echo "node=$actual"
+          echo "npm=$(npm --version)"
+
+      - name: Install dependencies (lockfile-only)
+        run: npm ci
+
+      - name: Cache validation (npm cache directory present after ci)
+        run: |
+          test -d node_modules/astro
+          test -d node_modules/pagefind
+          test -d node_modules/shiki
+
+      - name: Build both bases (/ and /compro-env/) with link and CSP checks
+        run: npm run verify:builds
+
+      - name: Full site pipeline (schema, exact index, Astro, Pagefind, verify)
+        run: npm run site:build
+
+      - name: Publish size and toolchain summary
+        run: |
+          {
+            echo "### Toolchain identity"
+            echo "- Node: $(node --version)"
+            echo "- npm: $(npm --version)"
+            echo ""
+            echo "### Site artifact sizes"
+            for dir in web/dist web/dist-root web/dist-compro-env; do
+              if [ -d "$dir" ]; then
+                bytes=$(du -sb "$dir" | awk '{print $1}')
+                printf -- "- %s: %d bytes (%.1f KiB)\n" "$dir" "$bytes" "$(awk "BEGIN{print $bytes/1024}")"
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,11 @@
+language = "rust"
+test_command = "cargo run --quiet --release --manifest-path solutions/librarychecker-aplusb/aplusb/rust/Cargo.toml"
+publish = true
+solved_at = "2026-08-12T00:00:00+00:00"
+test_timeout_seconds = 600
+
+[verify]
+libraries = [
+  "libraries/rust/algebra/monoid.rs",
+]
+language_id = "rust"
