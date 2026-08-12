@@ -286,11 +286,19 @@ fn environment_names_are_from_allowlist() {
     }
 }
 
-/// #6: Secret-bearing jobs must not check out source or build with cargo.
-/// The whole point of the split is that only the classifier / integrity
-/// jobs touch code (§15.3).
+/// #6 (plan 062): Secret-bearing jobs must not rebuild `ce`. The OJ / App
+/// jobs execute only the pinned `ce` binary artifact — cargo would compile
+/// arbitrary post-merge code with secrets in scope.
+///
+/// A checkout of the SAME immutable SHA that `prepare` planned against is
+/// allowed for `submit` / `poll`: the internal `ce` handlers still read
+/// `config.toml`, `templates/`, `solutions/`, `libraries/`, and
+/// `verification/results/` from the working tree, and those files come out
+/// of a reviewed, protected `main` commit. The `actions/checkout` SHA pin is
+/// covered by test #3; #062.checkout below asserts the `ref:` is
+/// `${{ inputs.after }}`.
 #[test]
-fn no_checkout_or_build_in_secret_jobs() {
+fn no_build_or_unpinned_checkout_in_secret_jobs() {
     let banned_cargo_verbs = ["cargo build", "cargo test", "cargo run"];
     for (label, doc) in [
         ("verify-worker", load_worker()),
@@ -305,10 +313,21 @@ fn no_checkout_or_build_in_secret_jobs() {
                     Some(m) => m,
                     None => continue,
                 };
-                if let Some(uses) = get(map, "uses").and_then(Value::as_str) {
+                if let Some(uses) = get(map, "uses").and_then(Value::as_str)
+                    && uses.starts_with("actions/checkout@")
+                {
+                    let with = get(map, "with")
+                        .and_then(Value::as_mapping)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{label}: job {job_name:?} step[{idx}] actions/checkout must set `with:` (ref pin required)"
+                            )
+                        });
+                    let refv = get(with, "ref").and_then(Value::as_str);
                     assert!(
-                        !uses.starts_with("actions/checkout"),
-                        "{label}: job {job_name:?} step[{idx}] uses {uses:?} — secret jobs must not checkout"
+                        refv.is_some_and(|s| s.contains("inputs.after")),
+                        "{label}: job {job_name:?} step[{idx}] actions/checkout must pin \
+                         `ref:` to `${{{{ inputs.after }}}}`, got {refv:?}"
                     );
                 }
                 if let Some(run) = get(map, "run").and_then(Value::as_str) {
@@ -1720,12 +1739,12 @@ fn worker_declares_mode_and_solution_inputs() {
     }
 }
 
-/// #062.16: `secret-bearing` jobs must not run `git clone` or attempt to
-/// materialize source outside the pinned artifact — extends test #6 to the
-/// exact commands the plan-062 worker actually runs. Also confirms the
-/// worker doesn't re-add `actions/checkout` in a secret job by accident.
+/// #062.16: `secret-bearing` jobs must not run `git clone` / `git fetch` /
+/// `git checkout` in shell — the only way to materialize source is through
+/// the pinned `actions/checkout@<sha>` action targeting `${{ inputs.after }}`
+/// (validated by test #6 above).
 #[test]
-fn worker_secret_jobs_never_touch_source() {
+fn worker_secret_jobs_never_git_from_shell() {
     let doc = load_worker();
     let banned_shell_snippets = ["git clone", "git checkout", "git fetch"];
     for (job_name, job) in jobs(&doc) {
@@ -1737,12 +1756,6 @@ fn worker_secret_jobs_never_touch_source() {
                 Some(m) => m,
                 None => continue,
             };
-            if let Some(uses) = get(map, "uses").and_then(Value::as_str) {
-                assert!(
-                    !uses.starts_with("actions/checkout"),
-                    "worker: secret job {job_name:?} step[{idx}] uses actions/checkout — forbidden"
-                );
-            }
             if let Some(run) = get(map, "run").and_then(Value::as_str) {
                 for banned in banned_shell_snippets {
                     assert!(

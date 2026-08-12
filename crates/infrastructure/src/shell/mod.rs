@@ -442,7 +442,12 @@ pub fn run() -> Result<()> {
                     &usecases::submission_lifecycle::NoRetryHint,
                     usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
                 )?;
-                println!("{event:?}");
+                // Emit the post-start record as JSON so the App-only persist
+                // job can consume it directly via `--candidate-in` (CI split).
+                let record = start_event_record(&event);
+                let json = serde_json::to_string(record)
+                    .map_err(|e| anyhow::anyhow!("failed to serialize start record: {e}"))?;
+                println!("{json}");
                 Ok(())
             }
             commands::InternalSubcommand::VerifyPoll { solution } => {
@@ -464,11 +469,21 @@ pub fn run() -> Result<()> {
                     &usecases::submission_lifecycle::NoRetryHint,
                     usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
                 )?;
+                // Emit the current record so the persist_terminal job has
+                // something to hand to `verify-persist`. Non-terminal states
+                // still need to be persisted (spec §15.1: intermediate poll
+                // transitions save back to the branch).
+                let record = poll_event_record(&event);
+                let json = serde_json::to_string(record)
+                    .map_err(|e| anyhow::anyhow!("failed to serialize poll record: {e}"))?;
+                println!("{json}");
                 use usecases::submission_lifecycle::PollEvent;
                 let exit_code = match event {
-                    PollEvent::Completed { .. } => 0,
+                    PollEvent::Completed { .. } | PollEvent::Unavailable { .. } => 0,
                     _ => 1,
                 };
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
                 std::process::exit(exit_code);
             }
             commands::InternalSubcommand::ClassifyChanges {
@@ -1144,6 +1159,36 @@ fn format_status(status: &usecases::service::verify::VerifyStatus) -> String {
 /// `Cargo.toml` is not used as a sentinel because every Rust contest workspace and
 /// solution package under `solutions/{contest_id}/rust/...` also contains a `Cargo.toml`,
 /// which would resolve to the wrong root when running from a contest subdirectory.
+/// Extracts the `VerificationRecord` payload from a [`StartEvent`]. Every
+/// variant carries a record — the post-start persisted state — so the CI
+/// boundary can serialize it to JSON without pattern-matching downstream.
+fn start_event_record(
+    event: &usecases::submission_lifecycle::StartEvent,
+) -> &domain::verification::VerificationRecord {
+    use usecases::submission_lifecycle::StartEvent;
+    match event {
+        StartEvent::Trackable { record }
+        | StartEvent::Unavailable { record }
+        | StartEvent::AcceptanceUnknown { record }
+        | StartEvent::ConfirmedNotAccepted { record }
+        | StartEvent::InfrastructureError { record } => record,
+    }
+}
+
+/// Extracts the `VerificationRecord` payload from a [`PollEvent`].
+fn poll_event_record(
+    event: &usecases::submission_lifecycle::PollEvent,
+) -> &domain::verification::VerificationRecord {
+    use usecases::submission_lifecycle::PollEvent;
+    match event {
+        PollEvent::Completed { record }
+        | PollEvent::Unavailable { record }
+        | PollEvent::BudgetExhausted { record }
+        | PollEvent::InfrastructureError { record }
+        | PollEvent::HandleLost { record } => record,
+    }
+}
+
 fn find_project_root() -> Result<std::path::PathBuf> {
     let mut dir = std::env::current_dir()?;
     loop {

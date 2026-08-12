@@ -217,6 +217,19 @@ jobs:
     outputs:
       handle_sha: ${{ steps.hash_handle.outputs.handle_sha }}
     steps:
+      # The `ce` internal handlers still call find_project_root() +
+      # ProjectLibraryConfigLoader::load() + build_analysis(); they read
+      # config.toml, templates/, solutions/, libraries/, verification/results/
+      # from the current working tree. Check out the exact SHA that `prepare`
+      # planned against so the OJ submission sees the identical project state
+      # that produced the plan hash. This checkout is read-only source data —
+      # the executable is still the pinned `ce` binary artifact.
+      - name: Checkout at plan base SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: ${{ inputs.after }}
+          fetch-depth: 1
+
       - name: Download plan artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -250,8 +263,10 @@ jobs:
           LC_REFRESH: ${{ secrets.LIBRARYCHECKER_REFRESH_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.config/ce"
+          # umask must precede mkdir so the parent directory is 0700 as well;
+          # otherwise other runner users can enumerate the file name.
           umask 077
+          mkdir -p "$HOME/.config/ce"
           # The id_token is refreshed on demand from the refresh_token so an
           # empty placeholder is fine here.
           {
@@ -359,6 +374,14 @@ jobs:
     outputs:
       terminal_sha: ${{ steps.hash_terminal.outputs.terminal_sha }}
     steps:
+      # See the note on the submit job's Checkout step — verify-poll needs a
+      # populated project tree for find_project_root() + build_analysis().
+      - name: Checkout at plan base SHA
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: ${{ inputs.after }}
+          fetch-depth: 1
+
       - name: Download plan artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
