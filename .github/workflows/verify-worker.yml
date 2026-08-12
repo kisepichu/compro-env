@@ -368,7 +368,15 @@ jobs:
           chmod +x work/ce
           mkdir -p target/library-analyzers
           tar -C target/library-analyzers -xf work/analyzers.tar
-          chmod +x target/library-analyzers/bin/*
+          # `find -exec chmod` gracefully handles an empty bin/ (which
+          # would otherwise fail here with a confusing "No such file"
+          # under `set -euo pipefail`) and surfaces the real cause via
+          # the sanity guard on the next step.
+          find target/library-analyzers/bin -maxdepth 1 -type f -exec chmod +x {} +
+          if [ -z "$(ls -A target/library-analyzers/bin 2>/dev/null || true)" ]; then
+            echo "analyzers.tar unpacked but target/library-analyzers/bin is empty" >&2
+            exit 1
+          fi
 
       - name: Configure LibraryChecker session
         env:
@@ -568,7 +576,15 @@ jobs:
           chmod +x work/ce
           mkdir -p target/library-analyzers
           tar -C target/library-analyzers -xf work/analyzers.tar
-          chmod +x target/library-analyzers/bin/*
+          # `find -exec chmod` gracefully handles an empty bin/ (which
+          # would otherwise fail here with a confusing "No such file"
+          # under `set -euo pipefail`) and surfaces the real cause via
+          # the sanity guard on the next step.
+          find target/library-analyzers/bin -maxdepth 1 -type f -exec chmod +x {} +
+          if [ -z "$(ls -A target/library-analyzers/bin 2>/dev/null || true)" ]; then
+            echo "analyzers.tar unpacked but target/library-analyzers/bin is empty" >&2
+            exit 1
+          fi
 
       - name: Configure LibraryChecker session
         env:
