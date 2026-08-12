@@ -48,6 +48,10 @@ fn load_ci() -> Value {
     load(&workflow_dir().join("ci.yml"))
 }
 
+fn load_pages() -> Value {
+    load(&workflow_dir().join("pages.yml"))
+}
+
 /// Read `.node-version` (Node patch pin per spec §12.15).
 fn node_version_pin() -> String {
     let path = workspace_root().join(".node-version");
@@ -868,5 +872,287 @@ fn ci_never_deploys_to_pages() {
                 );
             }
         }
+    }
+}
+
+// ─── Plan 061 Task 3: Pages workflow policy (spec §15.5) ─────────────────────
+
+/// #061.10: `pages.yml` triggers only on push to main and manual dispatch.
+/// PR and schedule triggers are banned so a stray branch cannot spawn a
+/// deployment.
+#[test]
+fn pages_triggers_are_main_push_and_manual_only() {
+    let doc = load_pages();
+    let root = as_map(&doc, "pages.yml");
+    let on = get(root, "on").expect("pages.yml missing `on:`");
+    let on_map = as_map(on, "pages on");
+
+    let push = get(on_map, "push")
+        .and_then(Value::as_mapping)
+        .expect("pages.yml missing push trigger");
+    let branches = get(push, "branches")
+        .and_then(Value::as_sequence)
+        .expect("push.branches must be a sequence");
+    let listed: Vec<&str> = branches.iter().filter_map(Value::as_str).collect();
+    assert_eq!(
+        listed,
+        vec!["main"],
+        "pages.yml push branches must be exactly [main]"
+    );
+
+    assert!(
+        get(on_map, "workflow_dispatch").is_some(),
+        "pages.yml must accept workflow_dispatch for manual re-publish"
+    );
+
+    for banned in [
+        "pull_request",
+        "pull_request_target",
+        "schedule",
+        "issue_comment",
+    ] {
+        assert!(
+            get(on_map, banned).is_none(),
+            "pages.yml must not use {banned:?} trigger"
+        );
+    }
+}
+
+/// #061.11: The publish workflow uses a fixed `pages-publish` concurrency
+/// group with `cancel-in-progress: true` (spec §15.5).
+#[test]
+fn pages_concurrency_group_is_fixed_and_cancels() {
+    let doc = load_pages();
+    let root = as_map(&doc, "pages.yml");
+    let concurrency = get(root, "concurrency")
+        .and_then(Value::as_mapping)
+        .expect("pages.yml must set workflow-level concurrency");
+    let group = get(concurrency, "group").and_then(Value::as_str);
+    assert_eq!(
+        group,
+        Some("pages-publish"),
+        "concurrency group must be `pages-publish`"
+    );
+    let cancel = get(concurrency, "cancel-in-progress").and_then(Value::as_bool);
+    assert_eq!(
+        cancel,
+        Some(true),
+        "pages-publish concurrency must cancel in progress"
+    );
+}
+
+/// #061.12: The build job only reads from the repository (never writes). Only
+/// the deploy job holds `pages: write` and `id-token: write`.
+#[test]
+fn pages_build_never_deploys_and_deploy_has_minimum_writes() {
+    let doc = load_pages();
+    let jobs_map = jobs(&doc);
+    let build = get(jobs_map, "build").expect("pages.yml missing `build` job");
+    let deploy = get(jobs_map, "deploy").expect("pages.yml missing `deploy` job");
+
+    // build has read-only contents (may keep `pages: read` for configure-pages).
+    let build_perms = get(as_map(build, "build"), "permissions")
+        .and_then(Value::as_mapping)
+        .expect("build job must declare permissions");
+    let contents = get(build_perms, "contents").and_then(Value::as_str);
+    assert_eq!(
+        contents,
+        Some("read"),
+        "build.permissions.contents must be `read`"
+    );
+    for banned in ["id-token", "deployments"] {
+        assert!(
+            build_perms.get(Value::String(banned.into())).is_none(),
+            "build.permissions must not grant {banned}"
+        );
+    }
+    if let Some(p) = get(build_perms, "pages").and_then(Value::as_str) {
+        assert_eq!(p, "read", "build.permissions.pages must be at most `read`");
+    }
+    // The build job must not upload via `actions/deploy-pages`.
+    for step in steps(build) {
+        let uses = step
+            .as_mapping()
+            .and_then(|m| get(m, "uses"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert!(
+            !uses.starts_with("actions/deploy-pages"),
+            "build job must not call actions/deploy-pages — that belongs to deploy"
+        );
+    }
+
+    // deploy holds exactly `pages: write` and `id-token: write`.
+    let deploy_perms = get(as_map(deploy, "deploy"), "permissions")
+        .and_then(Value::as_mapping)
+        .expect("deploy job must declare permissions");
+    let pages_write = get(deploy_perms, "pages").and_then(Value::as_str);
+    let id_write = get(deploy_perms, "id-token").and_then(Value::as_str);
+    assert_eq!(
+        pages_write,
+        Some("write"),
+        "deploy.permissions.pages must be `write`"
+    );
+    assert_eq!(
+        id_write,
+        Some("write"),
+        "deploy.permissions.id-token must be `write`"
+    );
+    for banned in ["contents", "deployments", "actions", "checks"] {
+        if let Some(v) = deploy_perms
+            .get(Value::String(banned.into()))
+            .and_then(Value::as_str)
+        {
+            assert_ne!(v, "write", "deploy.permissions.{banned} must not be write");
+        }
+    }
+
+    // deploy job binds the `github-pages` environment.
+    let deploy_map = as_map(deploy, "deploy");
+    let env = get(deploy_map, "environment").expect("deploy must bind environment");
+    let env_name = match env {
+        Value::String(s) => s.clone(),
+        Value::Mapping(m) => m
+            .get(Value::String("name".into()))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        _ => String::new(),
+    };
+    assert_eq!(
+        env_name, "github-pages",
+        "deploy environment must be `github-pages`"
+    );
+}
+
+/// #061.13: Every third-party action in pages.yml is SHA-pinned. Especially
+/// critical because the deploy job holds Pages write.
+#[test]
+fn pages_actions_are_sha_pinned() {
+    let doc = load_pages();
+    for (job_name, job) in jobs(&doc) {
+        for (idx, step) in steps(job).iter().enumerate() {
+            let uses = match step.as_mapping().and_then(|m| get(m, "uses")) {
+                Some(Value::String(s)) => s.clone(),
+                _ => continue,
+            };
+            let parts: Vec<&str> = uses.rsplitn(2, '@').collect();
+            assert_eq!(
+                parts.len(),
+                2,
+                "pages.yml: job {job_name:?} step[{idx}] uses {uses:?} has no @ref"
+            );
+            let sha = parts[0];
+            assert_eq!(
+                sha.len(),
+                SHA_PIN_RE_LEN,
+                "pages.yml: job {job_name:?} step[{idx}] uses {uses:?} is not SHA-pinned"
+            );
+            assert!(
+                sha.chars().all(|c| c.is_ascii_hexdigit()),
+                "pages.yml: job {job_name:?} step[{idx}] uses {uses:?} ref is not hex"
+            );
+        }
+    }
+}
+
+/// #061.14: The build job writes a `build-source.json` metadata file
+/// carrying the source commit SHA into the artifact so the deploy job can
+/// enforce SHA equality (spec §15.5).
+#[test]
+fn pages_build_emits_source_sha_metadata() {
+    let doc = load_pages();
+    let jobs_map = jobs(&doc);
+    let build = get(jobs_map, "build").expect("missing build job");
+    let mut writes_metadata = false;
+    for step in steps(build) {
+        let map = match step.as_mapping() {
+            Some(m) => m,
+            None => continue,
+        };
+        if let Some(run) = get(map, "run").and_then(Value::as_str) {
+            if run.contains("build-source.json") && run.contains("source_commit_sha") {
+                writes_metadata = true;
+            }
+        }
+    }
+    assert!(
+        writes_metadata,
+        "build job must write a build-source.json capturing source_commit_sha"
+    );
+
+    // The build job must also expose the SHA as a job output, so the deploy
+    // job can compare it to current main without unpacking the artifact.
+    let outputs = get(as_map(build, "build"), "outputs")
+        .and_then(Value::as_mapping)
+        .expect("build job must expose outputs for the deploy step");
+    let source_sha = get(outputs, "source_sha").and_then(Value::as_str);
+    assert!(
+        source_sha.is_some_and(|s| s.contains("steps.") && s.contains("source_sha")),
+        "outputs.source_sha must wire to a step output (got {source_sha:?})"
+    );
+}
+
+/// #061.15: The deploy job compares the artifact's source SHA to current
+/// main HEAD before invoking `actions/deploy-pages`. An old rerun whose
+/// source SHA no longer matches main must fail before publishing (§15.5).
+#[test]
+fn pages_deploy_rejects_stale_reruns() {
+    let doc = load_pages();
+    let jobs_map = jobs(&doc);
+    let deploy = get(jobs_map, "deploy").expect("missing deploy job");
+    let step_list = steps(deploy);
+
+    let deploy_idx = step_list
+        .iter()
+        .position(|s| {
+            s.as_mapping()
+                .and_then(|m| get(m, "uses"))
+                .and_then(Value::as_str)
+                .is_some_and(|u| u.starts_with("actions/deploy-pages@"))
+        })
+        .expect("deploy job must call actions/deploy-pages");
+
+    let mut has_sha_check = false;
+    for step in &step_list[..deploy_idx] {
+        let map = match step.as_mapping() {
+            Some(m) => m,
+            None => continue,
+        };
+        let run = match get(map, "run").and_then(Value::as_str) {
+            Some(s) => s,
+            None => continue,
+        };
+        if run.contains("commits/main") && run.contains("ARTIFACT_SHA") {
+            has_sha_check = true;
+        }
+    }
+    assert!(
+        has_sha_check,
+        "deploy job must query commits/main and compare against ARTIFACT_SHA before actions/deploy-pages"
+    );
+}
+
+/// #061.16: The workflow-level default token permissions are `contents: read`
+/// only. No stray write scopes trickle down to jobs that forget to set them.
+#[test]
+fn pages_default_permissions_are_read_only() {
+    let doc = load_pages();
+    let root = as_map(&doc, "pages.yml");
+    let perms = get(root, "permissions")
+        .and_then(Value::as_mapping)
+        .expect("pages.yml must declare workflow-level permissions");
+    let contents = get(perms, "contents").and_then(Value::as_str);
+    assert_eq!(
+        contents,
+        Some("read"),
+        "workflow-level permissions.contents must be `read`"
+    );
+    for key in perms.keys() {
+        let k = key.as_str().unwrap_or("");
+        assert_eq!(
+            k, "contents",
+            "workflow-level permissions must only set `contents`, saw {k:?}"
+        );
     }
 }
