@@ -810,8 +810,14 @@ fn ci_is_secretless() {
     let doc = load_ci();
     for (job_name, job) in jobs(&doc) {
         let map = as_map(job, "job");
-        if let Some(env) = get(map, "environment").and_then(Value::as_str) {
-            panic!("ci.yml: job {job_name:?} carries environment {env:?} — CI must be secretless");
+        // `environment:` accepts both scalar (`environment: foo`) and mapping
+        // (`environment: { name: foo, url: ... }`) shapes — any presence at
+        // all opts the job into a protected secret store, so we forbid the
+        // key rather than a specific value shape.
+        if get(map, "environment").is_some() {
+            panic!(
+                "ci.yml: job {job_name:?} carries an `environment:` binding — CI must be secretless"
+            );
         }
         for (idx, step) in steps(job).iter().enumerate() {
             let smap = match step.as_mapping() {
