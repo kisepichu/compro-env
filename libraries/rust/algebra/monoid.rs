@@ -27,7 +27,8 @@ impl Monoid for AddMonoid {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // Glob `use` marks the file `partial` in the rust library-adapter; use explicit imports.
+    use super::{AddMonoid, Monoid};
 
     #[test]
     fn add_monoid_identity() {
