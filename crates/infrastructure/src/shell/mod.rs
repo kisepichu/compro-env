@@ -1073,9 +1073,18 @@ fn build_analysis(
     use usecases::library_analyzer::LibraryAnalyzer;
 
     let manifest = crate::library_project::discovery::LibraryDiscovery::discover(root, config)?;
+    // `ProcessLibraryAdapterRunner` calls `Command::env_clear()` before
+    // running the analyzer, so a stock `BTreeMap::new()` gives the child
+    // an empty PATH. rust-analyzer needs `rustc` on PATH to detect the
+    // toolchain; cpp / lean adapters (when re-enabled) will need their
+    // own per-language additions layered on top. `sanitized_language_env`
+    // is the same allowlisted forward already used by
+    // `library-adapter-build` — it guarantees a non-empty PATH and
+    // forwards CARGO_HOME / RUSTUP_HOME / LD_LIBRARY_PATH etc. so the
+    // pinned Rust toolchain shims still resolve.
     let runner = crate::library_adapter::process::ProcessLibraryAdapterRunner::new(
         root.to_path_buf(),
-        BTreeMap::new(),
+        crate::library_adapter::language_plans::sanitized_language_env(),
     );
     let analyzer =
         crate::library_analyzer_impl::ProcessLibraryAnalyzer::new(runner, config.clone());
