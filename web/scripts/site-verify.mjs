@@ -109,6 +109,22 @@ function checkPage(target, base, outDir, htmlPath) {
   const footer = doc.querySelector("footer.site-footer");
   if (!footer) fail(target, relPath, 'missing <footer class="site-footer">');
 
+  const stylesheets = doc.querySelectorAll('link[rel="stylesheet"]');
+  const expectedStylesheet = `${base}assets/site.css`;
+  if (stylesheets.length !== 1) {
+    fail(
+      target,
+      relPath,
+      `expected exactly one stylesheet link, found ${stylesheets.length}`,
+    );
+  } else if (stylesheets[0].getAttribute("href") !== expectedStylesheet) {
+    fail(
+      target,
+      relPath,
+      `stylesheet href must be "${expectedStylesheet}"`,
+    );
+  }
+
   const is404 = relPath === "404.html";
   const isSearch =
     relPath === "search/index.html" || relPath === "search\\index.html";
@@ -277,6 +293,9 @@ function main() {
   if (!existsSync(outDir)) {
     console.error(`site-verify: out-dir not found: ${outDir}`);
     process.exit(1);
+  }
+  if (!existsSync(join(outDir, "assets", "site.css"))) {
+    fail(label, "assets/site.css", "shared stylesheet was not copied");
   }
   const files = walkHtml(outDir);
   for (const file of files) checkPage(label, base, outDir, file);

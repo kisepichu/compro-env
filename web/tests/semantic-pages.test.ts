@@ -144,6 +144,13 @@ function assertShell(
     true,
   );
 
+  // Shared visual layer: one same-origin, base-aware stylesheet on every page.
+  const stylesheets = doc.querySelectorAll('link[rel="stylesheet"]');
+  expect(stylesheets.length).toBe(1);
+  expect(stylesheets[0].getAttribute("href")).toBe(
+    `${opts.config.base}assets/site.css`,
+  );
+
   // Robots meta.
   const robots = doc.querySelector('meta[name="robots"]');
   expect(robots).toBeTruthy();
@@ -557,6 +564,11 @@ describe("Status component", () => {
       expect(badge.getAttribute("data-status")).toBe(value);
       expect(badge.textContent!.trim()).toBe(label);
       expect(badge.hasAttribute("role")).toBe(false);
+      const svg = badge.querySelector(
+        'svg[aria-hidden="true"][focusable="false"]',
+      );
+      expect(svg).toBeTruthy();
+      expect(svg!.children.length).toBeGreaterThan(0);
     }
   });
 
@@ -570,6 +582,11 @@ describe("Status component", () => {
       const badge = doc.querySelector(".status-badge")!;
       expect(badge.getAttribute("data-status")).toBe(value);
       expect(badge.textContent!.trim()).toBe(label);
+      const svg = badge.querySelector(
+        'svg[aria-hidden="true"][focusable="false"]',
+      );
+      expect(svg).toBeTruthy();
+      expect(svg!.children.length).toBeGreaterThan(0);
     }
   });
 });

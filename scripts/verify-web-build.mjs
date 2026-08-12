@@ -12,7 +12,13 @@
  * Exit code 1 on any violation, 0 on success.
  */
 
-import { readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -67,6 +73,9 @@ function runBuild({ base, label, outDir }) {
     console.error(`astro build failed for base ${base}`);
     process.exit(1);
   }
+  if (!existsSync(join(outDir, "assets", "site.css"))) {
+    fail(label, "assets/site.css", "shared stylesheet was not copied");
+  }
   console.log(`✓ built ${label} into ${relative(repoRoot, outDir)}`);
 }
 
@@ -98,6 +107,22 @@ function checkPage(target, base, outDir, htmlPath) {
   if (!main) fail(target, relPath, "missing <main id=\"main-content\">");
   const footer = doc.querySelector("footer.site-footer");
   if (!footer) fail(target, relPath, "missing <footer class=\"site-footer\">");
+
+  const stylesheets = doc.querySelectorAll('link[rel="stylesheet"]');
+  const expectedStylesheet = `${base}assets/site.css`;
+  if (stylesheets.length !== 1) {
+    fail(
+      target,
+      relPath,
+      `expected exactly one stylesheet link, found ${stylesheets.length}`,
+    );
+  } else if (stylesheets[0].getAttribute("href") !== expectedStylesheet) {
+    fail(
+      target,
+      relPath,
+      `stylesheet href must be "${expectedStylesheet}"`,
+    );
+  }
 
   const is404 = relPath === "404.html";
   const article = doc.querySelector("article[data-pagefind-body]");
