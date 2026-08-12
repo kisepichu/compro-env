@@ -162,6 +162,29 @@ fn extract_tar_entries<R: Read>(
                     path: target.display().to_string(),
                     source,
                 })?;
+                // Preserve the archive entry's Unix permission bits — without
+                // this, prebuilt executables (e.g. Lean's `bin/lake`,
+                // Clang's `bin/clang++`) land as 0644 and fail with
+                // `Permission denied` when adapter builds invoke them.
+                // `header.mode()` returns just the permission bits per the
+                // `tar` crate contract; type bits stay decided by our
+                // per-`EntryType` branches above.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(mode) = entry.header().mode() {
+                        // Mask to the 9-bit rwxrwxrwx set so an adversarial
+                        // archive cannot request setuid / setgid / sticky
+                        // bits via extraction.
+                        let safe = mode & 0o777;
+                        fs::set_permissions(&target, fs::Permissions::from_mode(safe)).map_err(
+                            |source| ArchiveError::Write {
+                                path: target.display().to_string(),
+                                source,
+                            },
+                        )?;
+                    }
+                }
             }
             EntryType::Directory => {
                 let target = destination.join(&relative);
@@ -480,6 +503,62 @@ mod tests {
         extract_archive(&archive_path, ArchiveFormat::TarZst, dest.path()).unwrap();
         let extracted = fs::read(dest.path().join("greeting.txt")).unwrap();
         assert_eq!(extracted, b"hello zst\n");
+    }
+
+    fn build_tar_zst_with_mode(name: &str, contents: &[u8], mode: u32) -> Vec<u8> {
+        use zstd::stream::write::Encoder as ZstdEncoder;
+        let mut zst = ZstdEncoder::new(Vec::new(), 3).expect("start zstd encoder");
+        {
+            let mut builder = tar::Builder::new(&mut zst);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(mode);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, name, contents)
+                .expect("append tar file");
+            builder.finish().expect("finish tar");
+        }
+        zst.finish().expect("finish zst")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_tar_zst_preserves_executable_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let bytes = build_tar_zst_with_mode("bin/lake", b"#!/bin/sh\n", 0o755);
+        let archive_dir = TempDir::new().unwrap();
+        let archive_path = archive_dir.path().join("lean.tar.zst");
+        fs::write(&archive_path, &bytes).unwrap();
+        let dest = TempDir::new().unwrap();
+        extract_archive(&archive_path, ArchiveFormat::TarZst, dest.path()).unwrap();
+        let extracted = dest.path().join("bin/lake");
+        let mode = fs::metadata(&extracted).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(
+            mode, 0o755,
+            "extracted file must preserve executable bits from tar header"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_tar_zst_strips_setuid_bits() {
+        use std::os::unix::fs::PermissionsExt;
+        // 0o4755 asks for setuid + 0o755. The safe-permission mask must
+        // strip the setuid bit and keep only the executable bits.
+        let bytes = build_tar_zst_with_mode("bin/dangerous", b"payload\n", 0o4755);
+        let archive_dir = TempDir::new().unwrap();
+        let archive_path = archive_dir.path().join("dangerous.tar.zst");
+        fs::write(&archive_path, &bytes).unwrap();
+        let dest = TempDir::new().unwrap();
+        extract_archive(&archive_path, ArchiveFormat::TarZst, dest.path()).unwrap();
+        let extracted = dest.path().join("bin/dangerous");
+        let mode = fs::metadata(&extracted).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(
+            mode, 0o755,
+            "setuid/setgid/sticky bits must not survive the mask"
+        );
     }
 
     fn build_tar_gz_with_symlink(
