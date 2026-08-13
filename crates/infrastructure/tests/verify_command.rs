@@ -1231,6 +1231,15 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
         other => panic!("expected Starting state, got {other:?}"),
     }
 
+    // Simulate the credential-split `persist_starting` job (spec §15.4):
+    // the Starting record is written by an out-of-band writer BEFORE
+    // `verify-start` runs. Without this seed, `submit_prepared_plan` refuses
+    // (its whole purpose is to require an already-persisted Starting).
+    let repo = VerificationRepositoryImpl::new(env.root.clone());
+    use usecases::repository::verification_repository::VerificationRepository;
+    repo.compare_and_swap(&lc_id(), None, &starting)
+        .expect("seed Starting via CAS");
+
     // Now start via internal-verify-start.
     let ids2 = SequenceIdGenerator::new("internal2");
     let sleeper2 = NoopSleeper::new();
@@ -1284,5 +1293,121 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
     assert!(
         matches!(poll_event, PollEvent::Completed { .. }),
         "{poll_event:?}"
+    );
+}
+
+/// 12. Credential-split path (spec §15.4): the `persist_starting` job writes
+/// the Starting record before `verify-start` runs. `internal_verify_start`
+/// must accept the pre-persisted record instead of erroring with
+/// "start_plan called twice", and the emitted `StartEvent`'s record must
+/// carry `replaces_attempt_id = Some(current.attempt_id)` so the downstream
+/// `persist_handle` CAS check round-trips.
+#[test]
+fn internal_verify_start_accepts_pre_persisted_starting_record() {
+    let env = build_env(BuildEnv::default_lc_only());
+    use interfaces::controller::input::{InternalVerifyPrepareInput, InternalVerifyStartInput};
+    struct PrepIn(String, String, Option<String>);
+    impl InternalVerifyPrepareInput for PrepIn {
+        fn solution(&self) -> String {
+            self.0.clone()
+        }
+        fn plan_out(&self) -> String {
+            self.1.clone()
+        }
+        fn starting_out(&self) -> Option<String> {
+            self.2.clone()
+        }
+    }
+    struct StartIn(String);
+    impl InternalVerifyStartInput for StartIn {
+        fn plan_in(&self) -> String {
+            self.0.clone()
+        }
+    }
+    let plan_path = env.root.join("plan.json");
+    let starting_path = env.root.join("starting.json");
+    let ids = SequenceIdGenerator::new("internal");
+    let sleeper = NoopSleeper::new();
+    env.controller
+        .internal_verify_prepare(
+            &PrepIn(
+                LC_SOLUTION.into(),
+                plan_path.display().to_string(),
+                Some(starting_path.display().to_string()),
+            ),
+            &env.root,
+            &env.config,
+            &env.manifest,
+            &env.snapshot,
+            &TestClock::new(),
+            &ids,
+            &sleeper,
+            &NoRetryHint,
+            PollingPolicy {
+                initial_interval: Duration::from_millis(1),
+                max_interval: Duration::from_millis(1),
+                max_error_backoff: Duration::from_millis(1),
+                total_budget: Duration::from_millis(50),
+            },
+        )
+        .expect("prepare succeeds");
+
+    // Simulate the `persist_starting` job: read the Starting sidecar and
+    // write it through the on-disk repository BEFORE `verify-start` runs.
+    let starting_bytes = std::fs::read(&starting_path).expect("starting sidecar exists");
+    let starting: VerificationRecord =
+        serde_json::from_slice(&starting_bytes).expect("starting parses");
+    let repo = VerificationRepositoryImpl::new(env.root.clone());
+    use usecases::repository::verification_repository::VerificationRepository;
+    repo.compare_and_swap(&lc_id(), None, &starting)
+        .expect("seed Starting via CAS");
+
+    // Now run `verify-start` against the pre-persisted record.
+    let ids2 = SequenceIdGenerator::new("internal2");
+    let sleeper2 = NoopSleeper::new();
+    let event = env
+        .controller
+        .internal_verify_start(
+            &StartIn(plan_path.display().to_string()),
+            &env.root,
+            &env.config,
+            &env.manifest,
+            &env.snapshot,
+            &TestClock::new(),
+            &ids2,
+            &sleeper2,
+            &NoRetryHint,
+            PollingPolicy {
+                initial_interval: Duration::from_millis(1),
+                max_interval: Duration::from_millis(1),
+                max_error_backoff: Duration::from_millis(1),
+                total_budget: Duration::from_millis(50),
+            },
+        )
+        .expect("start succeeds even though Starting was pre-persisted");
+
+    use usecases::submission_lifecycle::StartEvent;
+    match event {
+        StartEvent::Trackable { record } => {
+            assert!(matches!(record.state, VerificationState::Submitted(_)));
+            // The emitted record must carry the CAS token so downstream
+            // `persist_handle`'s `cas_check(expected=candidate.rai,
+            // actual=remote.attempt_id)` round-trips.
+            assert_eq!(
+                record.replaces_attempt_id.as_ref(),
+                Some(&record.attempt_id),
+                "emitted record's replaces_attempt_id must equal its own \
+                 attempt_id (the CAS token identifying the pre-persisted Starting)"
+            );
+        }
+        other => panic!("expected Trackable, got {other:?}"),
+    }
+
+    // The record on disk must also be Submitted with the same CAS token.
+    let stored = repo.load(&lc_id()).unwrap().expect("record persisted");
+    assert!(matches!(stored.state, VerificationState::Submitted(_)));
+    assert_eq!(
+        stored.replaces_attempt_id.as_ref(),
+        Some(&stored.attempt_id),
     );
 }
