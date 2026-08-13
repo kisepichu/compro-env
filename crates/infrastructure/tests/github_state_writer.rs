@@ -1036,12 +1036,17 @@ fn set_pull_request_state_ready_errors_when_graphql_returns_errors() {
 #[test]
 fn sanitized_errors_hide_response_body() {
     // Force the CAS GET to fail with a body containing a fake token; the
-    // returned error must never surface the body.
+    // returned error must never surface the body. The step-0 GET ref reply
+    // succeeds so the 500 lands on step 1 (the CAS GET) as intended — this
+    // test targets the sanitisation on the contents-API path.
     let bad_body = "the internal error mentioned secret_token_abc in the trace".to_string();
-    let script = vec![Reply {
-        status: 500,
-        body: bad_body.clone(),
-    }];
+    let script = vec![
+        get_ref_reply(state_head_sha()),
+        Reply {
+            status: 500,
+            body: bad_body.clone(),
+        },
+    ];
     let fx = Fixture::start(script);
     let w = writer(fx.base_url());
 
@@ -1060,7 +1065,11 @@ fn sanitized_errors_hide_response_body() {
     // The status code is fine to surface.
     assert!(display.contains("500"), "Display: {display}");
     match err {
-        PersistError::UpstreamStatus { status, .. } => assert_eq!(status, 500),
+        PersistError::UpstreamStatus { status, op } => {
+            assert_eq!(status, 500);
+            // Assert the failure targeted the CAS GET, not step 0.
+            assert_eq!(op, "GET contents (cas)", "unexpected op: {op}");
+        }
         other => panic!("expected UpstreamStatus, got {other:?}"),
     }
 }
