@@ -1085,3 +1085,331 @@ fn token_is_never_logged_via_debug() {
         "Debug missing redaction marker: {debug}"
     );
 }
+
+/// Expected URL for a list-open-PRs call: query values are percent-encoded
+/// by reqwest's `.query()` builder so a branch name containing `&`/`=`/`/`
+/// (which git does not forbid) cannot corrupt the query string.
+const LIST_PULLS_URL: &str =
+    "/repos/owner/repo/pulls?head=owner%3Aautomation%2Fverify&state=open&base=main";
+
+#[test]
+fn find_or_open_bot_pr_returns_existing_when_list_non_empty() {
+    let script = vec![Reply::json(
+        200,
+        serde_json::json!([{ "number": 42, "state": "open", "draft": true }]),
+    )];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let pr = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "Automation: verification results",
+            "body",
+        )
+        .expect("find existing PR");
+    assert_eq!(pr.number, 42);
+    assert!(pr.is_draft);
+
+    let recorded = fx.recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "expected only the list GET, got {recorded:#?}"
+    );
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(recorded[0].url, LIST_PULLS_URL);
+}
+
+#[test]
+fn find_or_open_bot_pr_captures_ready_state_from_list() {
+    // When an existing open PR is already Ready (non-draft), that must be
+    // reflected in the returned handle so a Draft-target caller can route
+    // through the GraphQL `convertPullRequestToDraft` path instead of a
+    // PATCH that GitHub would reject with 422.
+    let script = vec![Reply::json(
+        200,
+        serde_json::json!([{ "number": 7, "state": "open", "draft": false }]),
+    )];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let pr = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .expect("find existing ready PR");
+    assert_eq!(pr.number, 7);
+    assert!(
+        !pr.is_draft,
+        "PR is currently Ready and must surface as such"
+    );
+}
+
+#[test]
+fn find_or_open_bot_pr_opens_new_when_list_empty() {
+    let script = vec![
+        Reply::json(200, serde_json::json!([])),
+        Reply::json(201, serde_json::json!({ "number": 99, "draft": true })),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let pr = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "Automation: verification results",
+            "body",
+        )
+        .expect("open new PR");
+    assert_eq!(pr.number, 99);
+    assert!(pr.is_draft);
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 2, "expected 2 requests, got {recorded:#?}");
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(recorded[0].url, LIST_PULLS_URL);
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/repos/owner/repo/pulls");
+    let body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    assert_eq!(body["draft"], true);
+    assert_eq!(body["head"], "automation/verify");
+    assert_eq!(body["base"], "main");
+    assert_eq!(body["title"], "Automation: verification results");
+}
+
+#[test]
+fn find_or_open_bot_pr_recovers_from_toctou_422_race() {
+    // Two concurrent runs both observe an empty list and both attempt to
+    // POST /pulls. The second POST fails with 422 ("A pull request already
+    // exists for this head branch"). The writer must refetch the list and
+    // return the PR the concurrent run created, NOT surface the 422.
+    let script = vec![
+        // 0. GET list → empty (the race window)
+        Reply::json(200, serde_json::json!([])),
+        // 1. POST /pulls → 422 (concurrent creator won)
+        Reply::json(
+            422,
+            serde_json::json!({ "message": "A pull request already exists for owner:automation/verify" }),
+        ),
+        // 2. Retry GET list → now finds the concurrently-created PR
+        Reply::json(
+            200,
+            serde_json::json!([{ "number": 55, "draft": true, "state": "open" }]),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let pr = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .expect("422 race must be transparent to caller");
+    assert_eq!(pr.number, 55);
+    assert!(pr.is_draft);
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 3, "expected 3 requests, got {recorded:#?}");
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[2].method, "GET");
+    // Both list GETs must target the same URL (percent-encoded).
+    assert_eq!(recorded[0].url, LIST_PULLS_URL);
+    assert_eq!(recorded[2].url, LIST_PULLS_URL);
+}
+
+#[test]
+fn find_or_open_bot_pr_surfaces_422_when_retry_still_finds_nothing() {
+    // Same 422 path as the race recovery, but the retry GET is also empty
+    // — the 422 was NOT a race, so surface the original POST error.
+    let script = vec![
+        Reply::json(200, serde_json::json!([])),
+        Reply::json(422, serde_json::json!({ "message": "some other 422" })),
+        Reply::json(200, serde_json::json!([])),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let err = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .unwrap_err();
+    match err {
+        PersistError::UpstreamStatus { status, op } => {
+            assert_eq!(status, 422);
+            assert_eq!(op, "POST pulls (open bot pr)");
+        }
+        other => panic!("expected UpstreamStatus for POST, got {other:?}"),
+    }
+}
+
+#[test]
+fn find_or_open_bot_pr_maps_non_2xx_to_upstream_status() {
+    let script = vec![Reply::json(
+        502,
+        serde_json::json!({ "message": "bad gateway" }),
+    )];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let err = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .unwrap_err();
+    match err {
+        PersistError::UpstreamStatus { status, op } => {
+            assert_eq!(status, 502);
+            assert_eq!(op, "GET pulls?head (find bot pr)");
+        }
+        other => panic!("expected UpstreamStatus, got {other:?}"),
+    }
+}
+
+#[test]
+fn find_or_open_bot_pr_missing_number_maps_to_malformed_response() {
+    // POST /pulls returns a body without `number`. The writer must surface
+    // MalformedResponse rather than pretending everything succeeded.
+    let script = vec![
+        Reply::json(200, serde_json::json!([])),
+        Reply::json(201, serde_json::json!({ "id": 1 })),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let err = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .unwrap_err();
+    match err {
+        PersistError::MalformedResponse { op, field } => {
+            assert_eq!(op, "POST pulls (open bot pr)");
+            assert_eq!(field, "number");
+        }
+        other => panic!("expected MalformedResponse, got {other:?}"),
+    }
+}
+
+#[test]
+fn convert_pr_to_draft_resolves_node_id_then_posts_graphql_mutation() {
+    // Ready → Draft is not supported by REST PATCH; the writer must
+    // resolve the numeric PR to its opaque node id and issue the
+    // `convertPullRequestToDraft` GraphQL mutation.
+    let script = vec![
+        // 1. GET /pulls/{n} → node_id
+        Reply::json(
+            200,
+            serde_json::json!({
+                "number": 7,
+                "node_id": "PR_kwDOTEST",
+                "draft": false
+            }),
+        ),
+        // 2. POST /graphql (convertPullRequestToDraft)
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": { "convertPullRequestToDraft": { "clientMutationId": "ok" } }
+            }),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+    w.bind_repository("owner/repo").expect("bind repo");
+
+    w.convert_pr_to_draft(7).expect("convert to draft succeeds");
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 2, "expected 2 requests, got {recorded:#?}");
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(recorded[0].url, "/repos/owner/repo/pulls/7");
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/graphql");
+    let body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    let query = body["query"].as_str().unwrap();
+    assert!(
+        query.contains("convertPullRequestToDraft"),
+        "graphql body missing mutation: {query}"
+    );
+    assert_eq!(body["variables"]["pullRequestId"], "PR_kwDOTEST");
+}
+
+#[test]
+fn convert_pr_to_draft_surfaces_graphql_errors() {
+    let script = vec![
+        Reply::json(
+            200,
+            serde_json::json!({
+                "number": 7,
+                "node_id": "PR_kwDOTEST",
+                "draft": false
+            }),
+        ),
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": null,
+                "errors": [{ "message": "internal repo secret_token_abc" }]
+            }),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+    w.bind_repository("owner/repo").expect("bind repo");
+
+    let err = w.convert_pr_to_draft(7).unwrap_err();
+    let display = format!("{err}");
+    let debug = format!("{err:?}");
+    match &err {
+        PersistError::GraphqlError { op, count } => {
+            assert_eq!(*count, 1);
+            assert!(
+                op.contains("convertPullRequestToDraft"),
+                "expected op to reference the mutation, got {op:?}"
+            );
+        }
+        other => panic!("expected GraphqlError, got {other:?}"),
+    }
+    assert!(
+        !display.contains("secret_token_abc"),
+        "Display leaked GraphQL body: {display}"
+    );
+    assert!(
+        !debug.contains("secret_token_abc"),
+        "Debug leaked GraphQL body: {debug}"
+    );
+}

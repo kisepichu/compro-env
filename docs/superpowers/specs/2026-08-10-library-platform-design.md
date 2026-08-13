@@ -2582,6 +2582,19 @@ terminal な最新観測として自動マージする。rejected には WA、TL
 - `AcceptanceUnknown`: draft のまま回復または手動判断を待つ。
 - schema 違反、不正パス、アダプター完全性エラー: マージしない。
 
+#### PrTarget 遷移表 (record.state → PR 目標状態)
+
+CI 実装側 (`compute_pr_target`) はここに記した写像を単一の source of truth と
+する。将来 OJ verdict を追加する際も、まず本表を更新してから実装を追随させる。
+
+| record.state                                  | verdict.kind                                                              | PrTarget         |
+| --------------------------------------------- | ------------------------------------------------------------------------- | ---------------- |
+| `Completed`                                   | `Accepted`                                                                | `ReadyAutoMerge` |
+| `Completed`                                   | `WrongAnswer` / `TimeLimitExceeded` / `MemoryLimitExceeded` / `RuntimeError` / `CompileError` / `OutputLimitExceeded` / `JudgeError` | `ReadyAutoMerge` |
+| `Completed`                                   | `Cancelled` / `Other`                                                     | `Draft`          |
+| `Unavailable`                                 | —                                                                         | `ReadyAutoMerge` |
+| `Starting` / `AcceptanceUnknown` / `Submitted` / `Queued` / `Judging` / `InfrastructureFailure` | — | `Draft`          |
+
 `ce verify` 自体は rejected と unavailable で exit 1 を返す。CI controller はこの終了状態を
 観測結果として受け取り、結果保存と PR 更新を続ける。bot PR の必須 check は verdict の成否
 ではなく、結果 schema、fingerprint、状態遷移、変更範囲の完全性を検証する。

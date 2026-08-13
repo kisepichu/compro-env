@@ -146,6 +146,29 @@ pub enum InternalSubcommand {
         #[arg(long, default_value = "GITHUB_TOKEN")]
         token_env: String,
     },
+    /// Find (or open) the single long-lived automation PR from
+    /// `automation/verify` into `main` and set its state to `Draft` or
+    /// `Ready`+auto_merge based on the persisted record's state
+    /// (spec §15.1, §優先度6). Prints the PR number on success.
+    #[command(hide = true)]
+    VerifyPrSetState {
+        /// Path to the same serialized `VerificationRecord` the persist job
+        /// uploaded.
+        #[arg(long = "record-in")]
+        record_in: String,
+        /// `owner/repo` slug of the target repository.
+        #[arg(long)]
+        repository: String,
+        /// PR base branch (defaults to `main`).
+        #[arg(long, default_value = "main")]
+        base: String,
+        /// PR head branch (defaults to `automation/verify`).
+        #[arg(long, default_value = "automation/verify")]
+        head: String,
+        /// Name of the env var carrying the App installation token.
+        #[arg(long, default_value = "GITHUB_TOKEN")]
+        token_env: String,
+    },
     /// Validate that a bot PR's changed files are exclusively verification
     /// result JSONs and that every touched result JSON deserializes as a
     /// `VerificationRecord`. Secretless: no OJ or GitHub App contact

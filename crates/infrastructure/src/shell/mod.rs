@@ -551,6 +551,36 @@ pub fn run() -> Result<()> {
                 }
                 Ok(())
             }
+            commands::InternalSubcommand::VerifyPrSetState {
+                record_in,
+                repository,
+                base,
+                head,
+                token_env,
+            } => {
+                let token = std::env::var(&token_env).map_err(|_| {
+                    anyhow::anyhow!(
+                        "environment variable {token_env} is not set; refusing to contact GitHub"
+                    )
+                })?;
+                match pr_set_state_with_io(
+                    "https://api.github.com",
+                    &record_in,
+                    &repository,
+                    &head,
+                    &base,
+                    &token,
+                ) {
+                    Ok(number) => {
+                        println!("{number}");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("verify-pr-set-state failed: {e:#}");
+                        std::process::exit(1);
+                    }
+                }
+            }
             commands::InternalSubcommand::VerifyPersist {
                 plan_hash_in,
                 candidate_in,
@@ -1246,6 +1276,58 @@ fn list_result_json_paths(
         }
     }
     Ok(paths)
+}
+
+/// Find (or open) the single long-lived automation PR and toggle its state
+/// (Draft ↔ Ready+auto_merge) to match the persisted `VerificationRecord`.
+///
+/// Kept as a free function so integration tests can point the writer at a
+/// scripted server instead of `https://api.github.com`. Returns the PR
+/// number on success.
+pub fn pr_set_state_with_io(
+    base_url: &str,
+    record_in: &str,
+    repository: &str,
+    head: &str,
+    base: &str,
+    token: &str,
+) -> Result<u64> {
+    let record_bytes = std::fs::read(record_in)
+        .map_err(|e| anyhow::anyhow!("failed to read record file {record_in}: {e}"))?;
+    let record: domain::verification::VerificationRecord = serde_json::from_slice(&record_bytes)
+        .map_err(|e| anyhow::anyhow!("failed to parse record: {e}"))?;
+    let (owner, repo) = match repository.split_once('/') {
+        Some((o, r)) if !o.is_empty() && !r.is_empty() && !r.contains('/') => (o, r),
+        _ => anyhow::bail!("repository must be owner/repo (got {repository:?})"),
+    };
+    let writer = crate::github::GitHubVerificationStateWriter::new(
+        base_url,
+        secrecy::SecretString::from(token.to_string()),
+    );
+    writer.bind_repository(repository)?;
+    let title = "Automation: verification results";
+    let body = "Automation-owned PR that carries verification result updates from `automation/verify` → `main`.\n\nSee `docs/operations/verify-automation.md` for operator notes.";
+    let pr = writer.find_or_open_bot_pr(owner, repo, head, base, title, body)?;
+    let target = usecases::service::verify::compute_pr_target(&record.state);
+    match target {
+        usecases::service::verify::PrTarget::Draft => {
+            // REST's PATCH does not support Ready → Draft; a non-draft PR
+            // must be routed through the GraphQL mutation. If the PR is
+            // already draft the state is a no-op — avoid the extra HTTP
+            // call (and the mutation's server-side handling of the
+            // already-draft case).
+            if !pr.is_draft {
+                writer.convert_pr_to_draft(pr.number)?;
+            }
+        }
+        usecases::service::verify::PrTarget::ReadyAutoMerge => {
+            writer.set_pull_request_state(crate::github::BotPullRequestState::Ready {
+                pull_request_number: pr.number,
+                auto_merge: true,
+            })?;
+        }
+    }
+    Ok(pr.number)
 }
 
 /// Validates that the plan-hash artifact exists as a regular file whose

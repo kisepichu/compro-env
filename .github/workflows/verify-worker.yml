@@ -353,6 +353,26 @@ jobs:
             --base-sha "$BASE_SHA" \
             --token-env GH_APP_TOKEN
 
+      - name: Update automation PR state
+        # verify-persist has already committed the record; a transient
+        # failure here should NOT fail the job. Re-running a failed job
+        # would break `verify-persist`'s CAS check (the remote now holds
+        # `candidate.attempt_id`, not `candidate.replaces_attempt_id`), so
+        # the whole attempt would be stuck. Instead let the job succeed
+        # and rely on the next persist_* step in the pipeline (or a
+        # follow-up workflow_dispatch's `persist_starting`) to re-attempt
+        # the PR state update from the current record.
+        continue-on-error: true
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-pr-set-state \
+            --record-in work/starting.json \
+            --repository "$REPOSITORY" \
+            --token-env GH_APP_TOKEN
+
   submit:
     name: Submit plan to OJ (OJ-only)
     needs: [prepare, persist_starting]
@@ -561,6 +581,19 @@ jobs:
             --candidate-in work/handle.json \
             --repository "$REPOSITORY" \
             --base-sha "$BASE_SHA" \
+            --token-env GH_APP_TOKEN
+
+      - name: Update automation PR state
+        # See the same-named step in persist_starting: non-fatal by design.
+        continue-on-error: true
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-pr-set-state \
+            --record-in work/handle.json \
+            --repository "$REPOSITORY" \
             --token-env GH_APP_TOKEN
 
   poll:
@@ -817,4 +850,24 @@ jobs:
             --candidate-in work/terminal.json \
             --repository "$REPOSITORY" \
             --base-sha "$BASE_SHA" \
+            --token-env GH_APP_TOKEN
+
+      - name: Update automation PR state
+        # See the same-named step in persist_starting: non-fatal by
+        # design. On persist_terminal specifically, a failure here leaves
+        # the PR draft while the terminal record is on
+        # automation/verify. That is safe: a follow-up workflow_dispatch
+        # or the next attempt's persist_* pipeline will re-attempt the
+        # PR state update, and operators can flip the PR manually if
+        # needed. Failing the job would break re-run recovery via
+        # verify-persist's CAS check.
+        continue-on-error: true
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-pr-set-state \
+            --record-in work/terminal.json \
+            --repository "$REPOSITORY" \
             --token-env GH_APP_TOKEN

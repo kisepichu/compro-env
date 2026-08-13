@@ -127,6 +127,54 @@ impl VerifyOutcome {
     }
 }
 
+/// Target state of the long-lived automation PR after a verify record has
+/// been persisted (spec §15.1, §15 PrTarget policy).
+///
+/// A single long-lived PR from `automation/verify` → `main` flips between
+/// these two states over the lifetime of an attempt: mid-flight persists
+/// keep it `Draft`, terminal-mergeable persists flip it to
+/// `ReadyAutoMerge`. Indeterminate terminal verdicts (`Cancelled`, `Other`)
+/// stay `Draft` so a human can decide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrTarget {
+    /// Keep (or restore) the PR as a draft.
+    Draft,
+    /// Mark the PR ready for review and enable auto-merge — the terminal
+    /// merge lets `pages.yml` fire on the follow-up push to `main`.
+    ReadyAutoMerge,
+}
+
+/// Map a persisted [`VerificationState`] to the target state of the
+/// automation PR (spec §15.1, §優先度6).
+///
+/// Terminal-mergeable states — `Completed` with a normalized verdict kind
+/// plus `Unavailable` — flip the PR to ready + auto-merge. `Cancelled` /
+/// `Other` verdicts stay draft (indeterminate: a human should decide).
+/// Every non-terminal state (`Starting`, `AcceptanceUnknown`, `Submitted`,
+/// `Queued`, `Judging`, `InfrastructureFailure`) keeps the PR draft.
+pub fn compute_pr_target(state: &VerificationState) -> PrTarget {
+    match state {
+        VerificationState::Completed(c) => match c.verdict.kind {
+            VerdictKind::Accepted
+            | VerdictKind::WrongAnswer
+            | VerdictKind::TimeLimitExceeded
+            | VerdictKind::MemoryLimitExceeded
+            | VerdictKind::RuntimeError
+            | VerdictKind::CompileError
+            | VerdictKind::OutputLimitExceeded
+            | VerdictKind::JudgeError => PrTarget::ReadyAutoMerge,
+            VerdictKind::Cancelled | VerdictKind::Other => PrTarget::Draft,
+        },
+        VerificationState::Unavailable(_) => PrTarget::ReadyAutoMerge,
+        VerificationState::Starting(_)
+        | VerificationState::AcceptanceUnknown(_)
+        | VerificationState::Submitted(_)
+        | VerificationState::Queued(_)
+        | VerificationState::Judging(_)
+        | VerificationState::InfrastructureFailure(_) => PrTarget::Draft,
+    }
+}
+
 /// Bundle of ports needed by [`run_verify`] and the internal helpers.
 ///
 /// Kept as a struct so call sites do not have to spell out ten arguments.
@@ -1119,4 +1167,171 @@ fn run_preprocess(
         ));
     }
     Ok(stdout)
+}
+
+#[cfg(test)]
+mod pr_target_tests {
+    use super::*;
+    use chrono::{DateTime, FixedOffset};
+    use domain::online_judge::{RecoveryMode, ResultDetail, SubmissionMode};
+    use domain::verification::{
+        AcceptanceUnknownState, CompletedState, ErrorKind, FailureStage, InfrastructureFailure,
+        PendingState, StartingState, SubmissionHandle, SubmissionSummary, SubmittedState,
+        UnavailableReason, UnavailableState, Verdict, VerdictKind,
+    };
+
+    fn ts() -> DateTime<FixedOffset> {
+        DateTime::parse_from_rfc3339("2026-08-10T00:00:00+00:00").unwrap()
+    }
+
+    fn language() -> LanguageBinding {
+        LanguageBinding {
+            language_id: LanguageId::parse("rust").unwrap(),
+            oj_language_id: "rust".into(),
+        }
+    }
+
+    fn hash() -> ContentHash {
+        ContentHash::parse(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap()
+    }
+
+    fn handle() -> SubmissionHandle {
+        SubmissionHandle {
+            oj: "librarychecker".into(),
+            submission_id: "sub".into(),
+            submission_url: "https://example.test/sub".into(),
+            locator: None,
+            submitted_at: ts(),
+        }
+    }
+
+    fn capabilities() -> SubmissionCapabilities {
+        SubmissionCapabilities {
+            submission_mode: SubmissionMode::UnattendedTrackable,
+            result_detail: ResultDetail::TestcaseDetails,
+            recovery_mode: RecoveryMode::BestEffort,
+        }
+    }
+
+    fn completed_with(kind: VerdictKind) -> VerificationState {
+        VerificationState::Completed(CompletedState {
+            verdict: Verdict {
+                kind,
+                raw: "raw".into(),
+            },
+            verified_libraries: Vec::new(),
+            language: language(),
+            verified_at: ts(),
+            capabilities: capabilities(),
+            submitted_source_hash: hash(),
+            input_hashes: BTreeMap::new(),
+            summary: SubmissionSummary {
+                max_execution_time_ms: None,
+                max_memory_bytes: None,
+            },
+            test_cases: None,
+            handle: handle(),
+            extra: BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn terminal_mergeable_verdicts_map_to_ready_auto_merge() {
+        for kind in [
+            VerdictKind::Accepted,
+            VerdictKind::WrongAnswer,
+            VerdictKind::TimeLimitExceeded,
+            VerdictKind::MemoryLimitExceeded,
+            VerdictKind::RuntimeError,
+            VerdictKind::CompileError,
+            VerdictKind::OutputLimitExceeded,
+            VerdictKind::JudgeError,
+        ] {
+            assert_eq!(
+                compute_pr_target(&completed_with(kind)),
+                PrTarget::ReadyAutoMerge,
+                "verdict {kind:?} should be ReadyAutoMerge",
+            );
+        }
+    }
+
+    #[test]
+    fn indeterminate_verdicts_stay_draft() {
+        for kind in [VerdictKind::Cancelled, VerdictKind::Other] {
+            assert_eq!(
+                compute_pr_target(&completed_with(kind)),
+                PrTarget::Draft,
+                "verdict {kind:?} should stay Draft",
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_state_maps_to_ready_auto_merge() {
+        let state = VerificationState::Unavailable(UnavailableState {
+            reason: UnavailableReason::InteractiveUntrackable,
+            capabilities: capabilities(),
+            observed_at: ts(),
+            summary: "n/a".into(),
+        });
+        assert_eq!(compute_pr_target(&state), PrTarget::ReadyAutoMerge);
+    }
+
+    #[test]
+    fn non_terminal_states_map_to_draft() {
+        let starting = VerificationState::Starting(StartingState {
+            plan_hash: hash(),
+            submitted_source_hash: hash(),
+            language: language(),
+            started_at: ts(),
+        });
+        let acceptance_unknown = VerificationState::AcceptanceUnknown(AcceptanceUnknownState {
+            plan_hash: hash(),
+            submitted_source_hash: hash(),
+            language: language(),
+            started_at: ts(),
+            observed_at: ts(),
+            summary: "n/a".into(),
+        });
+        let submitted = VerificationState::Submitted(SubmittedState {
+            handle: handle(),
+            submitted_at: ts(),
+        });
+        let queued = VerificationState::Queued(PendingState {
+            handle: handle(),
+            observed_at: ts(),
+        });
+        let judging = VerificationState::Judging(PendingState {
+            handle: handle(),
+            observed_at: ts(),
+        });
+        let infra = VerificationState::InfrastructureFailure(InfrastructureFailure {
+            stage: FailureStage::Poll,
+            error_kind: ErrorKind::Network,
+            retryable: true,
+            retry_count: 0,
+            next_retry_at: None,
+            updated_at: ts(),
+            summary: "net".into(),
+            plan_hash: None,
+            handle: None,
+        });
+        for state in [
+            starting,
+            acceptance_unknown,
+            submitted,
+            queued,
+            judging,
+            infra,
+        ] {
+            assert_eq!(
+                compute_pr_target(&state),
+                PrTarget::Draft,
+                "non-terminal state {state:?} should map to Draft",
+            );
+        }
+    }
 }

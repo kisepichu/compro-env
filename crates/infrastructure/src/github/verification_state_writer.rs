@@ -95,6 +95,19 @@ pub enum BotPullRequestState {
     },
 }
 
+/// Handle to the single long-lived automation PR returned by
+/// [`GitHubVerificationStateWriter::find_or_open_bot_pr`].
+///
+/// `is_draft` is captured so callers can skip a no-op state update or
+/// route through the appropriate direction-specific API: REST supports
+/// Draft → Ready via `PATCH {draft: false}` but Ready → Draft requires
+/// the `convertPullRequestToDraft` GraphQL mutation (spec §15.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotPullRequestRef {
+    pub number: u64,
+    pub is_draft: bool,
+}
+
 /// All failure modes surfaced by the writer.
 ///
 /// Non-success HTTP responses are collapsed into `UpstreamStatus`; the raw
@@ -825,6 +838,177 @@ impl GitHubVerificationStateWriter {
         }
         let body: RefBody = resp.json().map_err(PersistError::from)?;
         Ok(body.object.sha)
+    }
+
+    /// Return a handle to the single long-lived bot PR from `head` into
+    /// `base` (spec §15.1 "最大 1 本の automation/verify draft PR"). Opens a
+    /// fresh draft PR when none is open.
+    ///
+    /// The GitHub REST list endpoint returns an array of PR summaries filtered
+    /// by `head=<owner>:<branch>` and `state=open`. Query values are percent-
+    /// encoded via `reqwest::RequestBuilder::query` — passing a branch name
+    /// containing `&` or `=` (which git itself does not forbid) would
+    /// otherwise silently corrupt the query string.
+    ///
+    /// When more than one PR matches the filter (should never happen given
+    /// the "at most one" rule), the caller-observable behaviour is to reuse
+    /// the first entry — the writer will never open a duplicate.
+    ///
+    /// TOCTOU race: two concurrent runs can both observe an empty list and
+    /// both attempt `POST /pulls`; the second POST fails with 422 ("A pull
+    /// request already exists for this head branch"). The writer detects
+    /// that status and refetches the list; if the list is now non-empty the
+    /// existing PR is returned as if it had been observed on the first GET.
+    ///
+    /// The returned [`BotPullRequestRef`] carries the PR's current
+    /// `is_draft` flag so callers can pick the correct direction-specific
+    /// API for a subsequent state change (spec §15.1 — REST cannot convert
+    /// Ready → Draft; that path lives in
+    /// [`convert_pr_to_draft`](Self::convert_pr_to_draft)).
+    pub fn find_or_open_bot_pr(
+        &self,
+        owner: &str,
+        repo: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> PersistResult<BotPullRequestRef> {
+        #[derive(Deserialize)]
+        struct PullSummary {
+            number: Option<u64>,
+            #[serde(default)]
+            draft: Option<bool>,
+        }
+
+        let list_url = format!("{}/repos/{owner}/{repo}/pulls", self.base_url);
+        let head_qualified = format!("{owner}:{head}");
+        let query_params = [
+            ("head", head_qualified.as_str()),
+            ("state", "open"),
+            ("base", base),
+        ];
+
+        let list = || -> PersistResult<Vec<PullSummary>> {
+            let resp = self
+                .authed(self.http.get(&list_url))
+                .query(&query_params)
+                .send()?;
+            let status = resp.status();
+            if !status.is_success() {
+                let _ = resp.text();
+                return Err(PersistError::UpstreamStatus {
+                    status: status.as_u16(),
+                    op: "GET pulls?head (find bot pr)",
+                });
+            }
+            resp.json().map_err(PersistError::from)
+        };
+
+        if let Some(first) = list()?.into_iter().next() {
+            let number = first.number.ok_or(PersistError::MalformedResponse {
+                op: "GET pulls?head (find bot pr)",
+                field: "number",
+            })?;
+            return Ok(BotPullRequestRef {
+                number,
+                is_draft: first.draft.unwrap_or(false),
+            });
+        }
+
+        let open_url = format!("{}/repos/{owner}/{repo}/pulls", self.base_url);
+        let payload = json!({
+            "title": title,
+            "body": body,
+            "head": head,
+            "base": base,
+            "draft": true,
+        });
+        let resp = self
+            .authed(self.http.post(&open_url))
+            .json(&payload)
+            .send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            let _ = resp.text();
+            // TOCTOU race: a concurrent run may have opened the PR between
+            // our GET and POST. GitHub returns 422 in that case; refetch
+            // and reuse it before propagating the error.
+            if status == StatusCode::UNPROCESSABLE_ENTITY
+                && let Some(first) = list()?.into_iter().next()
+            {
+                let number = first.number.ok_or(PersistError::MalformedResponse {
+                    op: "GET pulls?head (find bot pr, retry after 422)",
+                    field: "number",
+                })?;
+                return Ok(BotPullRequestRef {
+                    number,
+                    is_draft: first.draft.unwrap_or(false),
+                });
+            }
+            return Err(PersistError::UpstreamStatus {
+                status: status.as_u16(),
+                op: "POST pulls (open bot pr)",
+            });
+        }
+        let created: PullSummary = resp.json().map_err(PersistError::from)?;
+        let number = created.number.ok_or(PersistError::MalformedResponse {
+            op: "POST pulls (open bot pr)",
+            field: "number",
+        })?;
+        Ok(BotPullRequestRef {
+            number,
+            // We asked for `draft: true`; the server echoes the field back.
+            // Fall back to `true` if the server omitted it — matches the
+            // request we just sent.
+            is_draft: created.draft.unwrap_or(true),
+        })
+    }
+
+    /// Convert a currently-open Ready PR back to draft via GitHub's
+    /// `convertPullRequestToDraft` GraphQL mutation (spec §15.1).
+    ///
+    /// REST's `PATCH /pulls/{n}` supports `{draft: false}` (Draft → Ready)
+    /// but rejects `{draft: true}` on a non-draft PR with 422 — the only
+    /// supported reverse direction is the GraphQL mutation used here.
+    /// Callers should pre-check the PR's current draft state via
+    /// [`find_or_open_bot_pr`]'s [`BotPullRequestRef::is_draft`] and skip
+    /// this call when it is already `true`; the mutation may error on
+    /// an already-draft PR depending on GitHub's server-side behaviour.
+    pub fn convert_pr_to_draft(&self, pull_request_number: u64) -> PersistResult<()> {
+        let (owner, repo) = self.bound_owner_repo()?;
+        let node_id = self.resolve_pr_node_id(&owner, &repo, pull_request_number)?;
+        let url = format!("{}/graphql", self.base_url);
+        let mutation = r#"mutation($pullRequestId: ID!) { convertPullRequestToDraft(input: { pullRequestId: $pullRequestId }) { clientMutationId } }"#;
+        let payload = json!({
+            "query": mutation,
+            "variables": { "pullRequestId": node_id },
+        });
+        let resp = self.authed(self.http.post(&url)).json(&payload).send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            let _ = resp.text();
+            return Err(PersistError::UpstreamStatus {
+                status: status.as_u16(),
+                op: "POST graphql (convertPullRequestToDraft)",
+            });
+        }
+        let text = resp.text().map_err(PersistError::from)?;
+        #[derive(Deserialize)]
+        struct GraphqlBody {
+            #[serde(default)]
+            errors: Option<Vec<serde_json::Value>>,
+        }
+        let parsed: GraphqlBody = serde_json::from_str(&text).map_err(PersistError::from)?;
+        if let Some(errs) = parsed.errors
+            && !errs.is_empty()
+        {
+            return Err(PersistError::GraphqlError {
+                op: "POST graphql (convertPullRequestToDraft)",
+                count: errs.len(),
+            });
+        }
+        Ok(())
     }
 
     fn patch_pr(&self, owner: &str, repo: &str, pr: u64, ready: bool) -> PersistResult<()> {
