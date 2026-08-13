@@ -1307,21 +1307,27 @@ pub fn pr_set_state_with_io(
     writer.bind_repository(repository)?;
     let title = "Automation: verification results";
     let body = "Automation-owned PR that carries verification result updates from `automation/verify` → `main`.\n\nSee `docs/operations/verify-automation.md` for operator notes.";
-    let number = writer.find_or_open_bot_pr(owner, repo, head, base, title, body)?;
+    let pr = writer.find_or_open_bot_pr(owner, repo, head, base, title, body)?;
     let target = usecases::service::verify::compute_pr_target(&record.state);
-    let state = match target {
-        usecases::service::verify::PrTarget::Draft => crate::github::BotPullRequestState::Draft {
-            pull_request_number: number,
-        },
-        usecases::service::verify::PrTarget::ReadyAutoMerge => {
-            crate::github::BotPullRequestState::Ready {
-                pull_request_number: number,
-                auto_merge: true,
+    match target {
+        usecases::service::verify::PrTarget::Draft => {
+            // REST's PATCH does not support Ready → Draft; a non-draft PR
+            // must be routed through the GraphQL mutation. If the PR is
+            // already draft the state is a no-op — avoid the extra HTTP
+            // call (and the mutation's server-side handling of the
+            // already-draft case).
+            if !pr.is_draft {
+                writer.convert_pr_to_draft(pr.number)?;
             }
         }
-    };
-    writer.set_pull_request_state(state)?;
-    Ok(number)
+        usecases::service::verify::PrTarget::ReadyAutoMerge => {
+            writer.set_pull_request_state(crate::github::BotPullRequestState::Ready {
+                pull_request_number: pr.number,
+                auto_merge: true,
+            })?;
+        }
+    }
+    Ok(pr.number)
 }
 
 /// Validates that the plan-hash artifact exists as a regular file whose

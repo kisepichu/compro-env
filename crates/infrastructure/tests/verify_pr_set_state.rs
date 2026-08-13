@@ -210,15 +210,67 @@ fn write_record(record: &VerificationRecord) -> tempfile::NamedTempFile {
     f
 }
 
-/// `Starting` state → Draft branch: only the list-then-PATCH sequence runs
-/// (find existing PR + PATCH draft:false=false).
+/// `Starting` state → Draft branch: the found PR is already draft so
+/// `pr_set_state_with_io` performs NO write — just the discovery GET.
 #[test]
-fn starting_record_keeps_pr_draft_and_reuses_existing_pr() {
-    // 1. GET /pulls?head=owner:automation/verify&state=open&base=main → [{number: 5}]
-    // 2. PATCH /pulls/5 { draft: true }
+fn starting_record_keeps_already_draft_pr_untouched() {
+    // 1. GET /pulls?head=owner%3Aautomation%2Fverify&state=open&base=main
+    //    → [{ number: 5, draft: true }]
+    let script = vec![Reply::json(
+        200,
+        serde_json::json!([{ "number": 5, "state": "open", "draft": true }]),
+    )];
+    let fx = Fixture::start(script);
+    let record = write_record(&starting_record());
+    let n = pr_set_state_with_io(
+        &fx.base_url(),
+        record.path().to_str().unwrap(),
+        "owner/repo",
+        "automation/verify",
+        "main",
+        "test-token",
+    )
+    .expect("succeeds");
+    assert_eq!(n, 5);
+
+    let recorded = fx.recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "PR is already draft; expected only the discovery GET, got {recorded:#?}"
+    );
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(
+        recorded[0].url,
+        "/repos/owner/repo/pulls?head=owner%3Aautomation%2Fverify&state=open&base=main"
+    );
+}
+
+/// `Starting` state → Draft branch when the existing PR is currently
+/// **Ready** (e.g. after `persist_terminal` armed auto-merge but a
+/// required check kept the merge waiting, and now a fresh attempt
+/// starts): must route through GraphQL `convertPullRequestToDraft`,
+/// NOT PATCH `{draft: true}` (which REST rejects with 422).
+#[test]
+fn starting_record_converts_ready_pr_back_to_draft_via_graphql() {
     let script = vec![
-        Reply::json(200, serde_json::json!([{ "number": 5, "state": "open" }])),
-        Reply::json(200, serde_json::json!({ "number": 5, "draft": true })),
+        // 1. GET list → PR is currently Ready
+        Reply::json(
+            200,
+            serde_json::json!([{ "number": 5, "state": "open", "draft": false }]),
+        ),
+        // 2. GET /pulls/5 → resolve node id
+        Reply::json(
+            200,
+            serde_json::json!({ "number": 5, "node_id": "PR_kwDOREADY" }),
+        ),
+        // 3. POST /graphql → convertPullRequestToDraft
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": { "convertPullRequestToDraft": { "clientMutationId": "ok" } }
+            }),
+        ),
     ];
     let fx = Fixture::start(script);
     let record = write_record(&starting_record());
@@ -234,36 +286,45 @@ fn starting_record_keeps_pr_draft_and_reuses_existing_pr() {
     assert_eq!(n, 5);
 
     let recorded = fx.recorded();
-    assert_eq!(recorded.len(), 2, "expected 2 requests, got {recorded:#?}");
-    assert_eq!(recorded[0].method, "GET");
-    assert_eq!(
-        recorded[0].url,
-        "/repos/owner/repo/pulls?head=owner:automation/verify&state=open&base=main"
-    );
-    assert_eq!(recorded[1].method, "PATCH");
+    assert_eq!(recorded.len(), 3, "expected 3 requests, got {recorded:#?}");
+    assert_eq!(recorded[1].method, "GET");
     assert_eq!(recorded[1].url, "/repos/owner/repo/pulls/5");
-    let body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
-    // draft = !ready; for the Draft branch, ready=false so draft=true.
-    assert_eq!(body["draft"], true);
+    assert_eq!(recorded[2].method, "POST");
+    assert_eq!(recorded[2].url, "/graphql");
+    let body: serde_json::Value = serde_json::from_str(&recorded[2].body).unwrap();
+    assert!(
+        body["query"]
+            .as_str()
+            .unwrap()
+            .contains("convertPullRequestToDraft"),
+        "expected convertPullRequestToDraft mutation, got {}",
+        body["query"]
+    );
+    assert_eq!(body["variables"]["pullRequestId"], "PR_kwDOREADY");
+    // Critical: no `PATCH /pulls/{n}` — that path would 422 on a Ready PR.
+    assert!(
+        !recorded.iter().any(|r| r.method == "PATCH"),
+        "no PATCH must be issued when converting Ready → Draft, got {recorded:#?}"
+    );
 }
 
-/// Completed(Accepted) → ReadyAutoMerge branch: list → PATCH ready + auto_merge
-/// via node id + GraphQL.
+/// Completed(Accepted) → ReadyAutoMerge branch: list → open new PR →
+/// resolve node id → PATCH ready → POST GraphQL enable-auto-merge.
 #[test]
 fn completed_accepted_flips_pr_to_ready_and_auto_merge() {
-    // 1. GET /pulls?... → []  (opens a new PR)
-    // 2. POST /pulls → { number: 9 }
-    // 3. GET /pulls/9 → { node_id: "PR_kwDOTEST" } (resolve node id)
-    // 4. PATCH /pulls/9 { draft: false }
-    // 5. POST /graphql → { data: {...} }
     let script = vec![
+        // 1. GET /pulls?... → []  (opens a new PR)
         Reply::json(200, serde_json::json!([])),
-        Reply::json(201, serde_json::json!({ "number": 9 })),
+        // 2. POST /pulls → { number: 9, draft: true }
+        Reply::json(201, serde_json::json!({ "number": 9, "draft": true })),
+        // 3. GET /pulls/9 → { node_id }
         Reply::json(
             200,
             serde_json::json!({ "number": 9, "node_id": "PR_kwDOTEST" }),
         ),
+        // 4. PATCH /pulls/9 { draft: false }
         Reply::json(200, serde_json::json!({ "number": 9, "draft": false })),
+        // 5. POST /graphql → enablePullRequestAutoMerge
         Reply::json(
             200,
             serde_json::json!({
