@@ -144,8 +144,21 @@ jobs:
         run: ./tools/library-analyzers/prepare
 
       - name: Build library analyzer executables
+        # `library-adapter-build` derives a build-id from the input tree and
+        # refuses to overwrite an existing `target/library-analyzers/builds/<id>/`.
+        # A warm cache restore replays a previous run's completed build,
+        # so re-invoking the driver would fail with
+        # `build directory already exists`. Skip when the pinned bin/
+        # entry already exists and its parent build folder is intact —
+        # the cache hit is the "operator already built this tree" case.
         if: inputs.solution != ''
-        run: ./tools/library-analyzers/build
+        run: |
+          set -euo pipefail
+          if [ -x target/library-analyzers/bin/rust-analyzer ]; then
+            echo "Cache restored a completed analyzer build; skipping re-invocation."
+            exit 0
+          fi
+          ./tools/library-analyzers/build
 
       - name: Freeze plan and starting record
         id: build_plan
