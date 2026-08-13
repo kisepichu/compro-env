@@ -2,7 +2,14 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    # The verify pipeline pushes three commits to `automation/verify` per live
+    # attempt (persist_starting/handle/terminal). Those pushes only touch
+    # verification/results/**.json — the Rust code is identical to main — so
+    # running the full CI three times per attempt is wasted CI minutes. Skip
+    # it explicitly; `verify-result-integrity` covers the data-side checks.
+    branches:
+      - "**"
+      - "!automation/verify"
   pull_request:
     branches: [main]
 
