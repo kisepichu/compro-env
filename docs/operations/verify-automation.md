@@ -281,30 +281,26 @@ your operator log. Do **not** commit the PEM or the refresh token.
 1. Locally, run `ce login librarychecker` and enter the account's
    email + password. On success it writes
    `~/.config/ce/session.toml` with a fresh `refresh_token`.
-2. Extract the token value:
+2. Pipe the token directly from the session file into the environment
+   secret. This never writes the token to the terminal, so it cannot
+   leak via scrollback, `tmux`/`screen` session logs, or screen
+   recordings. `end=""` suppresses the trailing newline that `print`
+   would otherwise inject into the stored secret:
 
    ```bash
    python3 -c 'import tomllib, pathlib; \
-     print(tomllib.loads(pathlib.Path.home().joinpath(".config/ce/session.toml").read_text())["librarychecker"]["refresh_token"])'
+     print(tomllib.loads(pathlib.Path.home().joinpath(".config/ce/session.toml").read_text())["librarychecker"]["refresh_token"], end="")' \
+     | gh secret set LIBRARYCHECKER_REFRESH_TOKEN \
+         -R kisepichu/compro-env --env oj-library-checker
    ```
 
-3. Load it into the environment secret via stdin (avoids shell history):
-
-   ```bash
-   # replace <TOKEN> with the value from step 2; use `read -s` to keep it off history
-   read -rs TOKEN
-   printf '%s' "$TOKEN" | gh secret set LIBRARYCHECKER_REFRESH_TOKEN \
-     -R kisepichu/compro-env --env oj-library-checker
-   unset TOKEN
-   ```
-
-4. Verify: manually dispatch `verify` with `mode: live` and a cheap
+3. Verify: manually dispatch `verify` with `mode: live` and a cheap
    `solution` (e.g. `librarychecker-aplusb/aplusb/rust`). All six
    worker jobs must complete green with a terminal verdict on
    `automation/verify`.
-5. Optional but recommended: on the Library Checker account, sign out
+4. Optional but recommended: on the Library Checker account, sign out
    of all other sessions to invalidate the previous refresh token.
-6. Delete the local `~/.config/ce/session.toml` if it isn't otherwise
+5. Delete the local `~/.config/ce/session.toml` if it isn't otherwise
    needed on this machine, and record the rotation in your operator
    log.
 
