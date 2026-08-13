@@ -353,6 +353,17 @@ jobs:
             --base-sha "$BASE_SHA" \
             --token-env GH_APP_TOKEN
 
+      - name: Update automation PR state
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-pr-set-state \
+            --record-in work/starting.json \
+            --repository "$REPOSITORY" \
+            --token-env GH_APP_TOKEN
+
   submit:
     name: Submit plan to OJ (OJ-only)
     needs: [prepare, persist_starting]
@@ -561,6 +572,17 @@ jobs:
             --candidate-in work/handle.json \
             --repository "$REPOSITORY" \
             --base-sha "$BASE_SHA" \
+            --token-env GH_APP_TOKEN
+
+      - name: Update automation PR state
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-pr-set-state \
+            --record-in work/handle.json \
+            --repository "$REPOSITORY" \
             --token-env GH_APP_TOKEN
 
   poll:
@@ -817,4 +839,15 @@ jobs:
             --candidate-in work/terminal.json \
             --repository "$REPOSITORY" \
             --base-sha "$BASE_SHA" \
+            --token-env GH_APP_TOKEN
+
+      - name: Update automation PR state
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-pr-set-state \
+            --record-in work/terminal.json \
+            --repository "$REPOSITORY" \
             --token-env GH_APP_TOKEN

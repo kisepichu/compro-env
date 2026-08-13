@@ -94,6 +94,33 @@ chain:
    terminal record and releases the automation PR to ready-for-review
    when the verdict is terminal.
 
+### Automation PR
+
+Every `persist_*` job appends a `ce internal verify-pr-set-state` step
+after its `verify-persist` invocation. That step maintains exactly one
+long-lived pull request from `automation/verify` → `main`:
+
+- **Title:** `Automation: verification results`. **Head:**
+  `automation/verify`. **Base:** `main`.
+- The first `persist_starting` on a fresh state branch opens the PR as
+  a **draft**; subsequent `persist_*` calls reuse it (find-or-open is
+  idempotent).
+- `persist_starting` and `persist_handle` keep the PR draft — the
+  attempt is still mid-flight.
+- `persist_terminal` inspects the persisted record and flips the PR to
+  **ready-for-review + auto-merge** when the state is:
+  - `Completed{Accepted | WrongAnswer | TimeLimitExceeded |
+    MemoryLimitExceeded | RuntimeError | CompileError |
+    OutputLimitExceeded | JudgeError}`, or
+  - `Unavailable`.
+- `Completed{Cancelled | Other}` and every non-terminal state
+  (`Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging`,
+  `InfrastructureFailure`) leave the PR draft — the outcome is either
+  indeterminate or still in flight, so a human decides.
+
+Once auto-merge fires the `main` push triggers `pages.yml` and the
+site rebuilds against the new record.
+
 Triggers allowed: `push` to `main`, `schedule` on the dispatcher, and
 `workflow_dispatch` on the dispatcher. The worker accepts only
 `workflow_call`. `pull_request`, `pull_request_target`, and any other

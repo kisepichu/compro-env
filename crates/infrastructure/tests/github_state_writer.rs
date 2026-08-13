@@ -1085,3 +1085,128 @@ fn token_is_never_logged_via_debug() {
         "Debug missing redaction marker: {debug}"
     );
 }
+
+#[test]
+fn find_or_open_bot_pr_returns_existing_when_list_non_empty() {
+    let script = vec![Reply::json(
+        200,
+        serde_json::json!([{ "number": 42, "state": "open" }]),
+    )];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let n = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "Automation: verification results",
+            "body",
+        )
+        .expect("find existing PR");
+    assert_eq!(n, 42);
+
+    let recorded = fx.recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "expected only the list GET, got {recorded:#?}"
+    );
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(
+        recorded[0].url,
+        "/repos/owner/repo/pulls?head=owner:automation/verify&state=open&base=main"
+    );
+}
+
+#[test]
+fn find_or_open_bot_pr_opens_new_when_list_empty() {
+    let script = vec![
+        Reply::json(200, serde_json::json!([])),
+        Reply::json(201, serde_json::json!({ "number": 99 })),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let n = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "Automation: verification results",
+            "body",
+        )
+        .expect("open new PR");
+    assert_eq!(n, 99);
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 2, "expected 2 requests, got {recorded:#?}");
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/repos/owner/repo/pulls");
+    let body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    assert_eq!(body["draft"], true);
+    assert_eq!(body["head"], "automation/verify");
+    assert_eq!(body["base"], "main");
+    assert_eq!(body["title"], "Automation: verification results");
+}
+
+#[test]
+fn find_or_open_bot_pr_maps_non_2xx_to_upstream_status() {
+    let script = vec![Reply::json(
+        502,
+        serde_json::json!({ "message": "bad gateway" }),
+    )];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let err = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .unwrap_err();
+    match err {
+        PersistError::UpstreamStatus { status, op } => {
+            assert_eq!(status, 502);
+            assert_eq!(op, "GET pulls?head (find bot pr)");
+        }
+        other => panic!("expected UpstreamStatus, got {other:?}"),
+    }
+}
+
+#[test]
+fn find_or_open_bot_pr_missing_number_maps_to_malformed_response() {
+    // POST /pulls returns a body without `number`. The writer must surface
+    // MalformedResponse rather than pretending everything succeeded.
+    let script = vec![
+        Reply::json(200, serde_json::json!([])),
+        Reply::json(201, serde_json::json!({ "id": 1 })),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let err = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .unwrap_err();
+    match err {
+        PersistError::MalformedResponse { op, field } => {
+            assert_eq!(op, "POST pulls (open bot pr)");
+            assert_eq!(field, "number");
+        }
+        other => panic!("expected MalformedResponse, got {other:?}"),
+    }
+}

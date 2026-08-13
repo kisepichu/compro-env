@@ -827,6 +827,83 @@ impl GitHubVerificationStateWriter {
         Ok(body.object.sha)
     }
 
+    /// Return the number of the single long-lived bot PR from `head` into
+    /// `base` (spec §15.1 "最大 1 本の automation/verify draft PR"). Opens a
+    /// fresh draft PR when none is open.
+    ///
+    /// The GitHub REST list endpoint returns an array of PR summaries filtered
+    /// by `head=<owner>:<branch>` and `state=open`. When more than one PR
+    /// matches the filter (should never happen given the "at most one" rule),
+    /// the caller-observable behaviour is to reuse the first entry — this
+    /// still preserves the invariant because the writer will not open a
+    /// duplicate.
+    ///
+    /// Errors are labelled with op strings that match the rest of the
+    /// writer's error surface. The PATCH / GraphQL paths for
+    /// [`set_pull_request_state`] can then operate on the returned number
+    /// without a second discovery step.
+    pub fn find_or_open_bot_pr(
+        &self,
+        owner: &str,
+        repo: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> PersistResult<u64> {
+        #[derive(Deserialize)]
+        struct PullSummary {
+            number: Option<u64>,
+        }
+
+        let list_url = format!(
+            "{}/repos/{owner}/{repo}/pulls?head={owner}:{head}&state=open&base={base}",
+            self.base_url
+        );
+        let resp = self.authed(self.http.get(&list_url)).send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            let _ = resp.text();
+            return Err(PersistError::UpstreamStatus {
+                status: status.as_u16(),
+                op: "GET pulls?head (find bot pr)",
+            });
+        }
+        let list: Vec<PullSummary> = resp.json().map_err(PersistError::from)?;
+        if let Some(first) = list.first() {
+            return first.number.ok_or(PersistError::MalformedResponse {
+                op: "GET pulls?head (find bot pr)",
+                field: "number",
+            });
+        }
+
+        let open_url = format!("{}/repos/{owner}/{repo}/pulls", self.base_url);
+        let payload = json!({
+            "title": title,
+            "body": body,
+            "head": head,
+            "base": base,
+            "draft": true,
+        });
+        let resp = self
+            .authed(self.http.post(&open_url))
+            .json(&payload)
+            .send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            let _ = resp.text();
+            return Err(PersistError::UpstreamStatus {
+                status: status.as_u16(),
+                op: "POST pulls (open bot pr)",
+            });
+        }
+        let created: PullSummary = resp.json().map_err(PersistError::from)?;
+        created.number.ok_or(PersistError::MalformedResponse {
+            op: "POST pulls (open bot pr)",
+            field: "number",
+        })
+    }
+
     fn patch_pr(&self, owner: &str, repo: &str, pr: u64, ready: bool) -> PersistResult<()> {
         let url = format!("{}/repos/{owner}/{repo}/pulls/{pr}", self.base_url);
         let body = json!({ "draft": !ready });
