@@ -279,17 +279,25 @@ your operator log. Do **not** commit the PEM or the refresh token.
 ### Rotate `LIBRARYCHECKER_REFRESH_TOKEN`
 
 1. Locally, run `ce login librarychecker` and enter the account's
-   email + password. On success it writes
-   `~/.config/ce/session.toml` with a fresh `refresh_token`.
+   email + password. On success it writes `session.toml` with a fresh
+   `refresh_token` under `$CE_CONFIG_DIR` (if set) or `~/.config/ce/`
+   otherwise — the same lookup order used by every other `ce`
+   subcommand (`SessionRepositoryImpl::config_dir()` in
+   `crates/infrastructure/src/repository_impl/session_repository_impl.rs`).
 2. Pipe the token directly from the session file into the environment
    secret. This never writes the token to the terminal, so it cannot
    leak via scrollback, `tmux`/`screen` session logs, or screen
-   recordings. `end=""` suppresses the trailing newline that `print`
-   would otherwise inject into the stored secret:
+   recordings. The snippet honours `CE_CONFIG_DIR` so it stays in sync
+   with step 1 even inside a shell that had it set for integration
+   tests. `end=""` suppresses the trailing newline that `print` would
+   otherwise inject into the stored secret. Requires **Python 3.11+**
+   for `tomllib` — on older systems either upgrade or `pip install
+   tomli` and swap the import:
 
    ```bash
-   python3 -c 'import tomllib, pathlib; \
-     print(tomllib.loads(pathlib.Path.home().joinpath(".config/ce/session.toml").read_text())["librarychecker"]["refresh_token"], end="")' \
+   python3 -c 'import os, tomllib, pathlib; \
+     d = os.environ.get("CE_CONFIG_DIR") or str(pathlib.Path.home() / ".config" / "ce"); \
+     print(tomllib.loads(pathlib.Path(d, "session.toml").read_text())["librarychecker"]["refresh_token"], end="")' \
      | gh secret set LIBRARYCHECKER_REFRESH_TOKEN \
          -R kisepichu/compro-env --env oj-library-checker
    ```
@@ -300,9 +308,10 @@ your operator log. Do **not** commit the PEM or the refresh token.
    `automation/verify`.
 4. Optional but recommended: on the Library Checker account, sign out
    of all other sessions to invalidate the previous refresh token.
-5. Delete the local `~/.config/ce/session.toml` if it isn't otherwise
-   needed on this machine, and record the rotation in your operator
-   log.
+5. Delete the local `session.toml` under the same directory used in
+   step 1 (`$CE_CONFIG_DIR` if set, else `~/.config/ce/`) if it isn't
+   otherwise needed on this machine, and record the rotation in your
+   operator log.
 
 ### Emergency stop
 
