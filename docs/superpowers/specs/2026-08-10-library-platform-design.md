@@ -2673,6 +2673,22 @@ start job は `Starting` の remote branch への保存を確認するまで OJ 
 未提出の確証を試みる。どちらも得られなければ `AcceptanceUnknown` とし、同じ OJ の queue を
 止めたまま手動修復を待つ。
 
+資格情報分離のもとで `Starting` の永続化を担う job (`persist_starting`) は state writer
+側にあるため、OJ に接続する `verify-start` はローカル `ce verify` の `start_plan` と異なり
+自身では `Starting` を書かない。`submit_prepared_plan` は先行 job が置いた `Starting` を
+`load()` で確認し、attempt ID と `Starting` 状態を検証したうえで OJ starter を呼び、
+結果の遷移だけを CAS 経由で書き戻す。事前に `Starting` が存在しない、attempt ID が plan と
+一致しない、`Starting` 以外の状態、のいずれでも submit は即座に失敗する。
+
+emit 境界での CAS token 契約: `verify-start` / `verify-poll` が stdout へ書き出す
+`VerificationRecord` の `replaces_attempt_id` は、直前に上書きした remote record の
+`attempt_id`（同一 attempt 内の遷移では自分自身の `attempt_id`）と一致させる。後段の
+`persist_handle` / `persist_terminal` は `cas_check(expected = candidate.replaces_attempt_id,
+actual = remote.attempt_id)` を行うため、emit 側と state writer 側で同じ token に揃わないと
+CAS が破綻し、live path が握らずに終了する。`apply_transition` は `replaces_attempt_id` を
+現状の record から継承するだけなので、emit 直前に `Some(current.attempt_id)` へ上書きする
+のは submit / poll layer の責務とする。
+
 ### 15.5 静的サイトの公開
 
 PR と main で同じ site build pipeline を使い、公開操作だけを main に限定する。
