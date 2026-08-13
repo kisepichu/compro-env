@@ -296,7 +296,7 @@ your operator log. Do **not** commit the PEM or the refresh token.
 
    ```bash
    python3 -c 'import os, tomllib, pathlib; \
-     d = os.environ.get("CE_CONFIG_DIR") or str(pathlib.Path.home() / ".config" / "ce"); \
+     d = os.environ.get("CE_CONFIG_DIR", "").strip() or str(pathlib.Path.home() / ".config" / "ce"); \
      print(tomllib.loads(pathlib.Path(d, "session.toml").read_text())["librarychecker"]["refresh_token"], end="")' \
      | gh secret set LIBRARYCHECKER_REFRESH_TOKEN \
          -R kisepichu/compro-env --env oj-library-checker
