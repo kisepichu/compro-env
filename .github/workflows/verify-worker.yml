@@ -78,12 +78,28 @@ jobs:
         # App-only `persist_starting` job. That path only exists on the
         # `automation/verify` state branch, so overlay its
         # `verification/results/**` subtree onto the main checkout before
-        # running `verify-prepare`. `|| true` covers the first-ever run when
-        # neither the branch nor the path exists yet.
+        # running `verify-prepare`.
+        #
+        # A missing branch (first-ever run before bootstrap) is the ONLY
+        # tolerable failure — detected via `ls-remote` so the fetch itself
+        # runs unmuted and any transient/token error surfaces loudly rather
+        # than leaving `previous_attempt_id` silently unpopulated (which
+        # would produce a confusing CAS mismatch downstream in
+        # `persist_starting`).
         run: |
           set -euo pipefail
-          if git fetch --depth=1 origin automation/verify 2>/dev/null; then
-            git checkout origin/automation/verify -- verification/results 2>/dev/null || true
+          if [ -z "$(git ls-remote --heads origin automation/verify)" ]; then
+            echo "automation/verify branch does not exist yet; skipping state overlay"
+            exit 0
+          fi
+          git fetch --depth=1 origin automation/verify
+          # The results tree may still be absent if the branch was bootstrapped
+          # from a bare main tip and no verification has landed yet.
+          if git ls-tree -r --name-only origin/automation/verify \
+               | grep -q '^verification/results/'; then
+            git checkout origin/automation/verify -- verification/results
+          else
+            echo "automation/verify has no verification/results/** yet; skipping overlay"
           fi
 
       - name: Install Rust toolchain (pinned via rust-toolchain.toml)

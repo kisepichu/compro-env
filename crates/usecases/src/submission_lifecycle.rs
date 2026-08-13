@@ -379,7 +379,14 @@ pub fn start_plan(
     let outcome = starter.start_submission(&request, session.as_ref());
 
     // Step 3: persist the terminal-or-forwarded state.
-    finalize_after_starter(repositories, ports, plan, &oj, &starting_record, outcome)
+    finalize_after_starter(
+        repositories,
+        ports,
+        plan,
+        starter,
+        &starting_record,
+        outcome,
+    )
 }
 
 /// Drive a plan through the OJ starter when the `Starting` record was
@@ -445,7 +452,7 @@ pub fn submit_prepared_plan(
 
     // Step 3: persist the terminal-or-forwarded state, using the loaded
     // Starting record as the base for the transition.
-    finalize_after_starter(repositories, ports, plan, &oj, &current, outcome)
+    finalize_after_starter(repositories, ports, plan, starter, &current, outcome)
 }
 
 /// Drive the Starting record through the OJ starter's outcome.
@@ -460,13 +467,12 @@ fn finalize_after_starter(
     repositories: &VerificationRepositories,
     ports: &SubmissionPorts,
     plan: &SubmissionPlan,
-    oj: &OJKind,
+    starter: &dyn SubmissionStarter,
     starting_record: &VerificationRecord,
     outcome: Result<SubmissionStart, StartSubmissionError>,
 ) -> Result<StartEvent> {
     let solution_id = plan.body.solution_id.clone();
     let attempt_id = plan.body.attempt_id.clone();
-    let starter = ports.starters.get(oj)?;
     match outcome {
         Ok(SubmissionStart::Trackable { handle }) => {
             let domain_handle = to_domain_handle(&handle);
