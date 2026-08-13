@@ -228,15 +228,89 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
 
 ## Key rotation and revocation
 
-- **`VERIFY_APP_PRIVATE_KEY`**: on the App's settings page, generate a
-  new private key. Update the `verify-state` environment secret with
-  the new PEM. Once a `persist_*` job succeeds against the new key,
-  delete the old key on the App page.
-- **`LIBRARYCHECKER_REFRESH_TOKEN`**: run `ce login` locally against
-  Library Checker, copy the resulting refresh token, and update the
-  `oj-library-checker` environment secret. No cascading changes are
-  required.
-- **Emergency stop**: set `VERIFY_ACTIVATED` to `false` (or delete the
-  variable). No dispatcher or worker job will do OJ or App work until
-  it is re-enabled. Environments and secrets remain in place, so
-  re-activation is a single variable flip.
+Two secrets are in scope. Both live in per-environment secret stores; no
+repository-wide secrets are involved. All rotation happens without
+downtime: `VERIFY_ACTIVATED` can stay `true` throughout, and the
+five-minute scheduler tolerates a single failed tick.
+
+### Cadence
+
+- **`VERIFY_APP_PRIVATE_KEY`** — rotate at least **every 90 days**, and
+  immediately after: any suspected leak, any operator/device rotation,
+  or the first successful live run following a bootstrap (the initial
+  activation key is by nature a "temporary" credential and should be
+  swapped once the pipeline is proven green).
+- **`LIBRARYCHECKER_REFRESH_TOKEN`** — rotate at least **every 30 days**
+  (Firebase refresh tokens don't have a fixed TTL but are revocable, and
+  a fresh capture catches quiet server-side invalidation early), and
+  immediately after: password change on the Library Checker account,
+  the first successful live run following a bootstrap, or any
+  `session expired and token refresh failed` from a worker job.
+
+Record the rotation date, actor, and PEM fingerprint (App key only) in
+your operator log. Do **not** commit the PEM or the refresh token.
+
+### Rotate `VERIFY_APP_PRIVATE_KEY`
+
+1. Open the App's settings page (Developer settings → GitHub Apps →
+   the App scoped to this repo).
+2. Under "Private keys", click **Generate a private key** — GitHub
+   downloads a fresh `<app>.<date>.private-key.pem`.
+3. Load the new PEM into the environment secret. The command reads
+   the file into stdin so the PEM never appears on the shell history:
+
+   ```bash
+   gh secret set VERIFY_APP_PRIVATE_KEY \
+     -R kisepichu/compro-env --env verify-state \
+     < /path/to/<app>.<date>.private-key.pem
+   ```
+
+4. Verify: manually dispatch `verify` with `mode: dry-run` and any
+   valid `solution`. `prepare` + `persist_starting` must complete
+   green. If `persist_starting` fails with an App-auth error, the
+   secret update did not take — re-run step 3.
+5. Only after step 4 succeeds, revoke the old key on the App's
+   settings page. GitHub keeps the previous key active until you
+   delete it explicitly; leaving both keys live indefinitely defeats
+   the rotation.
+6. Delete the downloaded PEM from disk (`shred -u` on Linux) and
+   record the rotation in your operator log.
+
+### Rotate `LIBRARYCHECKER_REFRESH_TOKEN`
+
+1. Locally, run `ce login librarychecker` and enter the account's
+   email + password. On success it writes
+   `~/.config/ce/session.toml` with a fresh `refresh_token`.
+2. Extract the token value:
+
+   ```bash
+   python3 -c 'import tomllib, pathlib; \
+     print(tomllib.loads(pathlib.Path.home().joinpath(".config/ce/session.toml").read_text())["librarychecker"]["refresh_token"])'
+   ```
+
+3. Load it into the environment secret via stdin (avoids shell history):
+
+   ```bash
+   # replace <TOKEN> with the value from step 2; use `read -s` to keep it off history
+   read -rs TOKEN
+   printf '%s' "$TOKEN" | gh secret set LIBRARYCHECKER_REFRESH_TOKEN \
+     -R kisepichu/compro-env --env oj-library-checker
+   unset TOKEN
+   ```
+
+4. Verify: manually dispatch `verify` with `mode: live` and a cheap
+   `solution` (e.g. `librarychecker-aplusb/aplusb/rust`). All six
+   worker jobs must complete green with a terminal verdict on
+   `automation/verify`.
+5. Optional but recommended: on the Library Checker account, sign out
+   of all other sessions to invalidate the previous refresh token.
+6. Delete the local `~/.config/ce/session.toml` if it isn't otherwise
+   needed on this machine, and record the rotation in your operator
+   log.
+
+### Emergency stop
+
+Set `VERIFY_ACTIVATED` to `false` (or delete the repo variable). No
+dispatcher or worker job will do OJ or App work until it is
+re-enabled. Environments and secrets remain in place, so re-activation
+is a single variable flip.
