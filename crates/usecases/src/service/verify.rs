@@ -43,7 +43,7 @@ use crate::submission::{
 use crate::submission_lifecycle::{
     PollEvent, PollingPolicy, RetryAfterHint, Sleeper, StartEvent, SubmissionPorts,
     VerificationRepositories, VerifySelection as LifecycleSelection, poll_handle, resume_pending,
-    start_plan,
+    start_plan, submit_prepared_plan,
 };
 use crate::verification::fingerprint::{
     AdapterIdentity, FingerprintMaterial, FingerprintSource, OjBinding, calculate_fingerprint,
@@ -597,8 +597,11 @@ pub fn prepare_solution(
     Ok(plan)
 }
 
-/// Drive a previously-prepared plan through `start_plan`. Used by
-/// `internal verify-start`.
+/// Drive a previously-prepared plan through `submit_prepared_plan`. Used by
+/// `internal verify-start` in the credential-separated worker (spec §15.4):
+/// the `persist_starting` App-only job has already written the `Starting`
+/// record to `automation/verify`, so `verify-start` must skip a second
+/// `Starting` persist and go straight to the OJ starter.
 pub fn start_prepared_plan(
     plan: &SubmissionPlan,
     inputs: &VerifyInputs<'_>,
@@ -626,7 +629,7 @@ pub fn start_prepared_plan(
         records: &normalizer,
         known_solutions: known,
     };
-    start_plan(&repos_bundle, &submission_ports(ports), plan)
+    submit_prepared_plan(&repos_bundle, &submission_ports(ports), plan)
 }
 
 /// Drive the current record for `solution_id` forward via `poll_handle`.
