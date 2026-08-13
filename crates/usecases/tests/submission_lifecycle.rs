@@ -1116,6 +1116,50 @@ fn submit_prepared_plan_maps_acceptance_unknown() {
     }
 }
 
+#[test]
+fn submit_prepared_plan_maps_confirmed_not_accepted() {
+    // Regression: the ConfirmedNotAccepted arm must also emit
+    // `replaces_attempt_id = Some(current.attempt_id)` so `persist_handle`'s
+    // remote CAS matches the pre-persisted Starting record.
+    let log = Arc::new(RecordingLog::default());
+    let clock = Arc::new(FakeClock::new(fixed_offset_time(0)));
+    let repo = FakeRepo::new(Arc::clone(&log));
+    let plan = make_plan(
+        &lc_solution(),
+        "attempt-1",
+        "librarychecker",
+        "librarychecker-aplusb",
+        "aplusb",
+    );
+    let seeded = make_starting_record_for_plan(&plan);
+    repo.seed(seeded);
+    let env = make_env(
+        Arc::clone(&log),
+        Arc::clone(&clock),
+        vec![Err(StartSubmissionError::ConfirmedNotAccepted {
+            summary: "server dropped submission".into(),
+        })],
+        vec![],
+        None,
+        usecases::submission::RecoveryMode::BestEffort,
+        PollingPolicy::verify_defaults(),
+    );
+    let repos_bundle = repos(&repo, &[lc_solution()]);
+    let event =
+        usecases::submission_lifecycle::submit_prepared_plan(&repos_bundle, &env.ports(), &plan)
+            .unwrap();
+    match event {
+        StartEvent::ConfirmedNotAccepted { record } => {
+            assert!(matches!(record.state, VerificationState::Starting(_)));
+            assert_eq!(
+                record.replaces_attempt_id.as_ref(),
+                Some(&attempt("attempt-1"))
+            );
+        }
+        e => panic!("unexpected event {e:?}"),
+    }
+}
+
 // ─── Tests: poll_handle ────────────────────────────────────────────────────
 
 #[test]

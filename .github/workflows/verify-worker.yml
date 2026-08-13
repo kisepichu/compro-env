@@ -88,15 +88,23 @@ jobs:
         # `persist_starting`).
         run: |
           set -euo pipefail
-          if [ -z "$(git ls-remote --heads origin automation/verify)" ]; then
+          # `set -e` does NOT propagate into command substitutions used
+          # inside `if` conditions, so store the ls-remote output into a
+          # variable first — that way a transient network / auth failure
+          # aborts the step rather than being misread as "branch absent"
+          # (which would silently skip the overlay and produce a confusing
+          # CAS mismatch in `persist_starting`).
+          REMOTE_HEADS="$(git ls-remote --heads origin automation/verify)"
+          if [ -z "$REMOTE_HEADS" ]; then
             echo "automation/verify branch does not exist yet; skipping state overlay"
             exit 0
           fi
           git fetch --depth=1 origin automation/verify
           # The results tree may still be absent if the branch was bootstrapped
-          # from a bare main tip and no verification has landed yet.
-          if git ls-tree -r --name-only origin/automation/verify \
-               | grep -q '^verification/results/'; then
+          # from a bare main tip and no verification has landed yet. Same
+          # variable-capture pattern to keep `set -e` in force.
+          REMOTE_TREE="$(git ls-tree -r --name-only origin/automation/verify)"
+          if printf '%s\n' "$REMOTE_TREE" | grep -q '^verification/results/'; then
             git checkout origin/automation/verify -- verification/results
           else
             echo "automation/verify has no verification/results/** yet; skipping overlay"

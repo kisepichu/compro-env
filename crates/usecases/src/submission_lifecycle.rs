@@ -550,9 +550,14 @@ fn finalize_after_starter(
             // Spec §8.2: caller may re-plan with a fresh attempt ID. This
             // module does NOT remove_if_attempt — it reports the outcome and
             // leaves the record in place. The caller (Task 2) decides.
-            Ok(StartEvent::ConfirmedNotAccepted {
-                record: starting_record.clone(),
-            })
+            //
+            // The emitted record still needs the CAS token override so the
+            // credential-split `persist_handle` writer's `cas_check` sees a
+            // `replaces_attempt_id` that matches the remote's current
+            // `attempt_id` (spec §11).
+            let mut record = starting_record.clone();
+            record.replaces_attempt_id = Some(attempt_id);
+            Ok(StartEvent::ConfirmedNotAccepted { record })
         }
         Err(StartSubmissionError::Unavailable { reason }) => {
             let observed_at = ports.clock.now();
