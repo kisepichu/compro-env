@@ -320,15 +320,21 @@ impl GitHubVerificationStateWriter {
     /// Persist a verification record to `verification/results/<solution_id>.json`
     /// on the sole `automation/verify` branch, using GitHub's Git Data API.
     ///
-    /// The call performs six HTTP requests on the happy path:
-    /// 1. `GET /repos/{owner}/{repo}/contents/{path}?ref={base_sha}` — CAS.
+    /// The call performs seven HTTP requests on the happy path:
+    /// 0. `GET /repos/{owner}/{repo}/git/refs/heads/automation/verify` —
+    ///    resolve the state branch tip. Every subsequent read / write
+    ///    anchors on this SHA, NOT on `request.base_sha`. `base_sha` is a
+    ///    `main@base_sha` tamper-evidence anchor (spec §15.1) but does not
+    ///    point at a tree that carries `verification/results/**`.
+    /// 1. `GET /repos/{owner}/{repo}/contents/{path}?ref={state_head}` — CAS.
     /// 2. `POST /repos/{owner}/{repo}/git/blobs` — write JSON blob.
-    /// 3. `GET /repos/{owner}/{repo}/git/commits/{base_sha}` — resolve the base
-    ///    commit to its tree SHA. GitHub's `POST /git/trees` expects a tree
+    /// 3. `GET /repos/{owner}/{repo}/git/commits/{state_head}` — resolve the
+    ///    tip to its tree SHA. GitHub's `POST /git/trees` expects a tree
     ///    SHA in `base_tree`, not a commit SHA, so we must resolve first.
     /// 4. `POST /repos/{owner}/{repo}/git/trees` — create tree on top of the
     ///    resolved `base_tree`.
-    /// 5. `POST /repos/{owner}/{repo}/git/commits` — commit with `base_sha` parent.
+    /// 5. `POST /repos/{owner}/{repo}/git/commits` — commit with the state
+    ///    branch tip as parent.
     /// 6. `PATCH /repos/{owner}/{repo}/git/refs/heads/automation/verify` —
     ///    fast-forward the branch to the new commit.
     ///
@@ -366,24 +372,36 @@ impl GitHubVerificationStateWriter {
             .expect("bound_repository mutex poisoned") =
             Some((owner.to_string(), repo.to_string()));
 
-        // Step 1: CAS check via the contents API.
+        // Fetch `automation/verify`'s current tip up front. `base_sha` is a
+        // `main@base_sha` anchor for tamper-evidence (spec §15.1) but does
+        // NOT point at a tree that carries `verification/results/**` — that
+        // delta lives only on the state branch. Every subsequent HTTP call
+        // that reads / writes existing records or fast-forwards the branch
+        // must therefore anchor on the state branch tip, not on `base_sha`.
+        // Step 6's retry path already does this on 422; doing it up front
+        // keeps steps 1, 3, and 5 aligned with the same head so the initial
+        // PATCH is a straight fast-forward on the happy path.
+        let state_head_sha = self.get_ref_sha(owner, repo)?;
+
+        // Step 1: CAS check via the contents API, anchored on the state
+        // branch tip.
         self.cas_check(
             owner,
             repo,
             &result_path,
-            &request.base_sha,
+            &state_head_sha,
             &request.candidate,
         )?;
 
         // Step 2: blob.
         let blob_sha = self.create_blob(owner, repo, &serialized, &result_path, &request.branch)?;
 
-        // Step 3: resolve the base commit SHA to its tree SHA. GitHub's
+        // Step 3: resolve the state branch tip to its tree SHA. GitHub's
         // `POST /git/trees` endpoint documents `base_tree` as the SHA of an
         // existing tree object, not a commit — even though the API sometimes
         // tolerates a commit SHA in practice, we do not rely on undocumented
         // behavior.
-        let base_tree_sha = self.resolve_commit_tree(owner, repo, &request.base_sha)?;
+        let base_tree_sha = self.resolve_commit_tree(owner, repo, &state_head_sha)?;
 
         // Step 4: tree on top of the resolved base tree.
         let tree_sha = self.create_tree(
@@ -395,14 +413,15 @@ impl GitHubVerificationStateWriter {
             &request.branch,
         )?;
 
-        // Step 5: commit.
+        // Step 5: commit whose parent is the state branch tip so PATCH
+        // succeeds on the happy path.
         let commit_message = format!("verify: persist {}", request.candidate.solution_id.as_str());
         let commit_sha = self.create_commit(
             owner,
             repo,
             &commit_message,
             &tree_sha,
-            &request.base_sha,
+            &state_head_sha,
             &result_path,
             &request.branch,
         )?;
