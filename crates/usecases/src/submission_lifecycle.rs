@@ -379,6 +379,94 @@ pub fn start_plan(
     let outcome = starter.start_submission(&request, session.as_ref());
 
     // Step 3: persist the terminal-or-forwarded state.
+    finalize_after_starter(repositories, ports, plan, &oj, &starting_record, outcome)
+}
+
+/// Drive a plan through the OJ starter when the `Starting` record was
+/// persisted by an out-of-band caller — the credential-separated verify
+/// pipeline's `persist_starting` job (spec §15.1, §15.4).
+///
+/// Unlike [`start_plan`], this refuses to write a fresh `Starting` and instead
+/// requires the loaded record to already carry the plan's attempt ID in the
+/// `Starting` state. The remaining transition + CAS write is identical.
+pub fn submit_prepared_plan(
+    repositories: &VerificationRepositories,
+    ports: &SubmissionPorts,
+    plan: &SubmissionPlan,
+) -> Result<StartEvent> {
+    let solution_id = plan.body.solution_id.clone();
+    let oj = OJKind::from_str(&plan.body.oj)
+        .map_err(|e| anyhow!("unknown OJ {} in plan: {e}", plan.body.oj))?;
+
+    // Defensive one-in-flight-per-OJ check across other solutions (spec §8.3).
+    let stored = repositories
+        .records
+        .load_all(&repositories.known_solutions)?;
+    for (id, rec) in stored.iter() {
+        if id == &solution_id {
+            continue;
+        }
+        if !is_terminal_state(&rec.state) && oj_for_record(rec).as_ref() == Some(&oj) {
+            bail!(
+                "OJ {} already has an in-flight attempt for solution {}",
+                oj.as_str(),
+                id.as_str()
+            );
+        }
+    }
+
+    // The Starting record must already be on disk with the same attempt id.
+    let current = repositories.records.load(&solution_id)?.ok_or_else(|| {
+        anyhow!(
+            "submit_prepared_plan: no Starting record; persist_starting must run first \
+                 for solution {}",
+            solution_id.as_str()
+        )
+    })?;
+    if current.attempt_id != plan.body.attempt_id {
+        bail!(
+            "submit_prepared_plan: stored attempt {} does not match plan attempt {}",
+            current.attempt_id,
+            plan.body.attempt_id
+        );
+    }
+    if !matches!(current.state, VerificationState::Starting(_)) {
+        bail!(
+            "submit_prepared_plan: record for attempt {} is not in Starting state",
+            plan.body.attempt_id
+        );
+    }
+
+    // Step 2 (Starting persist skipped): call the starter.
+    let starter = ports.starters.get(&oj)?;
+    let session = ports.sessions.get(&oj)?;
+    let request = plan_to_request(plan, &oj);
+    let outcome = starter.start_submission(&request, session.as_ref());
+
+    // Step 3: persist the terminal-or-forwarded state, using the loaded
+    // Starting record as the base for the transition.
+    finalize_after_starter(repositories, ports, plan, &oj, &current, outcome)
+}
+
+/// Drive the Starting record through the OJ starter's outcome.
+///
+/// The emitted `StartEvent`'s record has its `replaces_attempt_id` overridden
+/// to `Some(starting_record.attempt_id)` so the caller's downstream persistence
+/// (in-process CAS, or the credential-split writer that reads it out of the
+/// emitted JSON) sees the same CAS token that the on-disk record holds — spec
+/// §11 treats `replaces_attempt_id` as the CAS token at the state-branch
+/// boundary, while [`apply_transition`] inherits it from `current`.
+fn finalize_after_starter(
+    repositories: &VerificationRepositories,
+    ports: &SubmissionPorts,
+    plan: &SubmissionPlan,
+    oj: &OJKind,
+    starting_record: &VerificationRecord,
+    outcome: Result<SubmissionStart, StartSubmissionError>,
+) -> Result<StartEvent> {
+    let solution_id = plan.body.solution_id.clone();
+    let attempt_id = plan.body.attempt_id.clone();
+    let starter = ports.starters.get(oj)?;
     match outcome {
         Ok(SubmissionStart::Trackable { handle }) => {
             let domain_handle = to_domain_handle(&handle);
@@ -386,15 +474,14 @@ pub fn start_plan(
                 handle: domain_handle,
                 submitted_at: handle.submitted_at.fixed_offset(),
             };
-            let next = apply_transition(
-                &starting_record,
+            let mut next = apply_transition(
+                starting_record,
                 VerificationEvent::HandleAcquired(submitted_state),
             )?;
-            repositories.records.compare_and_swap(
-                &solution_id,
-                Some(&plan.body.attempt_id),
-                &next,
-            )?;
+            repositories
+                .records
+                .compare_and_swap(&solution_id, Some(&attempt_id), &next)?;
+            next.replaces_attempt_id = Some(attempt_id);
             Ok(StartEvent::Trackable { record: next })
         }
         Ok(SubmissionStart::UserActionRequired { url: _ }) => {
@@ -405,15 +492,14 @@ pub fn start_plan(
                 observed_at,
                 summary: sanitize_summary("interactive-only OJ requires user action"),
             };
-            let next = apply_transition(
-                &starting_record,
+            let mut next = apply_transition(
+                starting_record,
                 VerificationEvent::UnavailableObserved(unavailable),
             )?;
-            repositories.records.compare_and_swap(
-                &solution_id,
-                Some(&plan.body.attempt_id),
-                &next,
-            )?;
+            repositories
+                .records
+                .compare_and_swap(&solution_id, Some(&attempt_id), &next)?;
+            next.replaces_attempt_id = Some(attempt_id);
             Ok(StartEvent::Unavailable { record: next })
         }
         Ok(SubmissionStart::Unavailable { reason }) => {
@@ -424,36 +510,34 @@ pub fn start_plan(
                 observed_at,
                 summary: sanitize_summary(&format!("{reason:?}")),
             };
-            let next = apply_transition(
-                &starting_record,
+            let mut next = apply_transition(
+                starting_record,
                 VerificationEvent::UnavailableObserved(unavailable),
             )?;
-            repositories.records.compare_and_swap(
-                &solution_id,
-                Some(&plan.body.attempt_id),
-                &next,
-            )?;
+            repositories
+                .records
+                .compare_and_swap(&solution_id, Some(&attempt_id), &next)?;
+            next.replaces_attempt_id = Some(attempt_id);
             Ok(StartEvent::Unavailable { record: next })
         }
         Err(StartSubmissionError::AcceptanceUnknown { summary }) => {
             let observed_at = ports.clock.now();
             let acceptance_unknown = AcceptanceUnknownState {
-                plan_hash: starting_record_plan_hash(&starting_record),
-                submitted_source_hash: starting_record_source_hash(&starting_record),
+                plan_hash: starting_record_plan_hash(starting_record),
+                submitted_source_hash: starting_record_source_hash(starting_record),
                 language: plan.body.language.clone(),
-                started_at: starting_record_started_at(&starting_record),
+                started_at: starting_record_started_at(starting_record),
                 observed_at,
                 summary: sanitize_summary(&summary),
             };
-            let next = apply_transition(
-                &starting_record,
+            let mut next = apply_transition(
+                starting_record,
                 VerificationEvent::AcceptanceLost(acceptance_unknown),
             )?;
-            repositories.records.compare_and_swap(
-                &solution_id,
-                Some(&plan.body.attempt_id),
-                &next,
-            )?;
+            repositories
+                .records
+                .compare_and_swap(&solution_id, Some(&attempt_id), &next)?;
+            next.replaces_attempt_id = Some(attempt_id);
             Ok(StartEvent::AcceptanceUnknown { record: next })
         }
         Err(StartSubmissionError::ConfirmedNotAccepted { summary: _ }) => {
@@ -461,7 +545,7 @@ pub fn start_plan(
             // module does NOT remove_if_attempt — it reports the outcome and
             // leaves the record in place. The caller (Task 2) decides.
             Ok(StartEvent::ConfirmedNotAccepted {
-                record: starting_record,
+                record: starting_record.clone(),
             })
         }
         Err(StartSubmissionError::Unavailable { reason }) => {
@@ -472,15 +556,14 @@ pub fn start_plan(
                 observed_at,
                 summary: sanitize_summary(&format!("{reason:?}")),
             };
-            let next = apply_transition(
-                &starting_record,
+            let mut next = apply_transition(
+                starting_record,
                 VerificationEvent::UnavailableObserved(unavailable),
             )?;
-            repositories.records.compare_and_swap(
-                &solution_id,
-                Some(&plan.body.attempt_id),
-                &next,
-            )?;
+            repositories
+                .records
+                .compare_and_swap(&solution_id, Some(&attempt_id), &next)?;
+            next.replaces_attempt_id = Some(attempt_id);
             Ok(StartEvent::Unavailable { record: next })
         }
         Err(StartSubmissionError::Infrastructure { kind, summary }) => {
@@ -493,18 +576,17 @@ pub fn start_plan(
                 next_retry_at: None,
                 updated_at,
                 summary: sanitize_summary(&summary),
-                plan_hash: Some(starting_record_plan_hash(&starting_record)),
+                plan_hash: Some(starting_record_plan_hash(starting_record)),
                 handle: None,
             };
-            let next = apply_transition(
-                &starting_record,
+            let mut next = apply_transition(
+                starting_record,
                 VerificationEvent::InfrastructureError(failure),
             )?;
-            repositories.records.compare_and_swap(
-                &solution_id,
-                Some(&plan.body.attempt_id),
-                &next,
-            )?;
+            repositories
+                .records
+                .compare_and_swap(&solution_id, Some(&attempt_id), &next)?;
+            next.replaces_attempt_id = Some(attempt_id);
             Ok(StartEvent::InfrastructureError { record: next })
         }
     }
