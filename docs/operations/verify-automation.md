@@ -35,7 +35,12 @@ this run). All jobs live in the `verify-heavy` concurrency group with
 `cancel-in-progress: false`. The six jobs form a strict `needs:`
 chain:
 
-1. **`prepare`** — secretless. Checks out, builds `ce`, runs
+1. **`prepare`** — secretless. Checks out `main@base_sha`, then
+   overlays `verification/results/**` from the `automation/verify`
+   state branch so `verify-prepare` can read the current terminal
+   record's attempt id and stamp it as the plan's
+   `previous_attempt_id` (the CAS token consumed by
+   `persist_starting`). Builds `ce`, runs
    `ce internal verify-prepare --plan-out plan.json
    --starting-out starting.json`, computes SHA256 for `plan.json` and
    the `ce` binary, and uploads the `verify-plan` and `verify-ce`
