@@ -144,8 +144,26 @@ jobs:
         run: ./tools/library-analyzers/prepare
 
       - name: Build library analyzer executables
+        # `library-adapter-build` derives a build-id from the input tree and
+        # refuses to overwrite an existing
+        # `target/library-analyzers/builds/<id>/` (spec §6.9 forbids
+        # mutating a published build set). A warm cache restore replays
+        # a previous completed build, so re-invoking the driver would fail
+        # with `build directory already exists`. Use the driver's own
+        # `--check` mode to validate the on-disk state: it returns 0 only
+        # when `bin` is a valid symlink into an already-finalized
+        # `builds/<id>/` with a matching manifest and no in-progress
+        # marker. Any partial / stale / mismatched state exits non-zero,
+        # so a fresh build is invoked in exactly the cases where it is
+        # needed.
         if: inputs.solution != ''
-        run: ./tools/library-analyzers/build
+        run: |
+          set -euo pipefail
+          if ./tools/library-analyzers/build --check; then
+            echo "Cache restored a fully-finalized analyzer build set; skipping re-invocation."
+            exit 0
+          fi
+          ./tools/library-analyzers/build
 
       - name: Freeze plan and starting record
         id: build_plan
