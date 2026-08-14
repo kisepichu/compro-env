@@ -55,18 +55,26 @@ jobs:
           fetch-depth: 0
 
       - uses: anthropics/claude-code-action@v1
+        id: review
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: |
             --model claude-sonnet-4-6
             --max-turns 50
-            --allowedTools "Read,WebFetch,WebSearch,Bash(grep:*),Bash(find:*),Bash(cat:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git branch:*),Bash(gh pr list:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
+            --allowedTools "Read,Grep,Glob,TodoWrite,WebFetch,WebSearch,Bash(grep:*),Bash(find:*),Bash(cat:*),Bash(ls:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git branch:*),Bash(gh pr list:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),mcp__github_inline_comment__create_inline_comment"
             --disallowedTools "Edit,Write,Agent"
+          # Diagnostic (issue #73): the SDK hides tool_use / tool_result
+          # messages when show_full_output=false, so we cannot see whether the
+          # model actually called mcp__github_inline_comment__create_inline_comment
+          # or where the permission denials come from. Enable full output and
+          # upload the raw execution log as an artifact until inline posting
+          # is reliably observed, then revert.
+          show_full_output: true
           prompt: |
             You are reviewing this pull request. This is a CI environment with
             restricted tool access.
 
-            Available tools: Read, WebFetch, WebSearch,
+            Available tools: Read, Grep, Glob, TodoWrite, WebFetch, WebSearch,
             Bash (grep/find/cat/ls/head/tail/wc),
             Bash (git diff/log/show/status/rev-parse/branch),
             Bash (gh pr list/diff/view/comment),
@@ -122,3 +130,16 @@ jobs:
             The sentinel line is REQUIRED: an automated loop reads it to know
             the review finished and whether there were findings. Do not omit
             it, and do not post the summary before the inline comments.
+
+      # Diagnostic (issue #73): keep the raw execution trace around so we can
+      # inspect tool-call denials post-mortem. Public artifact — only the PR
+      # diff and this repo's own contents flow through it (OAuth token is
+      # already redacted by the action). Remove alongside show_full_output.
+      - name: Upload Claude execution log
+        if: always() && steps.review.outputs.execution_file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-execution-log-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.review.outputs.execution_file }}
+          if-no-files-found: warn
+          retention-days: 7
