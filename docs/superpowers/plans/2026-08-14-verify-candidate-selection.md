@@ -16,10 +16,10 @@
 - Do not touch the six-job worker chain in `verify-worker.yml`; only extend the dispatcher's `solution` computation.
 - `workflow_dispatch` inputs still win: an explicit `solution:` from a manual dispatch skips the picker.
 - Deterministic ordering: parallel ticks colliding on the concurrency group must pick the same target given the same inputs.
-- Never pick a solution whose latest record is in an in-flight state (`Submitted` with an unresolved handle). The worker's CAS already protects against races; skipping avoids wasted OJ hits and log noise.
+- Never pick a solution whose latest record is in any in-flight `VerificationState` variant (`Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging`). The worker's CAS already protects against races; skipping avoids wasted OJ hits and log noise.
 - Never pick a solution whose latest completed record's fingerprint matches the current source/library closure. That solution is already verified and stable.
 - The picker returns an empty output when no candidate is eligible; the dispatcher must translate that into `run_worker=false` so `prepare` does not spin up.
-- Retry consumption is in scope: `InfrastructureFailure` records with `retryable = true` and `next_retry_at <= now` are eligible.
+- Retry consumption is in scope: `InfrastructureFailure { retryable: true, .. }` records are eligible when either `next_retry_at <= now` or `next_retry_at.is_none()` (unscheduled retryable failures retry on the next tick rather than sitting dormant).
 
 ---
 
@@ -40,10 +40,11 @@ Cover in `candidate.rs::tests`:
 - Empty state: three published solutions with no records → returns the smallest `SolutionId` by UTF-8 bytes.
 - Retry ready: one solution has a `Failed{ retryable: true, next_retry_at: t0 }` record; another has no record; `now = t0` → returns the retry candidate (retry deadline sorts before fresh candidates).
 - Retry not ready: `next_retry_at > now` → the retry candidate is filtered out; unrecorded solutions still selectable.
-- In-flight skip: latest record is a `Submitted`/`HandleHeld` state → that solution is excluded even if no other candidate exists (returns `None`, not the in-flight one).
+- In-flight skip: latest record is any non-terminal, non-`InfrastructureFailure` variant of `VerificationState` — that is, `Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, or `Judging` (see `crates/domain/src/verification.rs`). Add one test case per variant; every one excludes the solution even when no other candidate exists (returns `None`, not the in-flight one).
 - Stable-fingerprint skip: `CompletedState` whose `input_hashes` reduce to a `VerifyFingerprint` equal to the fingerprint the caller supplies for the current tree → excluded.
 - Fingerprint drift: `CompletedState` whose fingerprint differs → eligible; ordered after retry-ready candidates.
-- Non-retryable failure: `Failed { retryable: false }` → excluded permanently.
+- Non-retryable failure: `InfrastructureFailure { retryable: false, .. }` → excluded permanently.
+- Retryable with no scheduled retry: `InfrastructureFailure { retryable: true, next_retry_at: None, .. }` → immediately eligible. `None` is treated as "past" for the deadline check; the persister is expected to always schedule a retry, so an unscheduled retryable failure represents unrecoverable-but-recorded state that should retry on the next tick rather than sit dormant.
 
 - [ ] **Step 2: Run the focused tests and observe the missing module**
 
@@ -55,9 +56,9 @@ Expected: compilation fails; `candidate` module and `select_next_candidate` do n
 
 Rules, in this order:
 
-1. Build a working set of every `PublishedSolution` whose latest record permits selection: no record OR (retryable `InfrastructureFailure` with `next_retry_at <= now`) OR (`CompletedState` with `fingerprint(record) != fingerprints[id]`).
-2. Reject solutions whose latest state is `Submitted` (any handle) or any other in-flight variant introduced by later plans; treat unknown non-terminal states as in-flight (fail closed).
-3. Sort candidates by `(next_retry_at.unwrap_or(DateTime::<FixedOffset>::MAX), solution_id.as_str().as_bytes())`.
+1. Build a working set of every `PublishedSolution` whose latest record permits selection: no record OR (`InfrastructureFailure { retryable: true, next_retry_at, .. }` where `next_retry_at.map_or(true, |t| t <= now)`) OR (`CompletedState` with `fingerprint(record) != fingerprints[id]`).
+2. Reject solutions whose latest state is any of the five in-flight `VerificationState` variants — `Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging` — or any future non-terminal, non-`InfrastructureFailure` variant introduced by later plans (fail closed).
+3. Order candidates by the pair `(retry_ready_bucket, solution_id.as_str().as_bytes())`, where `retry_ready_bucket` is `(0, next_retry_at_value)` for retry-ready `InfrastructureFailure` records with a `Some(t)` deadline, `(0, chrono::DateTime::<Utc>::MIN_UTC.fixed_offset())` for retry-ready records with `next_retry_at = None` (so they sort ahead of any scheduled retry), and `(1, chrono::DateTime::<Utc>::MIN_UTC.fixed_offset())` for the remaining eligible candidates (no record / fingerprint drift). Use a custom `Ord` impl or a `sort_by` closure — do not rely on a `DateTime::<FixedOffset>::MAX` constant, chrono only exposes `MAX_UTC` on `DateTime<Utc>`.
 4. Return `Some(first)` or `None`.
 
 Keep the module free of I/O; it is a pure function over the caller-provided data.
