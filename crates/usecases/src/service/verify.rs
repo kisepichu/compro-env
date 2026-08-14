@@ -652,11 +652,22 @@ pub fn prepare_solution(
 /// what `verify-prepare` produces for the same tree. The `pick-candidate`
 /// dispatcher calls this for every `VerificationState::Completed` overlay
 /// record to detect input drift; other states never need a fingerprint.
+///
+/// The target is read from `inputs.selection`, which must be
+/// [`VerifySelection::Single`] — the bulk-verify variant has no meaning for
+/// a fingerprint call and is rejected up front.
 pub fn compute_solution_fingerprint(
     inputs: &VerifyInputs<'_>,
     ports: &VerifyPorts<'_>,
-    solution_id: &SolutionId,
 ) -> Result<VerifyFingerprint> {
+    let solution_id = match &inputs.selection {
+        VerifySelection::Single(id) => id,
+        VerifySelection::All => {
+            return Err(anyhow!(
+                "compute_solution_fingerprint requires VerifySelection::Single; got All"
+            ));
+        }
+    };
     let all_published = collect_published(inputs.manifest);
     let published = all_published
         .get(solution_id)
