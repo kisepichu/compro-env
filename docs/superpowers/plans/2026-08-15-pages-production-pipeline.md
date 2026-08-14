@@ -103,16 +103,17 @@ Copy the **same** cache keys and `--check` guard from `verify-worker.yml` (lines
 - name: Overlay verification records from automation/verify
   run: |
     set -euo pipefail
-    if git ls-remote --exit-code origin automation/verify > /dev/null; then
-      git fetch origin automation/verify
+    REMOTE_REF=$(git ls-remote origin refs/heads/automation/verify)
+    if [ -n "$REMOTE_REF" ]; then
+      git fetch --depth=1 origin automation/verify
       git archive FETCH_HEAD verification/results/ | tar -x || true
-      echo "Overlaid verification records."
+      echo "Overlaid verification records from automation/verify."
     else
       echo "::warning::automation/verify branch not found; site-data will show no verification results."
     fi
 ```
 
-Use `git ls-remote --exit-code` (stderr visible) to distinguish a missing branch from a network/auth failure before calling `git fetch` — mirroring the pattern in `verify-worker.yml`. The `2>/dev/null` redirect on `ls-remote` suppresses the expected "not found" message only; errors from auth or network remain visible. `git archive … | tar -x` writes `verification/results/**` into the working tree without touching the index or other tracked files. The `|| true` on the archive tolerates an empty or absent `verification/results/` tree on the branch.
+Use `git ls-remote` (without `--exit-code`) in a standalone variable assignment. Under `set -euo pipefail`, a variable assignment `VAR=$(cmd)` aborts the job when `cmd` exits non-zero — so a network or auth failure propagates as a hard failure rather than silently falling to the else branch. `git ls-remote` without `--exit-code` exits 0 whether the branch exists or not, returning empty output when the ref is absent; this lets the else branch handle the expected "not yet created" case cleanly. Add `--depth=1` on `git fetch` to avoid pulling the full `automation/verify` history. `git archive … | tar -x` writes `verification/results/**` into the working tree without touching the index or other tracked files. The `|| true` on the archive tolerates an empty or absent `verification/results/` tree on the branch.
 
 - [ ] **Step 4: Run `ce site-data generate` and update the build step**
 
