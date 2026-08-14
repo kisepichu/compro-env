@@ -168,6 +168,11 @@ jobs:
           # the step loudly rather than silently producing an empty
           # overlay that would make the picker spuriously re-verify every
           # solution as "never verified".
+          # Clean up the scratch stderr file on every exit path so a
+          # cached workspace cannot leak stale content into the next
+          # run's `grep -qF` check (which would false-positive and
+          # swallow a real error).
+          trap 'rm -f archive.err' EXIT
           rm -rf state
           mkdir -p state
           REMOTE_REF=$(git ls-remote --heads origin automation/verify | awk '{print $1}')
@@ -189,7 +194,6 @@ jobs:
               exit 1
             fi
           fi
-          rm -f archive.err
 
       - name: Pick verify candidate (secretless)
         id: pick

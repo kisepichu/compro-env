@@ -84,8 +84,32 @@ fn load_overlay_records(
 ) -> Result<BTreeMap<SolutionId, VerificationRecord>> {
     let results_dir = state.join("verification/results");
     let mut records = BTreeMap::new();
-    if !results_dir.exists() {
-        return Ok(records);
+    // `Path::exists` traverses symlinks, and `WalkDir::follow_links(false)`
+    // only guards descendants — a symlinked `verification/results` at the
+    // overlay root would still let the walker enter whatever the symlink
+    // targets. Reject that case explicitly; `validate_state_dir` already
+    // covers the top-level `state/` directory.
+    let meta = match std::fs::symlink_metadata(&results_dir) {
+        Ok(m) => m,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(records),
+        Err(err) => {
+            return Err(anyhow!(
+                "failed to stat overlay results directory {}: {err}",
+                results_dir.display()
+            ));
+        }
+    };
+    if meta.file_type().is_symlink() {
+        return Err(anyhow!(
+            "overlay results path {} is a symlink; symlinks are rejected (spec §6.1)",
+            results_dir.display()
+        ));
+    }
+    if !meta.is_dir() {
+        return Err(anyhow!(
+            "overlay results path {} is not a directory",
+            results_dir.display()
+        ));
     }
     for entry in walkdir::WalkDir::new(&results_dir).follow_links(false) {
         let entry = entry.with_context(|| {
