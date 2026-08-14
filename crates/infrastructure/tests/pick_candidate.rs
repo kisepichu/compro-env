@@ -232,3 +232,21 @@ fn symlinked_state_directory_is_rejected() {
     let msg = format!("{err:#}");
     assert!(msg.contains("symlink"), "unexpected error: {msg}");
 }
+
+#[cfg(unix)]
+#[test]
+fn symlinked_results_directory_is_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_repo(tmp.path());
+    let state = make_state_dir(tmp.path());
+    // Stage a benign target dir; the picker must reject the symlink at the
+    // `verification/results` layer even though `state/` itself is fine.
+    let target = tmp.path().join("elsewhere");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::create_dir_all(state.join("verification")).unwrap();
+    std::os::unix::fs::symlink(&target, state.join("verification/results")).unwrap();
+
+    let err = pick_candidate_with_io(tmp.path(), &state, now()).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("symlink"), "unexpected error: {msg}");
+}
