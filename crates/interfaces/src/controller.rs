@@ -331,7 +331,7 @@ impl Controller {
             selection: VerifySelection::Single(solution_id.clone()),
             submit_preprocess: self.service.config().submit_preprocess(),
         };
-        compute_solution_fingerprint(&inputs, &ports, solution_id)
+        compute_solution_fingerprint(&inputs, &ports)
     }
 
     /// Assemble a [`VerifyPorts`] view over the service's owned registries.
