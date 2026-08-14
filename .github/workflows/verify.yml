@@ -81,6 +81,70 @@ jobs:
       - name: Build ce
         run: cargo build --release --bin ce
 
+      # ── Library analyzer executables (plan 063 pick-candidate) ───────
+      # The picker computes a fingerprint for every `Completed` overlay
+      # record so it can detect input drift. `verify::compute_solution_
+      # fingerprint` fans out to `build_analysis`, which shells to
+      # `target/library-analyzers/bin/<lang>-analyzer` per adapter. These
+      # binaries are not built by `cargo build --release --bin ce`, so
+      # the picker fails with `adapter executable for language X not
+      # found at ...` when the analyzer bundle is absent. Reuse the
+      # verify-worker prepare/build steps so the fingerprint path stays
+      # byte-identical between dispatcher-picker and worker-prepare.
+      # Steps are gated on the same condition as the picker itself; when
+      # `workflow_dispatch` supplies an explicit `solution:`, both the
+      # picker and its analyzer prerequisites are skipped.
+
+      - name: Install analyzer build dependencies
+        # `library-adapter-build` compiles cpp-analyzer with cmake +
+        # ninja; ubuntu-latest ships gcc / g++ but not cmake or ninja by
+        # default. Rust-only builds do not strictly need these packages,
+        # but the driver still probes for them; keep the install here so
+        # a re-enable of cpp/lean does not silently break the picker.
+        if: inputs.solution == null || inputs.solution == ''
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build
+
+      - name: Cache prepared adapter dependencies
+        if: inputs.solution == null || inputs.solution == ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: target/library-analyzers/prepared
+          key: ${{ runner.os }}-analyzers-prepared-${{ hashFiles('tools/library-analyzers/dependencies.toml') }}
+
+      - name: Cache built analyzer binaries
+        # Same key as verify-worker.yml so a warm cache from the worker
+        # is reusable by the dispatcher and vice-versa.
+        if: inputs.solution == null || inputs.solution == ''
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            target/library-analyzers/builds
+            target/library-analyzers/bin
+          key: ${{ runner.os }}-analyzers-builds-${{ hashFiles('tools/library-analyzers/**', 'crates/library-adapter-protocol/**', 'crates/domain/src/adapter_build.rs', 'crates/domain/src/adapter_prepare.rs', 'crates/infrastructure/src/library_adapter/**', 'Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Prepare library analyzer dependencies
+        if: inputs.solution == null || inputs.solution == ''
+        run: ./tools/library-analyzers/prepare
+
+      - name: Build library analyzer executables
+        # Mirrors verify-worker's `--check` fast-path: a warm cache
+        # restore already leaves a finalized `builds/<id>/`, and
+        # `library-adapter-build` refuses to overwrite it. `--check`
+        # returns 0 only when `bin` is a valid symlink into a matching
+        # finalized build, so re-invoking the driver only fires on a
+        # cold cache or a mismatched restore.
+        if: inputs.solution == null || inputs.solution == ''
+        run: |
+          set -euo pipefail
+          if ./tools/library-analyzers/build --check; then
+            echo "Cache restored a fully-finalized analyzer build set; skipping re-invocation."
+            exit 0
+          fi
+          ./tools/library-analyzers/build
+
       - name: Resolve BEFORE and AFTER
         id: resolve
         env:
