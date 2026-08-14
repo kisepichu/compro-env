@@ -38,11 +38,11 @@
 Cover in `candidate.rs::tests`:
 
 - Empty state: three published solutions with no records → returns the smallest `SolutionId` by UTF-8 bytes.
-- Retry ready: one solution has a `Failed{ retryable: true, next_retry_at: t0 }` record; another has no record; `now = t0` → returns the retry candidate (retry deadline sorts before fresh candidates).
-- Retry not ready: `next_retry_at > now` → the retry candidate is filtered out; unrecorded solutions still selectable.
+- Retry ready: one solution has a `VerificationState::InfrastructureFailure(InfrastructureFailure { retryable: true, next_retry_at: Some(t0), .. })` record; another has no record; `now = t0` → returns the retry candidate (retry deadline sorts before fresh candidates).
+- Retry not ready: `next_retry_at = Some(t)` with `t > now` → the retry candidate is filtered out; unrecorded solutions still selectable.
 - In-flight skip: latest record is any non-terminal, non-`InfrastructureFailure` variant of `VerificationState` — that is, `Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, or `Judging` (see `crates/domain/src/verification.rs`). Add one test case per variant; every one excludes the solution even when no other candidate exists (returns `None`, not the in-flight one).
-- Stable-fingerprint skip: `CompletedState` whose `input_hashes` reduce to a `VerifyFingerprint` equal to the fingerprint the caller supplies for the current tree → excluded.
-- Fingerprint drift: `CompletedState` whose fingerprint differs → eligible; ordered after retry-ready candidates.
+- Stable-fingerprint skip: `VerificationState::Completed(_)` `VerificationRecord` whose `fingerprint` field equals the caller-supplied `fingerprints[&id]` for the current tree → excluded. Note that `VerifyFingerprint` is stored directly on `VerificationRecord`; it is not re-derived from `input_hashes` here (only `calculate_fingerprint` with the full `FingerprintMaterial` produces one).
+- Fingerprint drift: `Completed` `VerificationRecord` whose `fingerprint` differs from `fingerprints[&id]` → eligible; ordered after retry-ready candidates.
 - Non-retryable failure: `InfrastructureFailure { retryable: false, .. }` → excluded permanently.
 - Retryable with no scheduled retry: `InfrastructureFailure { retryable: true, next_retry_at: None, .. }` → immediately eligible. `None` is treated as "past" for the deadline check; the persister is expected to always schedule a retry, so an unscheduled retryable failure represents unrecoverable-but-recorded state that should retry on the next tick rather than sit dormant.
 
@@ -56,7 +56,7 @@ Expected: compilation fails; `candidate` module and `select_next_candidate` do n
 
 Rules, in this order:
 
-1. Build a working set of every `PublishedSolution` whose latest record permits selection: no record OR (`InfrastructureFailure { retryable: true, next_retry_at, .. }` where `next_retry_at.map_or(true, |t| t <= now)`) OR (`CompletedState` with `fingerprint(record) != fingerprints[id]`).
+1. Build a working set of every `PublishedSolution` whose latest record permits selection: no record OR (`VerificationState::InfrastructureFailure(InfrastructureFailure { retryable: true, next_retry_at, .. })` where `next_retry_at.map_or(true, |t| t <= now)`) OR (`VerificationState::Completed(_)` with `record.fingerprint != fingerprints[&id]`).
 2. Reject solutions whose latest state is any of the five in-flight `VerificationState` variants — `Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging` — or any future non-terminal, non-`InfrastructureFailure` variant introduced by later plans (fail closed).
 3. Order candidates by the pair `(retry_ready_bucket, solution_id.as_str().as_bytes())`, where `retry_ready_bucket` is `(0, next_retry_at_value)` for retry-ready `InfrastructureFailure` records with a `Some(t)` deadline, `(0, chrono::DateTime::<Utc>::MIN_UTC.fixed_offset())` for retry-ready records with `next_retry_at = None` (so they sort ahead of any scheduled retry), and `(1, chrono::DateTime::<Utc>::MIN_UTC.fixed_offset())` for the remaining eligible candidates (no record / fingerprint drift). Use a custom `Ord` impl or a `sort_by` closure — do not rely on a `DateTime::<FixedOffset>::MAX` constant, chrono only exposes `MAX_UTC` on `DateTime<Utc>`.
 4. Return `Some(first)` or `None`.
