@@ -645,6 +645,52 @@ pub fn prepare_solution(
     Ok(plan)
 }
 
+/// Recompute the current [`VerifyFingerprint`] for one published solution
+/// (spec §11, plan 063).
+///
+/// Reuses [`build_plan_context`] so the fingerprint stays byte-identical to
+/// what `verify-prepare` produces for the same tree. The `pick-candidate`
+/// dispatcher calls this for every `VerificationState::Completed` overlay
+/// record to detect input drift; other states never need a fingerprint.
+///
+/// The target is read from `inputs.selection`, which must be
+/// [`VerifySelection::Single`] — the bulk-verify variant has no meaning for
+/// a fingerprint call and is rejected up front.
+pub fn compute_solution_fingerprint(
+    inputs: &VerifyInputs<'_>,
+    ports: &VerifyPorts<'_>,
+) -> Result<VerifyFingerprint> {
+    let solution_id = match &inputs.selection {
+        VerifySelection::Single(id) => id,
+        VerifySelection::All => {
+            return Err(anyhow!(
+                "compute_solution_fingerprint requires VerifySelection::Single; got All"
+            ));
+        }
+    };
+    let all_published = collect_published(inputs.manifest);
+    let published = all_published
+        .get(solution_id)
+        .ok_or_else(|| anyhow!("solution {} is not in the discovery manifest", solution_id))?;
+    let verify = published
+        .verify
+        .as_ref()
+        .ok_or_else(|| anyhow!("solution {} has no [verify] block", solution_id))?;
+    let oj = oj_for_solution(solution_id)?;
+    let starter = ports.starters.get(&oj)?;
+    let ctx = build_plan_context(
+        inputs.repository_root,
+        inputs.submit_preprocess.as_deref(),
+        inputs.snapshot,
+        inputs.manifest,
+        published,
+        verify,
+        starter,
+    )
+    .map_err(|e| anyhow!("fingerprint blocked for {}: {e}", solution_id))?;
+    Ok(ctx.fingerprint)
+}
+
 /// Drive a previously-prepared plan through `submit_prepared_plan`. Used by
 /// `internal verify-start` in the credential-separated worker (spec §15.4):
 /// the `persist_starting` App-only job has already written the `Starting`

@@ -508,6 +508,25 @@ pub fn run() -> Result<()> {
                 println!("{label}");
                 Ok(())
             }
+            commands::InternalSubcommand::PickCandidate { root, state, now } => {
+                let root_path = std::path::PathBuf::from(&root);
+                let state_path = std::path::PathBuf::from(&state);
+                let now = match now.as_deref() {
+                    Some(s) => chrono::DateTime::parse_from_rfc3339(s)
+                        .map_err(|e| anyhow::anyhow!("--now must be an RFC 3339 timestamp: {e}"))?,
+                    None => chrono::Utc::now().fixed_offset(),
+                };
+                let picked = crate::verify_pick_candidate::pick_candidate_with_io(
+                    &root_path,
+                    &state_path,
+                    now,
+                )?;
+                match picked {
+                    Some(id) => println!("{id}"),
+                    None => println!(),
+                }
+                Ok(())
+            }
             commands::InternalSubcommand::VerifyValidateResultPr {
                 before,
                 after,
@@ -1066,7 +1085,7 @@ fn build_controller() -> Result<Controller> {
 /// plus the filesystem verification repo. Kept separate from
 /// [`build_controller`] so login/whoami/... paths do not pay for the extra
 /// pipeline they never use.
-fn build_verify_controller(root: &std::path::Path) -> Result<Controller> {
+pub(crate) fn build_verify_controller(root: &std::path::Path) -> Result<Controller> {
     let verification = usecases::service::VerificationServices {
         pollers: crate::submission_impl::poller::build_poller_registry()?,
         recovery: crate::submission_impl::recovery::build_recovery_registry()?,
@@ -1092,7 +1111,7 @@ fn build_verify_controller(root: &std::path::Path) -> Result<Controller> {
 /// Runs the discovery + analyzer + normalization pipeline synchronously and
 /// returns a matched (`manifest`, `snapshot`) pair the verify controller can
 /// consume. Errors are surfaced verbatim.
-fn build_analysis(
+pub(crate) fn build_analysis(
     root: &std::path::Path,
     config: &domain::library::LibraryProjectConfig,
 ) -> Result<(
