@@ -178,91 +178,31 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
 ## Operating the workflow
 
 - **Every `main` push** runs the dispatcher. If classification returns
-  `source-or-config`, the dispatcher also invokes the automatic picker
-  (`ce internal pick-candidate`) against the `automation/verify`
-  overlay and hands the chosen `SolutionId` to the worker as
-  `solution`. If the picker returns nothing eligible the dispatcher
-  flips `run_worker=false` and the worker is skipped for this push.
-- **Every 5 minutes (schedule)** the dispatcher wakes, overlays the
-  current `automation/verify` state under `state/verification/`, and
-  runs the picker. The picker walks the current publication set,
-  applies the eligibility rules (see below), and prints exactly one
-  `SolutionId` (or an empty line). Non-empty output feeds the worker;
-  an empty line skips the tick, so retryable-failure and drifted
-  `Completed` records converge one solution per tick without operator
-  input.
+  `source-or-config`, the worker is called — but `prepare` still needs
+  a `solution` input to do anything (see below), so today's push
+  effectively short-circuits to `has_work=false` until automatic
+  candidate selection lands.
+- **Every 5 minutes (schedule)** the dispatcher wakes and calls the
+  worker with `solution: ''`. Until automatic candidate selection is
+  implemented, the worker exits at `prepare` with `has_work=false` and
+  every downstream job is skipped. **Scheduled ticks are currently
+  no-ops.** Operators watching the cron will see a green
+  five-minute-interval workflow run doing nothing until either a
+  `workflow_dispatch` supplies a `solution` or the follow-up plan wires
+  in the candidate picker.
 - **Manual dispatch** via `workflow_dispatch`: supply a `solution` (e.g.
   `librarychecker-aplusb/aplusb/rust`) plus `mode: dry-run` for a
   no-OJ pass that exercises `prepare` and `persist_starting` only, or
-  `mode: live` for a real Library Checker submission. An explicit
-  `solution:` always wins over the picker; leave it blank to let the
-  picker choose.
+  `mode: live` for a real Library Checker submission. A blank
+  `solution` is a no-op (same as schedule).
 - **Result-only pushes** (updates under `verification/results/**`)
   are classified as `result-only`; the dispatcher skips the worker and
-  only `pages.yml` republishes the site. The picker never runs on
-  this path because `decide` already gave `run_worker=false`.
+  only `pages.yml` republishes the site.
 - **Retry backoff** target is `5 → 10 → 20 → 40 → 80` minutes, capped
   at 6 hours. The record's `next_retry_at` encodes the schedule and
-  the 5-minute cron is dense enough to honor it. Production
-  persisters (`crates/usecases/src/submission_lifecycle.rs`) currently
-  always write `next_retry_at: None`, so every retryable failure is
-  immediately eligible on the next tick — the picker's "`None` treated
-  as past" branch is the sole runtime path today. Wiring persisters
-  to schedule concrete retry deadlines is a follow-up plan; the
-  `Some(t) <= now` branch is tested and ready to activate.
-
-### Picker eligibility rules
-
-`ce internal pick-candidate` runs in the same secretless dispatcher
-job as `classify-changes` and never touches App or OJ credentials.
-Given the current publication set (`config.toml` + published
-`solutions/**/ce.toml`) and the `automation/verify` overlay, a
-solution is eligible when its latest record is:
-
-- absent (no verification has ever run), OR
-- `InfrastructureFailure { retryable: true }` whose `next_retry_at`
-  has elapsed or is `None`, OR
-- `Completed` whose stored `fingerprint` disagrees with the
-  freshly-recomputed fingerprint from the working tree (input drift).
-
-Every other state is excluded. The five in-flight variants
-(`Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging`)
-never advance out of the picker — the worker's CAS is the sole
-race guard, and the picker just avoids wasted OJ hits.
-`InfrastructureFailure { retryable: false }` is excluded permanently.
-
-### `Unavailable` is a permanent dead-letter
-
-`VerificationState::Unavailable` records are terminal and never
-re-enter the picker. `UnavailableReason` variants
-(`interactive_untrackable`, `unsupported_mode`, `oj_unsupported`,
-`problem_mismatch`, `language_mismatch`) are not fed into the
-fingerprint, so the `Completed`-drift path that automatically
-re-enables verified solutions **does not apply**. To reprocess an
-`Unavailable` solution — e.g. after adding a new adapter — an
-operator must clear the overlay record for that solution (usually
-via a `workflow_dispatch` with an explicit `solution:` targeting the
-same id, once the underlying capability changes) and let the picker
-pick it up as a fresh candidate.
-
-### Determinism and concurrency
-
-The picker orders eligible candidates by `(retry_ready first,
-next_retry_at ascending, SolutionId bytes ascending)`, so parallel
-ticks that collide on the `verify-heavy` concurrency group compute
-the same target. That determinism plus the worker's per-`(solution,
-attempt)` CAS keeps `automation/verify` linearizable even when a
-schedule tick and a push tick fire back-to-back.
-
-### Overlay records for solutions that have been unpublished
-
-If a solution used to live at `librarychecker-…/foo/bar` and was
-later removed from the manifest, its `verification/results/<id>.json`
-stays on `automation/verify` until an operator removes it. The
-picker silently ignores such records — they simply do not appear in
-the publication set — so unpublished solutions cannot dominate the
-schedule. Clean them up in a routine sweep; leaving them in place is
-harmless.
+  the 5-minute cron is dense enough to honor it — but the actual
+  retry consumption path is gated on the same follow-up as automatic
+  candidate selection.
 
 ## Debugging failures
 
@@ -305,11 +245,10 @@ harmless.
   `handle.json`, `persist_handle` commits it to `automation/verify`,
   and the downstream `poll` bails on the non-handle state so
   `persist_terminal` skips. The state on `automation/verify` accurately
-  reflects the observed outcome. Retryable outcomes come back
-  automatically through the picker on the next scheduler tick;
-  non-retryable outcomes stay put until an operator re-runs
-  `workflow_dispatch` with an explicit `solution` argument, whose
-  `persist_starting` CAS-replaces the failed record.
+  reflects the observed outcome — no infinite retry occurs because the
+  scheduler is a no-op until automatic candidate selection lands. To
+  resume, re-run `workflow_dispatch` with a `solution` argument; the
+  new attempt's `persist_starting` CAS-replaces the failed record.
 - Secret leakage in a failed job: nothing to remediate inside the
   workflow. Invalidate the affected token (App key or Library Checker
   refresh token) and follow the rotation steps below.
