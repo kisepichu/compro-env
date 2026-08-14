@@ -77,6 +77,11 @@ Use the **same** cache key as `verify.yml` (`cargo-verify-*`) so warm runs after
       target/library-analyzers/bin
     key: ${{ runner.os }}-analyzers-builds-${{ hashFiles('tools/library-analyzers/**', 'crates/library-adapter-protocol/**', 'crates/domain/src/adapter_build.rs', 'crates/domain/src/adapter_prepare.rs', 'crates/infrastructure/src/library_adapter/**', 'Cargo.lock', 'rust-toolchain.toml') }}
 
+- name: Install analyzer build dependencies
+  run: |
+    sudo apt-get update
+    sudo apt-get install -y --no-install-recommends cmake ninja-build
+
 - name: Prepare library analyzer dependencies
   run: ./tools/library-analyzers/prepare
 
@@ -98,7 +103,8 @@ Copy the **same** cache keys and `--check` guard from `verify-worker.yml` (lines
 - name: Overlay verification records from automation/verify
   run: |
     set -euo pipefail
-    if git fetch origin automation/verify 2>/dev/null; then
+    if git ls-remote --exit-code origin automation/verify > /dev/null; then
+      git fetch origin automation/verify
       git archive FETCH_HEAD verification/results/ | tar -x || true
       echo "Overlaid verification records."
     else
@@ -106,18 +112,18 @@ Copy the **same** cache keys and `--check` guard from `verify-worker.yml` (lines
     fi
 ```
 
-`git archive … | tar -x` writes `verification/results/**` into the working tree without touching the index or other tracked files. The `|| true` on the archive tolerates an empty or absent `verification/results/` tree on the branch.
+Use `git ls-remote --exit-code` (stderr visible) to distinguish a missing branch from a network/auth failure before calling `git fetch` — mirroring the pattern in `verify-worker.yml`. The `2>/dev/null` redirect on `ls-remote` suppresses the expected "not found" message only; errors from auth or network remain visible. `git archive … | tar -x` writes `verification/results/**` into the working tree without touching the index or other tracked files. The `|| true` on the archive tolerates an empty or absent `verification/results/` tree on the branch.
 
 - [ ] **Step 4: Run `ce site-data generate` and update the build step**
 
 Add after the overlay:
 
 ```yaml
-- name: Generate site-data (production)
-  run: ./target/release/ce site-data generate
+- name: Generate site-data
+  run: ./target/release/ce site-data generate --mode preview
 ```
 
-This writes to `target/ce-site-data/site-data.json` (the command's default output path).
+Use `--mode preview` rather than the default `production`. Production mode calls `git status --porcelain` and exits non-zero if the working tree is dirty; the `tar -x` overlay in Step 3 writes untracked files into `verification/results/`, which always triggers that check. Preview mode skips the clean-tree assertion and is correct for CI contexts where the working tree is intentionally augmented. This writes to `target/ce-site-data/site-data.json` (the command's default output path).
 
 Then update the existing `Build site (production pipeline)` step to pass the generated path:
 
