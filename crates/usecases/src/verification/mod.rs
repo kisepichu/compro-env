@@ -9,11 +9,13 @@
 //! [`AnalysisSnapshot`]: domain::analysis::AnalysisSnapshot
 //! [`VerificationRecord`]: domain::verification::VerificationRecord
 
+pub mod candidate;
 pub mod fingerprint;
 pub mod plan;
 pub mod status;
 pub mod transition;
 
+pub use candidate::select_next_candidate;
 pub use fingerprint::{
     FINGERPRINT_SCHEMA_VERSION, FingerprintError, FingerprintMaterial, FingerprintSource,
     OjBinding, calculate_fingerprint, verification_closure,
