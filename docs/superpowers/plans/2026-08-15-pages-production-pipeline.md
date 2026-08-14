@@ -106,14 +106,19 @@ Copy the **same** cache keys and `--check` guard from `verify-worker.yml` (lines
     REMOTE_REF=$(git ls-remote origin refs/heads/automation/verify)
     if [ -n "$REMOTE_REF" ]; then
       git fetch --depth=1 origin automation/verify
-      git archive FETCH_HEAD verification/results/ | tar -x || true
-      echo "Overlaid verification records from automation/verify."
+      REMOTE_TREE="$(git ls-tree -r --name-only FETCH_HEAD)"
+      if printf '%s\n' "$REMOTE_TREE" | grep -q '^verification/results/'; then
+        git archive FETCH_HEAD verification/results/ | tar -x
+        echo "Overlaid verification records from automation/verify."
+      else
+        echo "::notice::automation/verify has no verification/results yet; site will show no verification data."
+      fi
     else
       echo "::warning::automation/verify branch not found; site-data will show no verification results."
     fi
 ```
 
-Use `git ls-remote` (without `--exit-code`) in a standalone variable assignment. Under `set -euo pipefail`, a variable assignment `VAR=$(cmd)` aborts the job when `cmd` exits non-zero — so a network or auth failure propagates as a hard failure rather than silently falling to the else branch. `git ls-remote` without `--exit-code` exits 0 whether the branch exists or not, returning empty output when the ref is absent; this lets the else branch handle the expected "not yet created" case cleanly. Add `--depth=1` on `git fetch` to avoid pulling the full `automation/verify` history. `git archive … | tar -x` writes `verification/results/**` into the working tree without touching the index or other tracked files. The `|| true` on the archive tolerates an empty or absent `verification/results/` tree on the branch.
+Use `git ls-remote` (without `--exit-code`) in a standalone variable assignment. Under `set -euo pipefail`, a variable assignment `VAR=$(cmd)` aborts the job when `cmd` exits non-zero — so a network or auth failure propagates as a hard failure rather than silently falling to the else branch. `git ls-remote` without `--exit-code` exits 0 whether the branch exists or not, returning empty output when the ref is absent. After fetching, `git ls-tree -r --name-only FETCH_HEAD` checks whether `verification/results/` actually contains files before running `git archive`; this avoids `|| true` which would swallow both the expected "path absent" exit 128 from `git archive` and unexpected `tar` write failures. `git archive … | tar -x` writes `verification/results/**` into the working tree without touching the index or other tracked files; the success message only prints when files were actually extracted.
 
 - [ ] **Step 4: Run `ce site-data generate` and update the build step**
 
