@@ -200,6 +200,24 @@ pub enum InternalSubcommand {
         #[arg(long, default_value = ".")]
         root: String,
     },
+    /// Pick the next verify candidate for scheduled / eligible-push dispatcher
+    /// runs (plan 063). Prints the selected `SolutionId` (or an empty line
+    /// when nothing is eligible) on stdout. Exits 0 on both hit and miss.
+    /// Secretless: never contacts the OJ or GitHub App.
+    #[command(hide = true)]
+    PickCandidate {
+        /// Repository root containing `config.toml` and `solutions/`.
+        #[arg(long)]
+        root: String,
+        /// Worktree / archive of `automation/verify` used as the overlay
+        /// source for `verification/results/**`.
+        #[arg(long)]
+        state: String,
+        /// RFC 3339 timestamp treated as "now" for retry-deadline eligibility.
+        /// Defaults to the process wall clock.
+        #[arg(long)]
+        now: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

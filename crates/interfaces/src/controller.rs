@@ -17,6 +17,7 @@ use usecases::site_data_generator::{
 };
 
 pub mod input;
+use domain::verification::VerifyFingerprint;
 use input::{
     InitInput, InternalVerifyPollInput, InternalVerifyPrepareInput, InternalVerifyStartInput,
     LoginInput, LogoutInput, NewInput, SiteDataBuildMode, SiteDataGenerateInput, SubmitInput,
@@ -25,8 +26,8 @@ use input::{
 use usecases::clock::Clock;
 use usecases::id_generator::AttemptIdGenerator;
 use usecases::service::verify::{
-    VerifyInputs, VerifyOutcome, VerifyPorts, VerifySelection, poll_current, prepare_solution,
-    run_verify, start_prepared_plan,
+    VerifyInputs, VerifyOutcome, VerifyPorts, VerifySelection, compute_solution_fingerprint,
+    poll_current, prepare_solution, run_verify, start_prepared_plan,
 };
 use usecases::submission_lifecycle::{
     PollEvent, PollingPolicy, RetryAfterHint, Sleeper, StartEvent,
@@ -298,6 +299,39 @@ impl Controller {
             submit_preprocess: self.service.config().submit_preprocess(),
         };
         poll_current(&solution_id, &inputs, &ports)
+    }
+
+    /// Recompute the current [`VerifyFingerprint`] for one published solution
+    /// (plan 063 pick-candidate).
+    ///
+    /// Reuses the same fingerprint pipeline exercised by `verify-prepare` so
+    /// the picker can detect input drift on `VerificationState::Completed`
+    /// overlay records byte-identically to what the worker would produce for
+    /// the same tree.
+    #[allow(clippy::too_many_arguments)]
+    pub fn compute_solution_fingerprint(
+        &self,
+        repository_root: &Path,
+        library_config: &LibraryProjectConfig,
+        manifest: &DiscoveryManifest,
+        snapshot: &domain::analysis::AnalysisSnapshot,
+        solution_id: &SolutionId,
+        clock: &dyn Clock,
+        ids: &dyn AttemptIdGenerator,
+        sleeper: &dyn Sleeper,
+        retry_hint: &dyn RetryAfterHint,
+        policy: PollingPolicy,
+    ) -> Result<VerifyFingerprint> {
+        let ports = self.verify_ports(clock, ids, sleeper, retry_hint, policy)?;
+        let inputs = VerifyInputs {
+            repository_root,
+            library_config,
+            manifest,
+            snapshot,
+            selection: VerifySelection::Single(solution_id.clone()),
+            submit_preprocess: self.service.config().submit_preprocess(),
+        };
+        compute_solution_fingerprint(&inputs, &ports)
     }
 
     /// Assemble a [`VerifyPorts`] view over the service's owned registries.

@@ -49,7 +49,12 @@ jobs:
       before: ${{ steps.resolve.outputs.before }}
       after: ${{ steps.resolve.outputs.after }}
       class: ${{ steps.classify.outputs.class }}
-      run_worker: ${{ steps.decide.outputs.run_worker }}
+      # `run_worker` and `picked_solution` are written by the `finalize` step
+      # so the automatic picker's empty-output case can flip `run_worker=false`
+      # after `decide` already ran. Reading these from `decide` would miss the
+      # picker result (spec §15.4 dispatcher wiring).
+      run_worker: ${{ steps.finalize.outputs.run_worker }}
+      picked_solution: ${{ steps.finalize.outputs.picked_solution }}
     steps:
       - name: Checkout with full history
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -140,6 +145,129 @@ jobs:
               ;;
           esac
 
+      - name: Fetch automation/verify overlay into state/
+        id: overlay
+        # Only fetch/checkout the overlay when we might actually pick a
+        # candidate: `decide` said we should run the worker AND the caller did
+        # not force a specific solution via workflow_dispatch (which
+        # short-circuits the picker).
+        if: >-
+          steps.decide.outputs.run_worker == 'true'
+          && (inputs.solution == null || inputs.solution == '')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Extract only `verification/` from `automation/verify` at its
+          # current tip. Using `git archive | tar -x` (rather than
+          # `git --work-tree=state checkout`) means we never pollute the
+          # currently-checked-out main index. Branch existence is probed
+          # first with `git ls-remote` so a genuinely-fresh branch (empty
+          # overlay is correct) is distinguishable from a fetch error
+          # (transient network failure / permissions). The latter fails
+          # the step loudly rather than silently producing an empty
+          # overlay that would make the picker spuriously re-verify every
+          # solution as "never verified".
+          # Clean up the scratch stderr file on every exit path so a
+          # cached workspace cannot leak stale content into the next
+          # run's `grep -qF` check (which would false-positive and
+          # swallow a real error).
+          trap 'rm -f archive.err' EXIT
+          rm -rf state
+          mkdir -p state
+          REMOTE_REF=$(git ls-remote --heads origin automation/verify | awk '{print $1}')
+          if [ -z "$REMOTE_REF" ]; then
+            echo "::warning::automation/verify does not exist on origin; picker will see an empty overlay (expected on first activation)"
+            exit 0
+          fi
+          git fetch --depth=1 origin automation/verify
+          git rev-parse --verify FETCH_HEAD >/dev/null
+          # `verification/` may not exist yet on the branch (branch was
+          # created but no results committed). Treat that specific
+          # `pathspec … did not match` case as an empty overlay; any
+          # other archive failure surfaces via `set -e`.
+          if ! git archive FETCH_HEAD verification 2>archive.err | tar -x -C state; then
+            if grep -qF "did not match any files" archive.err; then
+              echo "::warning::automation/verify has no verification/ tree yet; picker will see an empty overlay"
+            else
+              cat archive.err >&2
+              exit 1
+            fi
+          fi
+
+      - name: Pick verify candidate (secretless)
+        id: pick
+        if: >-
+          steps.decide.outputs.run_worker == 'true'
+          && (inputs.solution == null || inputs.solution == '')
+        env:
+          NOW: ${{ github.event.head_commit.timestamp }}
+        run: |
+          set -euo pipefail
+          # Fall back to wall-clock time when the trigger does not carry a
+          # head-commit timestamp (schedule, workflow_dispatch).
+          if [ -z "${NOW:-}" ]; then
+            NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          fi
+          PICKED=$(./target/release/ce internal pick-candidate --root . --state state --now "$NOW")
+          echo "picked_solution=$PICKED" >> "$GITHUB_OUTPUT"
+          if [ -z "$PICKED" ]; then
+            echo "pick-candidate: no eligible solution this tick"
+          else
+            echo "pick-candidate: selected $PICKED"
+          fi
+
+      - name: Finalize run_worker and picked_solution
+        id: finalize
+        env:
+          DECIDE_RUN_WORKER: ${{ steps.decide.outputs.run_worker }}
+          INPUT_SOLUTION: ${{ inputs.solution }}
+          PICKED_SOLUTION: ${{ steps.pick.outputs.picked_solution }}
+        run: |
+          set -euo pipefail
+          # An explicit `workflow_dispatch` `solution:` input always wins over
+          # the automatic picker (spec §15 manual dispatch precedence).
+          if [ -n "${INPUT_SOLUTION:-}" ]; then
+            echo "run_worker=$DECIDE_RUN_WORKER" >> "$GITHUB_OUTPUT"
+            echo "picked_solution=$INPUT_SOLUTION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Otherwise the picker owns the empty-output → skip decision.
+          if [ "$DECIDE_RUN_WORKER" != "true" ]; then
+            echo "run_worker=false" >> "$GITHUB_OUTPUT"
+            echo "picked_solution=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "${PICKED_SOLUTION:-}" ]; then
+            echo "run_worker=false" >> "$GITHUB_OUTPUT"
+            echo "picked_solution=" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_worker=true" >> "$GITHUB_OUTPUT"
+            echo "picked_solution=$PICKED_SOLUTION" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Sanity check: picker branch fires on schedule / push"
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_SOLUTION: ${{ inputs.solution }}
+          DECIDE_RUN_WORKER: ${{ steps.decide.outputs.run_worker }}
+          PICK_CONCLUSION: ${{ steps.pick.conclusion }}
+        run: |
+          set -euo pipefail
+          # Guard against silent regressions: when the dispatcher would run
+          # the worker on schedule / eligible-push AND the caller did not
+          # pass an explicit `solution:`, the picker step MUST have
+          # executed. If `pick` is `skipped` here the finalize step will
+          # never see a picked_solution and unattended ticks would revert
+          # to the pre-063 always-empty-solution behavior.
+          if [ "$EVENT_NAME" != "workflow_dispatch" ] \
+             && [ "$DECIDE_RUN_WORKER" = "true" ] \
+             && [ -z "${INPUT_SOLUTION:-}" ] \
+             && [ "$PICK_CONCLUSION" = "skipped" ]; then
+            echo "::error::picker branch did not fire on $EVENT_NAME with empty inputs.solution" >&2
+            exit 1
+          fi
+
   worker:
     name: Invoke verify worker
     needs: dispatch
@@ -156,5 +284,9 @@ jobs:
       # opting in. Only an explicit `workflow_dispatch` with `mode: live`
       # takes the OJ path.
       mode: ${{ inputs.mode || 'dry-run' }}
-      solution: ${{ inputs.solution || '' }}
+      # An explicit `workflow_dispatch` `solution:` wins over the automatic
+      # picker. Otherwise the dispatcher hands the picker's output through
+      # unchanged; if the picker declined the tick the `run_worker` gate
+      # above already blocked this call.
+      solution: ${{ inputs.solution || needs.dispatch.outputs.picked_solution || '' }}
     secrets: inherit
