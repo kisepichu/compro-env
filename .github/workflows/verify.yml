@@ -161,21 +161,35 @@ jobs:
           # Extract only `verification/` from `automation/verify` at its
           # current tip. Using `git archive | tar -x` (rather than
           # `git --work-tree=state checkout`) means we never pollute the
-          # currently-checked-out main index. If the branch does not exist
-          # yet, seed an empty overlay directory so the picker still runs
-          # (it will fall back to the fast, no-fingerprint path).
+          # currently-checked-out main index. Branch existence is probed
+          # first with `git ls-remote` so a genuinely-fresh branch (empty
+          # overlay is correct) is distinguishable from a fetch error
+          # (transient network failure / permissions). The latter fails
+          # the step loudly rather than silently producing an empty
+          # overlay that would make the picker spuriously re-verify every
+          # solution as "never verified".
           rm -rf state
           mkdir -p state
-          if git fetch --depth=1 origin automation/verify 2>/dev/null \
-             && git rev-parse --verify FETCH_HEAD >/dev/null 2>&1; then
-            if git archive FETCH_HEAD verification 2>/dev/null | tar -x -C state 2>/dev/null; then
-              :
+          REMOTE_REF=$(git ls-remote --heads origin automation/verify | awk '{print $1}')
+          if [ -z "$REMOTE_REF" ]; then
+            echo "::warning::automation/verify does not exist on origin; picker will see an empty overlay (expected on first activation)"
+            exit 0
+          fi
+          git fetch --depth=1 origin automation/verify
+          git rev-parse --verify FETCH_HEAD >/dev/null
+          # `verification/` may not exist yet on the branch (branch was
+          # created but no results committed). Treat that specific
+          # `pathspec … did not match` case as an empty overlay; any
+          # other archive failure surfaces via `set -e`.
+          if ! git archive FETCH_HEAD verification 2>archive.err | tar -x -C state; then
+            if grep -qF "did not match any files" archive.err; then
+              echo "::warning::automation/verify has no verification/ tree yet; picker will see an empty overlay"
             else
-              # `verification/` does not exist at the automation/verify tip
-              # (fresh branch); keep the empty overlay.
-              :
+              cat archive.err >&2
+              exit 1
             fi
           fi
+          rm -f archive.err
 
       - name: Pick verify candidate (secretless)
         id: pick
