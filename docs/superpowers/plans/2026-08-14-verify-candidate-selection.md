@@ -20,6 +20,7 @@
 - Never pick a solution whose latest completed record's fingerprint matches the current source/library closure. That solution is already verified and stable.
 - The picker returns an empty output when no candidate is eligible; the dispatcher must translate that into `run_worker=false` so `prepare` does not spin up.
 - Retry consumption is in scope: `InfrastructureFailure { retryable: true, .. }` records are eligible when either `next_retry_at <= now` or `next_retry_at.is_none()` (unscheduled retryable failures retry on the next tick rather than sitting dormant).
+- **`next_retry_at` scheduling is out of scope for this plan.** Production persisters (`crates/usecases/src/submission_lifecycle.rs`) currently always write `next_retry_at: None`; the `Some(t) <= now` eligibility branch is correct and tested but is dead code until a follow-up plan updates the persisters. The `None`-is-immediately-eligible path is therefore the sole runtime path at present. Do not widen scope here; document the gap in the runbook (Task 4 Step 1).
 
 ---
 
@@ -31,7 +32,7 @@
 
 **Interfaces:**
 - Produces: `pub fn select_next_candidate(now: DateTime<FixedOffset>, published: &[PublishedSolution], records: &BTreeMap<SolutionId, VerificationRecord>, fingerprints: &BTreeMap<SolutionId, VerifyFingerprint>) -> Option<SolutionId>`.
-- Contract: `fingerprints` MUST contain a key for every `PublishedSolution.id` in `published`. The function may index `fingerprints` directly (`fingerprints[&id]`) for `Completed` records; the caller (Task 2 Step 3) is responsible for populating the map exhaustively before this call. A missing key is a programmer error, not a runtime condition.
+- Contract: `fingerprints` MUST contain an entry for every `SolutionId` whose latest record in `records` is `VerificationState::Completed(_)`. Solutions in any other state (no record, in-flight, `InfrastructureFailure`, `Unavailable`) need no entry. The function indexes `fingerprints[&id]` only when `records[&id]` is `Completed`; the caller (Task 2 Step 3.4) is responsible for populating these entries before this call. A missing key for a `Completed` id is a programmer error.
 - Consumes: existing `domain::solution::PublishedSolution`, `domain::verification::{VerificationRecord, VerificationState, VerifyFingerprint, InfrastructureFailure, CompletedState}`.
 
 - [ ] **Step 1: Write failing selection-order tests**
@@ -42,7 +43,7 @@ Cover in `candidate.rs::tests`:
 - Retry ready: one solution has a `VerificationState::InfrastructureFailure(InfrastructureFailure { retryable: true, next_retry_at: Some(t0), .. })` record; another has no record; `now = t0` → returns the retry candidate (retry deadline sorts before fresh candidates).
 - Retry not ready: `next_retry_at = Some(t)` with `t > now` → the retry candidate is filtered out; unrecorded solutions still selectable.
 - In-flight skip: latest record is any non-terminal, non-`InfrastructureFailure` variant of `VerificationState` — that is, `Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, or `Judging` (see `crates/domain/src/verification.rs`). Add one test case per variant; every one excludes the solution even when no other candidate exists (returns `None`, not the in-flight one).
-- Stable-fingerprint skip: `VerificationState::Completed(_)` `VerificationRecord` whose `fingerprint` field equals the caller-supplied `fingerprints[&id]` for the current tree → excluded. Note that `VerifyFingerprint` is stored directly on `VerificationRecord`; it is not re-derived from `input_hashes` here (only `calculate_fingerprint` with the full `FingerprintMaterial` produces one).
+- Stable-fingerprint skip: `VerificationState::Completed(_)` `VerificationRecord` whose `fingerprint` field equals `fingerprints[&id]` (the caller guarantees an entry exists for every `Completed` id per the interface contract) → excluded. Note that `VerifyFingerprint` is stored directly on `VerificationRecord`; it is not re-derived from `input_hashes` here (only `calculate_fingerprint` with the full `FingerprintMaterial` produces one).
 - Fingerprint drift: `Completed` `VerificationRecord` whose `fingerprint` differs from `fingerprints[&id]` → eligible; ordered after retry-ready candidates.
 - Non-retryable failure: `InfrastructureFailure { retryable: false, .. }` → excluded permanently.
 - Retryable with no scheduled retry: `InfrastructureFailure { retryable: true, next_retry_at: None, .. }` → immediately eligible. `None` is treated as "past" for the deadline check; the persister is expected to always schedule a retry, so an unscheduled retryable failure represents unrecoverable-but-recorded state that should retry on the next tick rather than sit dormant.
@@ -124,7 +125,7 @@ Add `PickCandidate { root: PathBuf, state: PathBuf, now: Option<String> }` to `I
 1. Load `LibraryProjectConfig` from `--root`.
 2. Discover published+verify solutions via existing `LibraryDiscovery`.
 3. Overlay `<state>/verification/results/**` onto the working set (read every JSON, deserialize as `VerificationRecord`).
-4. Compute the current `VerifyFingerprint` for **every** published+verify solution — not only those pre-judged eligible. `select_next_candidate` requires the map to cover every id in `published` (see Task 1 Interfaces contract); missing a `Completed` solution's fingerprint would panic on direct `BTreeMap` index. Reuse the fingerprint logic already exercised by `verify-prepare`; do not duplicate it — refactor the shared code into a common module in this task if inline.
+4. Compute the current `VerifyFingerprint` for published+verify solutions whose latest overlay record is `VerificationState::Completed(_)` **only**. Per the Task 1 contract the map need only cover those ids; solutions in any other state require no entry. This avoids running the analyzer binary for every published solution on every scheduler tick. Reuse the fingerprint logic already exercised by `verify-prepare`; do not duplicate it — refactor shared code into a common module in this task if needed.
 5. Call `select_next_candidate`.
 6. Print the selected id, or an empty line.
 
@@ -159,7 +160,7 @@ feat: expose ce internal pick-candidate
 
 - [ ] **Step 1: Draft the dispatcher change and expected log lines**
 
-Sketch the intended diff in the PR description: add a `Pick verify candidate` step after `Classify main` that runs only when `run_worker=true` AND `inputs.solution` is empty (so `workflow_dispatch` still short-circuits the picker). Overlay `automation/verify` into a `state/` scratch dir with `git fetch origin automation/verify` + a `git --work-tree=state` checkout of the results path only.
+Sketch the intended diff in the PR description: add a `Pick verify candidate` step after `Classify main` that runs only when `run_worker=true` AND `inputs.solution` is empty (so `workflow_dispatch` still short-circuits the picker). Overlay `automation/verify` into a `state/` scratch dir — the fetch must not touch the currently-checked-out index (main); use `git worktree add --detach state origin/automation/verify` or `git archive automation/verify verification/ | tar -x -C state/`; never use `git --work-tree=state checkout` as it pollutes the current index. Extend the `dispatch` job's `outputs` block to export `picked_solution`; introduce a `finalize` step (after `pick`) that combines `steps.decide.outputs.run_worker` and the picker result into a final `run_worker` output, since `decide`'s output cannot be overwritten in-place by a later step.
 
 - [ ] **Step 2: Add a workflow lint that asserts the picker branch**
 
@@ -171,7 +172,7 @@ Update `verify.yml`:
 
 1. After the classify step decides `run_worker=true` and `inputs.solution == ''`, fetch `automation/verify` into `state/` (secretless: only public refs).
 2. Run `./target/release/ce internal pick-candidate --root . --state state --now "$(date -u +%FT%TZ)"` and capture stdout.
-3. If empty → set `run_worker=false` and skip the worker invocation. If non-empty → export the picked id as `dispatch.outputs.picked_solution`.
+3. In the `finalize` step: if picker output is empty → write `run_worker=false` to `$GITHUB_OUTPUT`; if non-empty → write `run_worker=true` and `picked_solution=<id>`. The `dispatch` job's `outputs` block reads `run_worker` and `picked_solution` from the `finalize` step, not from `decide`.
 4. Change the worker `with:` block to `solution: ${{ inputs.solution || needs.dispatch.outputs.picked_solution || '' }}`.
 5. Keep every existing gate (`VERIFY_ACTIVATED`, `github.ref == 'refs/heads/main'`) unchanged.
 
@@ -202,9 +203,11 @@ feat: pick verify candidates in the dispatcher
 
 - [ ] **Step 1: Rewrite the "no-op" language in the runbook**
 
-Replace the paragraphs at lines ~180–205 that currently say "Scheduled ticks are currently no-ops" with a description of the picker's rules, its determinism, and the in-flight/stable-fingerprint skips. Keep the manual-dispatch section — an operator still needs it for one-off `mode: live` runs against a specific solution.
+Replace the paragraphs at lines ~180–205 that currently say "Scheduled ticks are currently no-ops" with a description of the picker's rules, its determinism, and the in-flight/stable-fingerprint skips. Keep the manual-dispatch section — an operator still needs it for one-off `mode: live` runs against a specific solution. Include a note that the `InfrastructureFailure.next_retry_at` field is currently always `None` in production (persisters do not yet schedule a retry time), so all retryable failures are immediately eligible on the next tick; scheduled-retry consumption is a future improvement.
 
-Remove the sentence "the actual retry consumption path is gated on the same follow-up as automatic candidate selection." after this plan lands. Do not add follow-up hedging.
+Remove the sentence "the actual retry consumption path is gated on the same follow-up as automatic candidate selection." after this plan lands. Replace it with a note that `next_retry_at` scheduling in persisters is not yet implemented and all retryable failures currently use the `next_retry_at = None` (immediate-on-next-tick) path.
+
+Add a subsection documenting that `VerificationState::Unavailable` solutions are a permanent dead-letter for automatic candidate selection: once a solution reaches this state, the picker will never select it again because it is not in the allow-list (no record / retry-ready / fingerprint-drift). An operator must re-dispatch it manually via `workflow_dispatch` with an explicit `solution:` id. (The fingerprint-drift path that re-enables `Completed` solutions does not apply to `Unavailable`, because `UnavailableReason` variants such as adapter-not-found are not tracked in the fingerprint.)
 
 - [ ] **Step 2: Add row 063 to the rollout plan**
 
