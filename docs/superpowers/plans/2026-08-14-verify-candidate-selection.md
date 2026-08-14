@@ -31,6 +31,7 @@
 
 **Interfaces:**
 - Produces: `pub fn select_next_candidate(now: DateTime<FixedOffset>, published: &[PublishedSolution], records: &BTreeMap<SolutionId, VerificationRecord>, fingerprints: &BTreeMap<SolutionId, VerifyFingerprint>) -> Option<SolutionId>`.
+- Contract: `fingerprints` MUST contain a key for every `PublishedSolution.id` in `published`. The function may index `fingerprints` directly (`fingerprints[&id]`) for `Completed` records; the caller (Task 2 Step 3) is responsible for populating the map exhaustively before this call. A missing key is a programmer error, not a runtime condition.
 - Consumes: existing `domain::solution::PublishedSolution`, `domain::verification::{VerificationRecord, VerificationState, VerifyFingerprint, InfrastructureFailure, CompletedState}`.
 
 - [ ] **Step 1: Write failing selection-order tests**
@@ -45,6 +46,7 @@ Cover in `candidate.rs::tests`:
 - Fingerprint drift: `Completed` `VerificationRecord` whose `fingerprint` differs from `fingerprints[&id]` → eligible; ordered after retry-ready candidates.
 - Non-retryable failure: `InfrastructureFailure { retryable: false, .. }` → excluded permanently.
 - Retryable with no scheduled retry: `InfrastructureFailure { retryable: true, next_retry_at: None, .. }` → immediately eligible. `None` is treated as "past" for the deadline check; the persister is expected to always schedule a retry, so an unscheduled retryable failure represents unrecoverable-but-recorded state that should retry on the next tick rather than sit dormant.
+- Unavailable skip: `VerificationState::Unavailable(_)` record → excluded even when it is the only published solution; returns `None`. This is the terminal "cannot verify under current inputs" state (`crates/domain/src/verification.rs`); it never becomes eligible again unless the fingerprint drifts, but the drift path is already covered by the `Completed` cases above, so an `Unavailable` record here just proves the exclusion is exhaustive against future eligibility-list edits.
 
 - [ ] **Step 2: Run the focused tests and observe the missing module**
 
@@ -100,7 +102,7 @@ Under `crates/infrastructure/tests/pick_candidate.rs`, mount a temp repo contain
 
 - `config.toml` with one language and one solution.
 - `solutions/<id>/ce.toml` marking the solution as published + verify.
-- A parallel `state/` directory representing the overlay from `automation/verify`, containing one `verification/results/<id>.json` for a mocked `Failed { retryable, next_retry_at }` record.
+- A parallel `state/` directory representing the overlay from `automation/verify`, containing one `verification/results/<id>.json` for a mocked `VerificationState::InfrastructureFailure(InfrastructureFailure { retryable: true, next_retry_at: Some(t), .. })` record.
 
 Assert:
 
@@ -122,7 +124,7 @@ Add `PickCandidate { root: PathBuf, state: PathBuf, now: Option<String> }` to `I
 1. Load `LibraryProjectConfig` from `--root`.
 2. Discover published+verify solutions via existing `LibraryDiscovery`.
 3. Overlay `<state>/verification/results/**` onto the working set (read every JSON, deserialize as `VerificationRecord`).
-4. Compute the current `VerifyFingerprint` for each candidate (reuse the fingerprint logic already exercised by `verify-prepare`; do not duplicate it — refactor the shared code into a common module in this task if inline).
+4. Compute the current `VerifyFingerprint` for **every** published+verify solution — not only those pre-judged eligible. `select_next_candidate` requires the map to cover every id in `published` (see Task 1 Interfaces contract); missing a `Completed` solution's fingerprint would panic on direct `BTreeMap` index. Reuse the fingerprint logic already exercised by `verify-prepare`; do not duplicate it — refactor the shared code into a common module in this task if inline.
 5. Call `select_next_candidate`.
 6. Print the selected id, or an empty line.
 
