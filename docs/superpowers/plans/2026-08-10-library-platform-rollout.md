@@ -105,7 +105,8 @@ The coordinator may start only these independent ready sets:
 - Continue 051 -> 052 -> 053 and 057 -> 058 -> 059 independently.
 - After 050, 053, and 059: 060, then 061, then 062.
 - After 062: 063.
-- After 063: rollout complete.
+- After 063: 064.
+- After 064: rollout complete.
 
 Do not reserve or create a dependent branch early. A worker starts by fetching the prerequisite merge and
 creating its worktree from that new `origin/main`.
@@ -153,7 +154,7 @@ not merge those plans before the gate inside them is satisfied.
         |-- 051 site data -- 052 static Web -- 053 search
         `-- 057 submission ports -- 058 LibraryChecker -- 059 verify CLI
 
-050 + 053 + 059 -- 060 safe automation -- 061 platform activation -- 062 verify activation -- 063 verify candidate selection
+050 + 053 + 059 -- 060 safe automation -- 061 platform activation -- 062 verify activation -- 063 verify candidate selection -- 064 pages production pipeline
 ```
 
 Plans sharing a parent may run in parallel only after that parent is merged. Plans never use stacked PR bases.
@@ -187,6 +188,7 @@ Plans sharing a parent may run in parallel only after that parent is merged. Pla
 | 061 | `feat/061-library-platform-activation` | `2026-08-10-library-platform-activation.md` | 060 | Pinned normal CI, Pages publication, mixed acceptance |
 | 062 | `feat/062-library-verify-activation` | `2026-08-10-library-verify-activation.md` | 061 + human gate | Live credential-separated verify automation |
 | 063 | `feat/063-verify-candidate-selection` | `2026-08-14-verify-candidate-selection.md` | 062 | Scheduler picks one candidate per tick; retry consumption |
+| 064 | `feat/064-pages-production-pipeline` | `2026-08-15-pages-production-pipeline.md` | 063 | pages.yml calls ce site-data generate with real library and verify data |
 
 ## Specification Coverage
 
