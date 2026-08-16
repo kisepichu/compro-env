@@ -31,19 +31,21 @@ pub const DEFAULT_STDOUT_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 pub const DEFAULT_STDERR_TAIL_BYTES: usize = 8 * 1024;
 
 /// Concrete `LibraryAdapterRunner` that shells out to a real executable.
+///
+/// The runner keeps no environment of its own; each `analyze` call receives
+/// the sanitized env directly so per-language runtime env (e.g. Lean's
+/// `CE_LEAN_ROOT`) can flow through the same runner instance.
 pub struct ProcessLibraryAdapterRunner {
     working_directory: PathBuf,
-    environment: BTreeMap<String, String>,
     stdout_limit_bytes: usize,
     stderr_tail_bytes: usize,
     extra_args: Vec<String>,
 }
 
 impl ProcessLibraryAdapterRunner {
-    pub fn new(working_directory: PathBuf, environment: BTreeMap<String, String>) -> Self {
+    pub fn new(working_directory: PathBuf) -> Self {
         Self {
             working_directory,
-            environment,
             stdout_limit_bytes: DEFAULT_STDOUT_LIMIT_BYTES,
             stderr_tail_bytes: DEFAULT_STDERR_TAIL_BYTES,
             extra_args: Vec::new(),
@@ -72,6 +74,7 @@ impl LibraryAdapterRunner for ProcessLibraryAdapterRunner {
         executable: &Path,
         request: &AnalysisRequest,
         timeout: Duration,
+        environment: &BTreeMap<String, String>,
     ) -> Result<AnalysisResponse, AdapterRunError> {
         let command_display = executable.display().to_string();
 
@@ -82,7 +85,7 @@ impl LibraryAdapterRunner for ProcessLibraryAdapterRunner {
         cmd.args(&self.extra_args);
         cmd.current_dir(&self.working_directory);
         cmd.env_clear();
-        for (k, v) in &self.environment {
+        for (k, v) in environment {
             cmd.env(k, v);
         }
         cmd.stdin(Stdio::piped());
