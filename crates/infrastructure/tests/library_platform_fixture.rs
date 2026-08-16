@@ -53,35 +53,47 @@ fn production_config_and_libraries_are_present() {
 }
 
 #[test]
-fn config_toml_configures_rust_and_librarychecker_mapping() {
-    // Rust must always stay enabled. cpp and lean are temporarily commented
-    // out in `config.toml` (see the block above the `[library.languages.cpp]`
-    // section) while the analyzer handshake / runtime env plumbing lands.
-    // Re-tighten this test to require all three once that follow-up merges.
+fn config_toml_configures_all_languages_and_librarychecker_mapping() {
+    // Issue #106 re-enabled cpp / lean once the adapter env plumbing landed.
+    // All three languages must appear with their `librarychecker`
+    // language-id bindings so `ce site-data generate` and library-analyzer
+    // fan-out cover the full site.
     let root = repository_root();
     let config = infrastructure::library_project::config::ProjectLibraryConfigLoader::load(&root)
         .expect("root config.toml loads");
     let langs: Vec<&str> = config.languages.keys().map(|k| k.as_str()).collect();
-    // Guard against accidental re-enable: cpp / lean must stay commented
-    // out until the env-plumbing follow-up (see the commit message that
-    // added this test rename). If someone uncomments a language block
-    // without also fixing the handshake env, this exact-count assertion
-    // trips before the workflow does.
     assert_eq!(
         langs.len(),
-        1,
-        "cpp/lean are temporarily disabled — languages must be exactly \\[rust\\], got {langs:?}"
+        3,
+        "expected rust/cpp/lean in config.toml, got {langs:?}"
     );
-    assert!(langs.contains(&"rust"), "missing rust language: {langs:?}");
+    for expected in ["rust", "cpp", "lean"] {
+        assert!(
+            langs.contains(&expected),
+            "missing `{expected}` language: {langs:?}"
+        );
+    }
 
-    let rust = domain::library::LanguageId::parse("rust").unwrap();
-    let rust_cfg = config.languages.get(&rust).unwrap();
-    assert_eq!(rust_cfg.root, "libraries/rust");
-    assert!(!rust_cfg.expected_toolchains.is_empty());
-    assert!(
-        rust_cfg.online_judges.contains_key("librarychecker"),
-        "rust must map to librarychecker language id"
-    );
+    for (lang_id, expected_root) in [
+        ("rust", "libraries/rust"),
+        ("cpp", "libraries/cpp"),
+        ("lean", "libraries/lean"),
+    ] {
+        let id = domain::library::LanguageId::parse(lang_id).unwrap();
+        let cfg = config
+            .languages
+            .get(&id)
+            .unwrap_or_else(|| panic!("missing config for {lang_id}"));
+        assert_eq!(cfg.root, expected_root);
+        assert!(
+            !cfg.expected_toolchains.is_empty(),
+            "{lang_id} must declare pinned toolchains"
+        );
+        assert!(
+            cfg.online_judges.contains_key("librarychecker"),
+            "{lang_id} must map to a librarychecker language id"
+        );
+    }
 
     let site = config.site.expect("site config present");
     assert_eq!(site.language, "en");
