@@ -48,6 +48,7 @@ use crate::submission::{
     SubmissionRequest, SubmissionStart, SubmissionStarter,
     UnavailableReason as PortUnavailableReason, sanitize_summary,
 };
+use crate::verification::backoff::retry_delay;
 use crate::verification::plan::SubmissionPlan;
 use crate::verification::transition::{VerificationEvent, apply_transition};
 
@@ -579,12 +580,15 @@ fn finalize_after_starter(
         }
         Err(StartSubmissionError::Infrastructure { kind, summary }) => {
             let updated_at = ports.clock.now();
+            let retryable = is_retryable_kind(&kind);
+            let (retry_count, next_retry_at) =
+                schedule_retry(&starting_record.state, retryable, updated_at);
             let failure = InfrastructureFailure {
                 stage: FailureStage::Start,
                 error_kind: map_infra_kind(&kind),
-                retryable: is_retryable_kind(&kind),
-                retry_count: 1,
-                next_retry_at: None,
+                retryable,
+                retry_count,
+                next_retry_at,
                 updated_at,
                 summary: sanitize_summary(&summary),
                 plan_hash: Some(starting_record_plan_hash(starting_record)),
@@ -733,6 +737,9 @@ pub fn poll_handle(
             }
             Err(PollSubmissionError::Infrastructure { kind, summary }) => {
                 let updated_at = ports.clock.now();
+                let retryable = is_retryable_kind(&kind);
+                let (retry_count, next_retry_at) =
+                    schedule_retry(&current.state, retryable, updated_at);
                 // Carry the handle explicitly so a crash between now and the
                 // next tick leaves an `InfrastructureFailure` that
                 // `resume_pending` can drive forward with `poll_handle`
@@ -744,15 +751,15 @@ pub fn poll_handle(
                 let failure = InfrastructureFailure {
                     stage: FailureStage::Poll,
                     error_kind: map_infra_kind(&kind),
-                    retryable: is_retryable_kind(&kind),
-                    retry_count: 1,
-                    next_retry_at: None,
+                    retryable,
+                    retry_count,
+                    next_retry_at,
                     updated_at,
                     summary: sanitize_summary(&summary),
                     plan_hash: None,
                     handle: Some(domain_handle.clone()),
                 };
-                if is_retryable_kind(&kind) {
+                if retryable {
                     // Persist the infra failure snapshot for observability
                     // and continue after exponential backoff (capped).
                     let next = apply_transition(
@@ -905,12 +912,15 @@ fn resume_via_recovery(
         }
         Err(RecoverSubmissionError::Infrastructure { kind, summary: msg }) => {
             let updated_at = ports.clock.now();
+            let retryable = is_retryable_kind(&kind);
+            let (retry_count, next_retry_at) =
+                schedule_retry(&rec.state, retryable, updated_at);
             let failure = InfrastructureFailure {
                 stage: FailureStage::Prepare,
                 error_kind: map_infra_kind(&kind),
-                retryable: is_retryable_kind(&kind),
-                retry_count: 1,
-                next_retry_at: None,
+                retryable,
+                retry_count,
+                next_retry_at,
                 updated_at,
                 summary: sanitize_summary(&msg),
                 plan_hash: Some(starting_record_plan_hash(rec)),
@@ -964,6 +974,34 @@ fn sleep_with_hint(ports: &SubmissionPorts, oj: &OJKind, wait: Duration) {
         _ => wait,
     };
     ports.sleeper.sleep(effective);
+}
+
+/// Compute the retry streak counter and `next_retry_at` for a fresh
+/// `InfrastructureFailure` derived from `previous` (spec §8.3).
+///
+/// The streak lives on `InfrastructureFailure.retry_count`: transitioning
+/// `InfrastructureFailure -> InfrastructureFailure` bumps the counter, and
+/// any other predecessor resets it to `1` (spec §8.3 "OJ 接続成功または判定
+/// 進行で reset する"). Non-retryable failures return `None` so an operator
+/// must clear them; retryable failures schedule
+/// `updated_at + retry_delay(retry_count)` for the picker to honor.
+fn schedule_retry(
+    previous: &VerificationState,
+    retryable: bool,
+    updated_at: DateTime<chrono::FixedOffset>,
+) -> (u32, Option<DateTime<chrono::FixedOffset>>) {
+    let retry_count = match previous {
+        VerificationState::InfrastructureFailure(prev) => prev.retry_count.saturating_add(1),
+        _ => 1,
+    };
+    let next_retry_at = if retryable {
+        let delta = chrono::Duration::from_std(retry_delay(retry_count))
+            .expect("retry_delay stays under i64::MAX seconds");
+        Some(updated_at + delta)
+    } else {
+        None
+    };
+    (retry_count, next_retry_at)
 }
 
 fn current_handle(state: &VerificationState) -> Option<&DomainSubmissionHandle> {
