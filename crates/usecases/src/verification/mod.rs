@@ -18,7 +18,8 @@ pub mod transition;
 pub use candidate::select_next_candidate;
 pub use fingerprint::{
     FINGERPRINT_SCHEMA_VERSION, FingerprintError, FingerprintMaterial, FingerprintSource,
-    OjBinding, calculate_fingerprint, verification_closure,
+    OjBinding, calculate_fingerprint, capabilities_from_descriptor, hash_verify_config,
+    verification_closure,
 };
 pub use plan::{
     PLAN_SCHEMA_VERSION, PlanError, PrepareVerificationInput, SubmissionPlan, SubmissionPlanBody,

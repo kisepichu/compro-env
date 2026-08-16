@@ -274,6 +274,62 @@ pub fn calculate_fingerprint(
     Ok(VerifyFingerprint::parse(&hex).expect("sha256_hex emits a valid fingerprint string"))
 }
 
+/// Canonical hash of the resolved `[verify]` block used by
+/// [`FingerprintMaterial::verify_config_hash`] (spec §11).
+///
+/// The hash covers the sorted library IDs plus the resolved
+/// `oj_language_id`. Kept in one place so the verify pipeline (which
+/// persists records) and the site-data generator (which recomputes the
+/// current fingerprint for staleness detection) agree byte-for-byte.
+pub fn hash_verify_config(verify: &domain::solution::VerifySpec) -> ContentHash {
+    let mut libs: Vec<String> = verify.libraries.iter().map(|l| l.to_string()).collect();
+    libs.sort();
+    let json = serde_json::json!({
+        "libraries": libs,
+        "oj_language_id": verify.oj_language_id,
+    });
+    let text = serde_json::to_string(&json).expect("serializes");
+    let hex = sha256_hex(text.as_bytes());
+    ContentHash::parse(&hex).expect("static hash")
+}
+
+/// Convert a submission-port adapter descriptor into the domain-level
+/// [`SubmissionCapabilities`] used inside [`AdapterIdentity`].
+///
+/// Shared between the verify pipeline (`build_plan_context`) and the
+/// site-data current-fingerprint recomputation so both callers reach the
+/// same capability set for the same starter.
+pub fn capabilities_from_descriptor(
+    descriptor: &crate::submission::SubmissionAdapterDescriptor,
+) -> SubmissionCapabilities {
+    use crate::submission::{
+        RecoveryMode as PortRecoveryMode, ResultDetailLevel as PortResultDetail,
+        SubmissionMode as PortMode,
+    };
+    use domain::online_judge::{
+        RecoveryMode as DomRecoveryMode, ResultDetail as DomResultDetail,
+        SubmissionMode as DomMode,
+    };
+    SubmissionCapabilities {
+        submission_mode: match descriptor.submission_mode {
+            PortMode::UnattendedTrackable => DomMode::UnattendedTrackable,
+            PortMode::InteractiveTrackable => DomMode::InteractiveTrackable,
+            PortMode::InteractiveUntrackable => DomMode::InteractiveUntrackable,
+            PortMode::Unsupported => DomMode::Unsupported,
+        },
+        result_detail: match descriptor.result_detail {
+            PortResultDetail::OverallOnly => DomResultDetail::OverallOnly,
+            PortResultDetail::SummaryMetrics => DomResultDetail::SummaryMetrics,
+            PortResultDetail::TestcaseDetails => DomResultDetail::TestcaseDetails,
+        },
+        recovery_mode: match descriptor.recovery_mode {
+            PortRecoveryMode::Exact => DomRecoveryMode::Exact,
+            PortRecoveryMode::BestEffort => DomRecoveryMode::BestEffort,
+            PortRecoveryMode::None => DomRecoveryMode::None,
+        },
+    }
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);

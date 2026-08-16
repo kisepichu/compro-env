@@ -18,13 +18,9 @@ use anyhow::{Context, Result, anyhow};
 use domain::analysis::{AnalysisSnapshot, DiscoveryManifest};
 use domain::entity::OJKind;
 use domain::library::{LanguageId, LibraryProjectConfig, SolutionId};
-use domain::online_judge::{
-    RecoveryMode as DomRecoveryMode, ResultDetail as DomResultDetail, SubmissionCapabilities,
-    SubmissionMode as DomSubmissionMode,
-};
 use domain::solution::PublishedSolution;
 use domain::verification::{
-    AttemptId, ContentHash, LanguageBinding, VerdictKind, VerificationRecord, VerificationState,
+    AttemptId, LanguageBinding, VerdictKind, VerificationRecord, VerificationState,
     VerifyFingerprint,
 };
 use sha2::{Digest, Sha256};
@@ -35,11 +31,7 @@ use crate::command_runner::{CommandRequest, CommandRunner};
 use crate::id_generator::AttemptIdGenerator;
 use crate::repository::session_repository::SessionRepository;
 use crate::repository::verification_repository::VerificationRepository;
-use crate::submission::{
-    PollerRegistry, RecoveryMode as PortRecoveryMode, RecoveryRegistry,
-    ResultDetailLevel as PortResultDetail, StarterRegistry, SubmissionMode as PortSubmissionMode,
-    SubmissionStarter,
-};
+use crate::submission::{PollerRegistry, RecoveryRegistry, StarterRegistry, SubmissionStarter};
 use crate::submission_lifecycle::{
     PollEvent, PollingPolicy, RetryAfterHint, Sleeper, StartEvent, SubmissionPorts,
     VerificationRepositories, VerifySelection as LifecycleSelection, poll_handle, resume_pending,
@@ -47,7 +39,7 @@ use crate::submission_lifecycle::{
 };
 use crate::verification::fingerprint::{
     AdapterIdentity, FingerprintMaterial, FingerprintSource, OjBinding, calculate_fingerprint,
-    verification_closure,
+    capabilities_from_descriptor, hash_verify_config, verification_closure,
 };
 use crate::verification::plan::{PrepareVerificationInput, SubmissionPlan, build_submission_plan};
 
@@ -905,15 +897,11 @@ fn build_plan_context(
     };
 
     // Adapter identity from the starter's descriptor.
-    let d = starter.descriptor();
+    let descriptor = starter.descriptor();
     let adapter = AdapterIdentity {
-        name: d.name.clone(),
-        version: d.version.clone(),
-        capabilities: SubmissionCapabilities {
-            submission_mode: map_submission_mode(&d.submission_mode),
-            result_detail: map_result_detail(&d.result_detail),
-            recovery_mode: map_recovery_mode(&d.recovery_mode),
-        },
+        name: descriptor.name.clone(),
+        version: descriptor.version.clone(),
+        capabilities: capabilities_from_descriptor(&descriptor),
     };
 
     let binding = LanguageBinding {
@@ -957,45 +945,6 @@ fn build_plan_context(
         verify_libraries,
         fingerprint,
     })
-}
-
-fn map_submission_mode(m: &PortSubmissionMode) -> DomSubmissionMode {
-    match m {
-        PortSubmissionMode::UnattendedTrackable => DomSubmissionMode::UnattendedTrackable,
-        PortSubmissionMode::InteractiveTrackable => DomSubmissionMode::InteractiveTrackable,
-        PortSubmissionMode::InteractiveUntrackable => DomSubmissionMode::InteractiveUntrackable,
-        PortSubmissionMode::Unsupported => DomSubmissionMode::Unsupported,
-    }
-}
-
-fn map_result_detail(d: &PortResultDetail) -> DomResultDetail {
-    match d {
-        PortResultDetail::OverallOnly => DomResultDetail::OverallOnly,
-        PortResultDetail::SummaryMetrics => DomResultDetail::SummaryMetrics,
-        PortResultDetail::TestcaseDetails => DomResultDetail::TestcaseDetails,
-    }
-}
-
-fn map_recovery_mode(r: &PortRecoveryMode) -> DomRecoveryMode {
-    match r {
-        PortRecoveryMode::Exact => DomRecoveryMode::Exact,
-        PortRecoveryMode::BestEffort => DomRecoveryMode::BestEffort,
-        PortRecoveryMode::None => DomRecoveryMode::None,
-    }
-}
-
-fn hash_verify_config(verify: &domain::solution::VerifySpec) -> ContentHash {
-    let mut libs: Vec<String> = verify.libraries.iter().map(|l| l.to_string()).collect();
-    libs.sort();
-    let json = serde_json::json!({
-        "libraries": libs,
-        "oj_language_id": verify.oj_language_id,
-    });
-    let text = serde_json::to_string(&json).expect("serializes");
-    let mut hasher = Sha256::new();
-    hasher.update(text.as_bytes());
-    let hex = format!("sha256:{:x}", hasher.finalize());
-    ContentHash::parse(&hex).expect("static hash")
 }
 
 fn classify_start_and_poll(
@@ -1219,11 +1168,11 @@ fn run_preprocess(
 mod pr_target_tests {
     use super::*;
     use chrono::{DateTime, FixedOffset};
-    use domain::online_judge::{RecoveryMode, ResultDetail, SubmissionMode};
+    use domain::online_judge::{RecoveryMode, ResultDetail, SubmissionCapabilities, SubmissionMode};
     use domain::verification::{
-        AcceptanceUnknownState, CompletedState, ErrorKind, FailureStage, InfrastructureFailure,
-        PendingState, StartingState, SubmissionHandle, SubmissionSummary, SubmittedState,
-        UnavailableReason, UnavailableState, Verdict, VerdictKind,
+        AcceptanceUnknownState, CompletedState, ContentHash, ErrorKind, FailureStage,
+        InfrastructureFailure, PendingState, StartingState, SubmissionHandle, SubmissionSummary,
+        SubmittedState, UnavailableReason, UnavailableState, Verdict, VerdictKind,
     };
 
     fn ts() -> DateTime<FixedOffset> {
