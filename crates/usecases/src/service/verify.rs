@@ -1168,7 +1168,9 @@ fn run_preprocess(
 mod pr_target_tests {
     use super::*;
     use chrono::{DateTime, FixedOffset};
-    use domain::online_judge::{RecoveryMode, ResultDetail, SubmissionCapabilities, SubmissionMode};
+    use domain::online_judge::{
+        RecoveryMode, ResultDetail, SubmissionCapabilities, SubmissionMode,
+    };
     use domain::verification::{
         AcceptanceUnknownState, CompletedState, ContentHash, ErrorKind, FailureStage,
         InfrastructureFailure, PendingState, StartingState, SubmissionHandle, SubmissionSummary,

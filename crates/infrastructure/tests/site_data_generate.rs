@@ -539,8 +539,8 @@ mod fingerprint_recomputation {
         SubmissionStarter,
     };
     use usecases::verification::fingerprint::{
-        AdapterIdentity, FingerprintMaterial, FingerprintSource, OjBinding,
-        calculate_fingerprint, capabilities_from_descriptor, hash_verify_config,
+        AdapterIdentity, FingerprintMaterial, FingerprintSource, OjBinding, calculate_fingerprint,
+        capabilities_from_descriptor, hash_verify_config,
     };
 
     /// Minimal starter that reports the descriptor `librarychecker` / `1.0.0`
@@ -590,11 +590,7 @@ mod fingerprint_recomputation {
         ) -> AnyResult<()> {
             anyhow::bail!("not used")
         }
-        fn remove_if_attempt(
-            &self,
-            _id: &SolutionId,
-            _expected: &AttemptId,
-        ) -> AnyResult<()> {
+        fn remove_if_attempt(&self, _id: &SolutionId, _expected: &AttemptId) -> AnyResult<()> {
             anyhow::bail!("not used")
         }
     }
@@ -612,8 +608,7 @@ mod fingerprint_recomputation {
         let root = dir.path().to_path_buf();
         fs::create_dir_all(root.join("libraries/rust/algebra")).unwrap();
         fs::write(root.join("libraries/rust/algebra/monoid.rs"), library_bytes).unwrap();
-        fs::create_dir_all(root.join("solutions/librarychecker-aplusb/aplusb/rust/src"))
-            .unwrap();
+        fs::create_dir_all(root.join("solutions/librarychecker-aplusb/aplusb/rust/src")).unwrap();
         fs::write(
             root.join("solutions/librarychecker-aplusb/aplusb/rust/src/main.rs"),
             entry_bytes,

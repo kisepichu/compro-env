@@ -307,8 +307,7 @@ pub fn capabilities_from_descriptor(
         SubmissionMode as PortMode,
     };
     use domain::online_judge::{
-        RecoveryMode as DomRecoveryMode, ResultDetail as DomResultDetail,
-        SubmissionMode as DomMode,
+        RecoveryMode as DomRecoveryMode, ResultDetail as DomResultDetail, SubmissionMode as DomMode,
     };
     SubmissionCapabilities {
         submission_mode: match descriptor.submission_mode {

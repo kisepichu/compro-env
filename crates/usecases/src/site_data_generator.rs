@@ -276,8 +276,15 @@ fn compute_current_fingerprints(
         let Some(verify) = sol.verify.as_ref() else {
             continue;
         };
-        let result =
-            fingerprint_for_solution(sol, verify, snapshot, starters, &library_paths_by_id, library_sources, solution_sources);
+        let result = fingerprint_for_solution(
+            sol,
+            verify,
+            snapshot,
+            starters,
+            &library_paths_by_id,
+            library_sources,
+            solution_sources,
+        );
         out.insert(sol.id.clone(), result);
     }
     out
