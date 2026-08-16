@@ -3,7 +3,11 @@
 //! Composes discovery, analyzer dispatch, source-byte capture, verification
 //! record load, git history queries, current-fingerprint recomputation, and
 //! the pure [`crate::site_data::project_site_data`] projection into one
-//! deterministic pipeline. Writes are handed off to the caller-supplied
+//! deterministic pipeline. The current-fingerprint pass reuses the verify
+//! pipeline's [`verification_closure`] + [`calculate_fingerprint`] so a
+//! saved `Completed` record surfaces as `Verified` whenever the working
+//! tree matches the record and as `Stale` when any hashed input differs
+//! (spec §11). Writes are handed off to the caller-supplied
 //! [`SiteDataRepository`] so the atomic-swap invariant lives in one place.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,9 +15,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
-use domain::analysis::DiscoveryManifest;
+use domain::analysis::{AnalysisSnapshot, DiscoveryManifest};
+use domain::entity::OJKind;
 use domain::library::{LibraryId, LibraryProjectConfig, SolutionId};
 use domain::solution::PublishedSolution;
+use domain::verification::VerifyFingerprint;
 use site_schema::{BuildMode, SiteData};
 
 use crate::git_history::GitHistory;
@@ -23,6 +29,11 @@ use crate::repository::site_data_repository::SiteDataRepository;
 use crate::repository::verification_repository::VerificationRepository;
 use crate::site_data::{
     BuildContext, LibraryGitUpdate, ProjectedRelation, PublicProjectionInput, project_site_data,
+};
+use crate::submission::StarterRegistry;
+use crate::verification::fingerprint::{
+    AdapterIdentity, FingerprintError, FingerprintMaterial, FingerprintSource, OjBinding,
+    calculate_fingerprint, capabilities_from_descriptor, hash_verify_config, verification_closure,
 };
 
 /// External inputs the caller must supply so the generator stays free of
@@ -41,6 +52,7 @@ pub struct GenerateSiteData<'a> {
     pub manual_dependency_edges: &'a BTreeMap<LibraryId, BTreeSet<LibraryId>>,
     pub solution_has_preprocess: &'a BTreeMap<SolutionId, bool>,
     pub library_descriptions: &'a BTreeMap<LibraryId, String>,
+    pub starters: &'a StarterRegistry,
     pub mode: BuildMode,
 }
 
@@ -112,12 +124,20 @@ pub fn generate_site_data(spec: &GenerateSiteData<'_>) -> Result<SiteData> {
     // 6. Split source bytes into library / solution maps for the projection.
     let (library_sources, solution_sources) = split_source_bytes(source_bytes, spec.manifest);
 
-    // 7. Current fingerprints — leave empty for now; the classifier treats
-    //    a missing entry as "blocked" which folds to Stale/Never per spec §11.
-    //    Recomputing per-solution fingerprints requires the full closure walk
-    //    across dependency states, which is delegated to the verify pipeline
-    //    (plan 052) so we don't duplicate that logic here.
-    let current_fingerprints = BTreeMap::new();
+    // 7. Current fingerprints. Reuses the verify pipeline helpers so a
+    //    saved `Completed` record classifies as `Verified` when the working
+    //    tree still matches the record (spec §11). Any per-solution failure
+    //    (unknown OJ, missing starter, blocked closure, missing source
+    //    bytes) is captured as `Err(FingerprintError)`; the classifier
+    //    treats every `Err(_)` uniformly and folds it to `Stale`/`Never`
+    //    against a saved record so evidence links survive.
+    let current_fingerprints = compute_current_fingerprints(
+        spec.manifest,
+        &snapshot,
+        spec.starters,
+        &library_sources,
+        &solution_sources,
+    );
 
     // 8. Build context.
     let build_context = BuildContext {
@@ -218,6 +238,133 @@ fn split_source_bytes(
         }
     }
     (libraries, solutions)
+}
+
+/// Recompute per-solution current fingerprints for staleness classification
+/// (spec §11).
+///
+/// Iterates every discovered solution that has a resolved `[verify]` block,
+/// reproduces the same [`FingerprintMaterial`] the verify pipeline builds
+/// (`build_plan_context` in `service/verify.rs`), and hashes it with
+/// [`calculate_fingerprint`]. The result map only carries solutions whose
+/// `verify` is configured; the projection layer treats a missing entry as
+/// blocked and falls back to `Stale`/`Never` via the sentinel error path.
+///
+/// Errors are captured inline (never propagated) so a single bad solution
+/// cannot poison the whole site-data build. The classifier treats every
+/// `Err(_)` uniformly.
+///
+/// Preprocess hooks are intentionally not invoked: site-data generation is
+/// offline, and the verify pipeline already re-hashes raw source bytes at
+/// record time when no `[submit].preprocess` is configured (which is the
+/// documented default for library-platform records).
+fn compute_current_fingerprints(
+    manifest: &DiscoveryManifest,
+    snapshot: &AnalysisSnapshot,
+    starters: &StarterRegistry,
+    library_sources: &BTreeMap<LibraryId, Vec<u8>>,
+    solution_sources: &BTreeMap<SolutionId, Vec<u8>>,
+) -> BTreeMap<SolutionId, Result<VerifyFingerprint, FingerprintError>> {
+    let mut library_paths_by_id: BTreeMap<&LibraryId, &str> = BTreeMap::new();
+    for lib in &manifest.libraries {
+        library_paths_by_id.insert(&lib.id, lib.source_path.as_str());
+    }
+
+    let mut out: BTreeMap<SolutionId, Result<VerifyFingerprint, FingerprintError>> =
+        BTreeMap::new();
+    for sol in &manifest.solutions {
+        let Some(verify) = sol.verify.as_ref() else {
+            continue;
+        };
+        let result =
+            fingerprint_for_solution(sol, verify, snapshot, starters, &library_paths_by_id, library_sources, solution_sources);
+        out.insert(sol.id.clone(), result);
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fingerprint_for_solution(
+    sol: &PublishedSolution,
+    verify: &domain::solution::VerifySpec,
+    snapshot: &AnalysisSnapshot,
+    starters: &StarterRegistry,
+    library_paths_by_id: &BTreeMap<&LibraryId, &str>,
+    library_sources: &BTreeMap<LibraryId, Vec<u8>>,
+    solution_sources: &BTreeMap<SolutionId, Vec<u8>>,
+) -> Result<VerifyFingerprint, FingerprintError> {
+    // Sentinel used whenever site-data cannot even reach `calculate_fingerprint`
+    // (unknown OJ, missing starter, missing source bytes). The classifier
+    // treats every `Err(_)` identically, so any `FingerprintError` variant
+    // is a valid fallback; keeping the solution id inside the error aids
+    // debugging.
+    let sentinel = || FingerprintError::UnknownSolution(sol.id.clone());
+
+    let oj = OJKind::detect(sol.id.contest_id())
+        .map(|(o, _)| o)
+        .ok_or_else(sentinel)?;
+    let starter = starters.get(&oj).map_err(|_| sentinel())?;
+
+    let mut explicit: BTreeSet<LibraryId> = BTreeSet::new();
+    for lib in &verify.libraries {
+        explicit.insert(lib.clone());
+    }
+    let closure = verification_closure(&sol.id, &explicit, snapshot)?;
+
+    let mut dependency_library_sources: BTreeMap<LibraryId, FingerprintSource> = BTreeMap::new();
+    for lib_id in &closure {
+        let path = library_paths_by_id
+            .get(lib_id)
+            .ok_or_else(|| FingerprintError::UnknownLibrary(lib_id.clone()))?;
+        let bytes = library_sources
+            .get(lib_id)
+            .ok_or_else(|| FingerprintError::MissingLibrarySource(lib_id.clone()))?;
+        dependency_library_sources.insert(
+            lib_id.clone(),
+            FingerprintSource {
+                path: (*path).to_string(),
+                bytes: bytes.clone(),
+            },
+        );
+    }
+
+    let entry_path = solution_entry_path(sol);
+    let entry_bytes = solution_sources
+        .get(&sol.id)
+        .ok_or_else(|| FingerprintError::MissingSolutionSource(sol.id.clone()))?
+        .clone();
+    let submitted_source = FingerprintSource {
+        path: entry_path,
+        bytes: entry_bytes,
+    };
+
+    let descriptor = starter.descriptor();
+    let adapter = AdapterIdentity {
+        name: descriptor.name.clone(),
+        version: descriptor.version.clone(),
+        capabilities: capabilities_from_descriptor(&descriptor),
+    };
+
+    let binding = OjBinding {
+        oj: oj.as_str().to_string(),
+        problem_id: sol.id.problem_code().to_string(),
+        language_id: sol.language.clone(),
+        oj_language_id: verify.oj_language_id.clone(),
+    };
+
+    let verify_config_hash = hash_verify_config(verify);
+    let verified_libraries: BTreeSet<LibraryId> = verify.libraries.iter().cloned().collect();
+
+    let material = FingerprintMaterial {
+        solution_id: sol.id.clone(),
+        submitted_source,
+        verified_libraries,
+        dependency_library_sources,
+        binding,
+        adapter,
+        verify_config_hash,
+    };
+    calculate_fingerprint(&material)
 }
 
 /// Convenience: derive the default output directory (`target/ce-site-data`) below
