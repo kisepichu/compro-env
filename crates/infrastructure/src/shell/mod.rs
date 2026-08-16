@@ -1237,6 +1237,7 @@ fn discover_prepared_root(analyzer_root: &std::path::Path) -> Result<std::path::
     let entries: Vec<std::path::PathBuf> = std::fs::read_dir(&prepared_dir)
         .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", prepared_dir.display()))?
         .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_dir())
         .filter(|entry| {
             let name = entry.file_name();
             let name = name.to_string_lossy();

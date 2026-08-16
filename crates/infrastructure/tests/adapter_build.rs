@@ -159,13 +159,10 @@ fn request_for(td: &Path, plans: Vec<LanguageBuildPlan>) -> BuildRequest {
     }
 }
 
-fn runner_with(_env: BTreeMap<String, String>) -> ProcessLibraryAdapterRunner {
+fn make_runner() -> ProcessLibraryAdapterRunner {
     // `ProcessLibraryAdapterRunner` no longer owns an env: each `analyze`
     // (and therefore each `handshake_adapter`) call takes the sanitized
     // env directly, sourced from `LanguageBuildPlan::handshake_environment`.
-    // The env argument is kept for callsite readability at the tests, so
-    // the intent-carrying `allowlist_path_env()` value still appears next
-    // to the plan it will feed.
     ProcessLibraryAdapterRunner::new(std::env::current_dir().unwrap())
 }
 
@@ -182,7 +179,7 @@ fn publishes_full_build_set_atomically() {
         plan_that_copies("cpp", "cpp-analyzer", "cpp-adapter", "1.0.0", &cpp_src),
     ];
     let request = request_for(td.path(), plans);
-    let runner = runner_with(allowlist_path_env());
+    let runner = make_runner();
     let set = build_adapters(&request, &runner).expect("build succeeds");
 
     // Build set on disk.
@@ -254,7 +251,7 @@ fn build_id_independent_of_plan_input_order() {
     let mut plans_b = mk_plans(td2.path());
     plans_b.reverse();
 
-    let runner = runner_with(allowlist_path_env());
+    let runner = make_runner();
     let set_a = build_adapters(&request_for(td1.path(), plans_a.split_off(0)), &runner).unwrap();
     let set_b = build_adapters(&request_for(td2.path(), plans_b.split_off(0)), &runner).unwrap();
     assert_eq!(set_a.build_id, set_b.build_id);
@@ -277,7 +274,7 @@ fn errors_when_prepared_set_missing() {
     let mut request = request_for(td.path(), plans);
     // Point prepared_set at a non-existent directory.
     request.prepared_set.root = td.path().join("does-not-exist");
-    let runner = runner_with(allowlist_path_env());
+    let runner = make_runner();
     let err = build_adapters(&request, &runner).unwrap_err();
     assert!(
         matches!(err, BuildError::PreparedSetMissing { .. }),
@@ -315,7 +312,7 @@ fn build_command_environment_is_sanitized() {
     plan.environment
         .insert("CE_BUILD_TAG".into(), "explicit-value".into());
     let request = request_for(td.path(), vec![plan]);
-    let runner = runner_with(allowlist_path_env());
+    let runner = make_runner();
     let _ = build_adapters(&request, &runner).expect("build succeeds");
     let observed = fs::read_to_string(&env_out).unwrap();
     // Positive: our allowlisted var is present.
@@ -354,7 +351,7 @@ fn nonzero_build_command_fails_and_keeps_marker() {
         handshake_environment: allowlist_path_env(),
     }];
     let request = request_for(td.path(), plans);
-    let runner = runner_with(allowlist_path_env());
+    let runner = make_runner();
     let err = build_adapters(&request, &runner).unwrap_err();
     match err {
         BuildError::BuildCommandFailed { status, .. } => {
@@ -387,7 +384,7 @@ fn handshake_identity_mismatch_fails_and_keeps_marker() {
         &rust_src,
     )];
     let request = request_for(td.path(), plans);
-    let runner = runner_with(allowlist_path_env());
+    let runner = make_runner();
     let err = build_adapters(&request, &runner).unwrap_err();
     assert!(
         matches!(err, BuildError::HandshakeIdentityMismatch { .. }),
@@ -424,7 +421,7 @@ fn recovers_when_previous_run_left_marker_but_freed_lock() {
         b"stale",
     )
     .unwrap();
-    let runner = runner_with(allowlist_path_env());
+    let runner = make_runner();
     // A retry should acquire the lock and succeed, clearing the stale marker.
     let set = build_adapters(&request, &runner).expect("retry recovers");
     assert!(
@@ -475,7 +472,7 @@ fn missing_output_executable_fails_and_keeps_marker() {
         handshake_environment: allowlist_path_env(),
     }];
     let request = request_for(td.path(), plans);
-    let runner = runner_with(allowlist_path_env());
+    let runner = make_runner();
     let err = build_adapters(&request, &runner).unwrap_err();
     assert!(matches!(err, BuildError::OutputMissing { .. }), "{err:?}");
     assert!(
@@ -498,7 +495,7 @@ fn duplicate_language_plan_is_rejected() {
         plan_that_copies("rust", "other", "rust-adapter", "1.0.0", &src),
     ];
     let request = request_for(td.path(), plans);
-    let runner = runner_with(allowlist_path_env());
+    let runner = make_runner();
     let err = build_adapters(&request, &runner).unwrap_err();
     assert!(
         matches!(err, BuildError::DuplicateLanguagePlan { .. }),
@@ -532,7 +529,7 @@ fn build_refuses_when_lock_already_held() {
         &rust_src,
     )];
     let request = request_for(td.path(), plans);
-    let runner = runner_with(allowlist_path_env());
+    let runner = make_runner();
     let err = build_adapters(&request, &runner).unwrap_err();
     assert!(matches!(err, BuildError::LockContended { .. }), "{err:?}");
     FileExt::unlock(&lock).unwrap();

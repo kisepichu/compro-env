@@ -80,6 +80,7 @@ fn discover_prepared_root(analyzer_root: &Path) -> PathBuf {
             panic!("failed to read {}: {e}", prepared_dir.display());
         })
         .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_dir())
         .filter(|entry| {
             let name = entry.file_name();
             !name.to_string_lossy().starts_with("staging-")
