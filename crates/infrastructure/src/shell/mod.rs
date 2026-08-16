@@ -56,6 +56,13 @@ fn default_command_runner() -> Box<dyn CommandRunner> {
     Box::new(UnsupportedCommandRunner)
 }
 
+/// Environment allowlist forwarded to the language analyzers spawned by
+/// `ce site-data generate`. Must be non-empty and include `PATH` so the Rust
+/// adapter can locate `rustc` (see the shell/mod.rs regression test).
+fn site_data_analyzer_runner_env() -> std::collections::BTreeMap<String, String> {
+    crate::library_adapter::language_plans::sanitized_language_env()
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -322,7 +329,7 @@ pub fn run() -> Result<()> {
                 };
                 let runner = crate::library_adapter::process::ProcessLibraryAdapterRunner::new(
                     root.clone(),
-                    std::collections::BTreeMap::new(),
+                    site_data_analyzer_runner_env(),
                 );
                 let analyzer = crate::library_analyzer_impl::ProcessLibraryAnalyzer::new(
                     runner,
@@ -1682,5 +1689,18 @@ mod tests {
     fn format_input_fmt_line_empty() {
         let line = format_input_fmt_line(&[]);
         assert_eq!(line, "");
+    }
+
+    /// Regression: `ce site-data generate` must construct the analyzer runner
+    /// with a non-empty environment allowlist. An empty map lets `env_clear()`
+    /// strip `PATH`, so the Rust adapter cannot spawn `rustc` and fails with
+    /// `No such file or directory (os error 2)`.
+    #[test]
+    fn site_data_analyzer_runner_env_forwards_path() {
+        let env = site_data_analyzer_runner_env();
+        assert!(
+            env.contains_key("PATH"),
+            "PATH must be forwarded so language adapters can locate toolchains",
+        );
     }
 }
