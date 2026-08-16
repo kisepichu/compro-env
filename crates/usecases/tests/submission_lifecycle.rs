@@ -297,6 +297,11 @@ fn state_label(state: &VerificationState) -> &'static str {
 struct FakeRepo {
     inner: Mutex<HashMap<SolutionId, VerificationRecord>>,
     log: Arc<RecordingLog>,
+    /// Every `InfrastructureFailure` body persisted through
+    /// `compare_and_swap`, in write order. Lets tests assert on scheduled
+    /// `next_retry_at` / `retry_count` values without threading extra
+    /// fields through `CallLog`.
+    infra_writes: Mutex<Vec<InfrastructureFailure>>,
 }
 
 impl FakeRepo {
@@ -304,6 +309,7 @@ impl FakeRepo {
         Self {
             inner: Mutex::new(HashMap::new()),
             log,
+            infra_writes: Mutex::new(Vec::new()),
         }
     }
     fn seed(&self, rec: VerificationRecord) {
@@ -311,6 +317,9 @@ impl FakeRepo {
             .lock()
             .unwrap()
             .insert(rec.solution_id.clone(), rec);
+    }
+    fn infra_writes(&self) -> Vec<InfrastructureFailure> {
+        self.infra_writes.lock().unwrap().clone()
     }
 }
 
@@ -341,6 +350,9 @@ impl VerificationRepository for FakeRepo {
             (None, None) => {}
             (Some(a), Some(existing)) if existing.attempt_id == *a => {}
             _ => anyhow::bail!("compare_and_swap precondition failed for {}", id.as_str()),
+        }
+        if let VerificationState::InfrastructureFailure(failure) = &next.state {
+            self.infra_writes.lock().unwrap().push(failure.clone());
         }
         self.log.push(CallLog::RepoWrite {
             solution: id.as_str().to_string(),
@@ -1458,6 +1470,79 @@ fn poll_handle_infrastructure_error_backoff_caps_at_thirty_seconds() {
     );
     // The last sleep before recovery should be at the cap.
     assert!(sleeps.contains(&Duration::from_secs(30)));
+}
+
+/// Spec §8.3 cross-workflow backoff: three consecutive retryable poll
+/// failures must persist `retry_count = 1, 2, 3` and the third write's
+/// `next_retry_at` must land at `updated_at + 20 min` (5→10→20 curve).
+#[test]
+fn poll_handle_third_consecutive_failure_schedules_twenty_minute_retry() {
+    let log = Arc::new(RecordingLog::default());
+    let clock = Arc::new(FakeClock::new(fixed_offset_time(0)));
+    let repo = FakeRepo::new(Arc::clone(&log));
+    repo.seed(make_submitted(
+        &lc_solution(),
+        "attempt-1",
+        "librarychecker",
+        "42",
+    ));
+    // Two retryable failures + one non-retryable to break the loop after
+    // the third streak increment. AuthenticationRejected exits with
+    // `PollEvent::InfrastructureError`, so the intermediate retryable
+    // writes stay on disk for the sniffer.
+    let obs: Vec<Result<PollObservation, PollSubmissionError>> = vec![
+        Err(PollSubmissionError::Infrastructure {
+            kind: InfrastructureErrorKind::Network,
+            summary: "flaky-1".into(),
+        }),
+        Err(PollSubmissionError::Infrastructure {
+            kind: InfrastructureErrorKind::Network,
+            summary: "flaky-2".into(),
+        }),
+        Err(PollSubmissionError::Infrastructure {
+            kind: InfrastructureErrorKind::Network,
+            summary: "flaky-3".into(),
+        }),
+        Err(PollSubmissionError::Infrastructure {
+            kind: InfrastructureErrorKind::AuthenticationRejected,
+            summary: "abort-loop".into(),
+        }),
+    ];
+    let env = make_env(
+        Arc::clone(&log),
+        Arc::clone(&clock),
+        vec![],
+        obs,
+        None,
+        usecases::submission::RecoveryMode::BestEffort,
+        PollingPolicy::verify_defaults(),
+    );
+    let repos_bundle = repos(&repo, &[lc_solution()]);
+    let record = repo.load(&lc_solution()).unwrap().unwrap();
+    poll_handle(&repos_bundle, &env.ports(), &record).unwrap();
+
+    let writes = repo.infra_writes();
+    assert_eq!(
+        writes.len(),
+        4,
+        "expected four infra-failure writes, got {}",
+        writes.len()
+    );
+    let retry_counts: Vec<u32> = writes.iter().map(|f| f.retry_count).collect();
+    assert_eq!(retry_counts, vec![1, 2, 3, 4]);
+    let third = &writes[2];
+    assert!(third.retryable, "third failure stays retryable");
+    let deadline = third
+        .next_retry_at
+        .expect("retryable failure must schedule a deadline");
+    assert_eq!(
+        deadline - third.updated_at,
+        chrono::Duration::minutes(20),
+        "3rd consecutive failure must schedule +20 min per spec §8.3"
+    );
+    let fourth = &writes[3];
+    assert!(!fourth.retryable, "non-retryable failure has no deadline");
+    assert!(fourth.next_retry_at.is_none());
 }
 
 /// Regression: a non-retryable poll-time infra failure MUST persist the
