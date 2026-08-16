@@ -1486,7 +1486,7 @@ fn poll_handle_third_consecutive_failure_schedules_twenty_minute_retry() {
         "librarychecker",
         "42",
     ));
-    // Two retryable failures + one non-retryable to break the loop after
+    // Three retryable failures + one non-retryable to break the loop after
     // the third streak increment. AuthenticationRejected exits with
     // `PollEvent::InfrastructureError`, so the intermediate retryable
     // writes stay on disk for the sniffer.
