@@ -380,10 +380,7 @@ fn analyze_request_emits_failed_with_diagnostic_on_broken_source_without_cascadi
     // dependency pass and the symbol pass see the same failure, but each
     // reports its own diagnostic — proving the two pipelines are wired
     // independently rather than sharing one failure state.
-    let tree = write_library_tree(&[(
-        "libraries/rust/broken.rs",
-        "pub struct Broken {\n",
-    )]);
+    let tree = write_library_tree(&[("libraries/rust/broken.rs", "pub struct Broken {\n")]);
     let request = request_with_library(tree.path(), "libraries/rust/broken.rs");
     let workspace = RustWorkspace::from_request(&request).expect("workspace builds");
     let (libraries, _solutions) = analyze_request(&request, &workspace);

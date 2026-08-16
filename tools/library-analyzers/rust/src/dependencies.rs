@@ -55,10 +55,8 @@ pub fn analyze_dependencies(
     for target in &request.libraries {
         let target_id = target.path.clone();
         let entry_path = &target_id;
-        let (deps, dep_state, mut diagnostics) =
-            analyze_target(workspace, &target_id, entry_path);
-        let (symbol_analysis, mut symbol_diagnostics) =
-            run_symbol_analysis(workspace, entry_path);
+        let (deps, dep_state, mut diagnostics) = analyze_target(workspace, &target_id, entry_path);
+        let (symbol_analysis, mut symbol_diagnostics) = run_symbol_analysis(workspace, entry_path);
         diagnostics.append(&mut symbol_diagnostics);
         out.push(TargetDependencyAnalysis::Library(LibraryAnalysis {
             path: target.path.clone(),
