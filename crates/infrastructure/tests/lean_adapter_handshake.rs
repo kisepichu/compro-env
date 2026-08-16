@@ -51,20 +51,49 @@ fn workspace_root() -> &'static Path {
     })
 }
 
-/// Minimal env allowlist for running the analyzer binary. Lean's runtime
-/// resolves `libLean_shared.so` and friends through `LD_LIBRARY_PATH`, so
-/// the caller must set that pointing at the prepared Lean install before
-/// running the gated test.
+/// Environment for the Lean analyzer's handshake. Discovers the single
+/// prepared set under `<workspace>/target/library-analyzers/prepared/`
+/// and delegates to `analyze_language_env` so the test exercises the
+/// exact env `build_analyze_envs` supplies at run time — including
+/// `CE_LEAN_ROOT`, `<lean_root>/bin` on `PATH`, and `<lean_root>/lib`
+/// on `LD_LIBRARY_PATH`.
 fn sanitized_env() -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-    for key in ["PATH", "HOME", "USER", "LOGNAME", "LD_LIBRARY_PATH"] {
-        if let Ok(v) = std::env::var(key) {
-            env.insert(key.into(), v);
-        }
-    }
-    env.entry("PATH".into())
-        .or_insert_with(|| "/usr/bin:/bin".into());
-    env
+    use domain::adapter_build::TargetPlatform;
+    use infrastructure::library_adapter::language_plans::analyze_language_env;
+
+    let analyzer_root = workspace_root().join("target").join("library-analyzers");
+    let prepared_root = discover_prepared_root(&analyzer_root);
+    let platform = TargetPlatform {
+        os: std::env::consts::OS.into(),
+        arch: std::env::consts::ARCH.into(),
+    };
+    analyze_language_env(&prepared_root, &platform, "lean").expect("lean analyze env")
+}
+
+/// Locate the single non-staging prepared-set directory. Mirrors
+/// `shell::discover_prepared_root` so the gated handshake tests do not
+/// grow their own layout assumptions.
+fn discover_prepared_root(analyzer_root: &Path) -> PathBuf {
+    let prepared_dir = analyzer_root.join("prepared");
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&prepared_dir)
+        .unwrap_or_else(|e| {
+            panic!("failed to read {}: {e}", prepared_dir.display());
+        })
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name();
+            !name.to_string_lossy().starts_with("staging-")
+        })
+        .map(|entry| entry.path())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected exactly one prepared set under {}, found {}",
+        prepared_dir.display(),
+        entries.len()
+    );
+    entries.pop().unwrap()
 }
 
 fn empty_lean_request() -> AnalysisRequest {
@@ -100,9 +129,10 @@ fn lean_adapter_handshake_returns_ce_lean_identity() {
         bin.display()
     );
 
-    let runner = ProcessLibraryAdapterRunner::new(workspace_root().to_path_buf(), sanitized_env());
+    let runner = ProcessLibraryAdapterRunner::new(workspace_root().to_path_buf());
+    let env = sanitized_env();
     let response = runner
-        .analyze(&bin, &empty_lean_request(), Duration::from_secs(30))
+        .analyze(&bin, &empty_lean_request(), Duration::from_secs(30), &env)
         .expect("handshake succeeds");
 
     assert_eq!(response.schema_version, SCHEMA_VERSION);

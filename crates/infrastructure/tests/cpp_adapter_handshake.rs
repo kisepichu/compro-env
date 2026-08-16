@@ -48,21 +48,22 @@ fn workspace_root() -> &'static Path {
     })
 }
 
-/// Minimal env allowlist for running the analyzer binary. Plan 046 links
-/// `libclang-cpp.so` into the executable, whose transitive `libz.so.1` /
-/// `libstdc++.so.6` deps the loader still resolves through the host
-/// environment — hence `LD_LIBRARY_PATH` is forwarded here alongside the
-/// base allowlist.
+/// Environment for the C++ analyzer's handshake. This delegates to
+/// `analyze_language_env` so the test exercises the exact env
+/// `build_analyze_envs` will supply at `ce site-data generate` time —
+/// same allowlist, same LD_LIBRARY_PATH forwarding, no ad-hoc extras.
 fn sanitized_env() -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-    for key in ["PATH", "HOME", "USER", "LOGNAME", "LD_LIBRARY_PATH"] {
-        if let Ok(v) = std::env::var(key) {
-            env.insert(key.into(), v);
-        }
-    }
-    env.entry("PATH".into())
-        .or_insert_with(|| "/usr/bin:/bin".into());
-    env
+    use domain::adapter_build::TargetPlatform;
+    use infrastructure::library_adapter::language_plans::analyze_language_env;
+
+    // C++ does not consult the prepared set at analyze time; the
+    // workspace root is a safe stand-in — `analyze_language_env` only
+    // reads the prepared set for Lean.
+    let platform = TargetPlatform {
+        os: std::env::consts::OS.into(),
+        arch: std::env::consts::ARCH.into(),
+    };
+    analyze_language_env(workspace_root(), &platform, "cpp").expect("cpp analyze env")
 }
 
 fn empty_cpp_request() -> AnalysisRequest {
@@ -98,9 +99,10 @@ fn cpp_adapter_handshake_returns_ce_cpp_identity() {
         bin.display()
     );
 
-    let runner = ProcessLibraryAdapterRunner::new(workspace_root().to_path_buf(), sanitized_env());
+    let runner = ProcessLibraryAdapterRunner::new(workspace_root().to_path_buf());
+    let env = sanitized_env();
     let response = runner
-        .analyze(&bin, &empty_cpp_request(), Duration::from_secs(30))
+        .analyze(&bin, &empty_cpp_request(), Duration::from_secs(30), &env)
         .expect("handshake succeeds");
 
     assert_eq!(response.schema_version, SCHEMA_VERSION);

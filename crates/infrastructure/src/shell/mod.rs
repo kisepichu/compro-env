@@ -320,13 +320,19 @@ pub fn run() -> Result<()> {
                         std::process::exit(1);
                     }
                 };
-                let runner = crate::library_adapter::process::ProcessLibraryAdapterRunner::new(
-                    root.clone(),
-                    crate::library_adapter::language_plans::sanitized_language_env(),
-                );
+                let envs = match build_analyze_envs(&root, &config) {
+                    Ok(map) => map,
+                    Err(e) => {
+                        eprintln!("{e:#}");
+                        std::process::exit(1);
+                    }
+                };
+                let runner =
+                    crate::library_adapter::process::ProcessLibraryAdapterRunner::new(root.clone());
                 let analyzer = crate::library_analyzer_impl::ProcessLibraryAnalyzer::new(
                     runner,
                     config.clone(),
+                    envs,
                 );
                 let git = crate::git_history::GitHistoryImpl::new(root.clone());
                 let verifications =
@@ -1122,21 +1128,16 @@ pub(crate) fn build_analysis(
     use usecases::library_analyzer::LibraryAnalyzer;
 
     let manifest = crate::library_project::discovery::LibraryDiscovery::discover(root, config)?;
-    // `ProcessLibraryAdapterRunner` calls `Command::env_clear()` before
-    // running the analyzer, so a stock `BTreeMap::new()` gives the child
-    // an empty PATH. rust-analyzer needs `rustc` on PATH to detect the
-    // toolchain; cpp / lean adapters (when re-enabled) will need their
-    // own per-language additions layered on top. `sanitized_language_env`
-    // is the same allowlisted forward already used by
-    // `library-adapter-build` — it guarantees a non-empty PATH and
-    // forwards CARGO_HOME / RUSTUP_HOME / LD_LIBRARY_PATH etc. so the
-    // pinned Rust toolchain shims still resolve.
-    let runner = crate::library_adapter::process::ProcessLibraryAdapterRunner::new(
-        root.to_path_buf(),
-        crate::library_adapter::language_plans::sanitized_language_env(),
-    );
+    // Each language's analyzer runs under the same sanitized env the build
+    // driver used at handshake time. Rust and C++ share the allowlist;
+    // Lean layers `CE_LEAN_ROOT`, `<lean_root>/bin` on `PATH`, and
+    // `<lean_root>/lib` on `LD_LIBRARY_PATH` so the pinned toolchain is
+    // reachable by `lean --print-libdir` and friends.
+    let envs = build_analyze_envs(root, config)?;
+    let runner =
+        crate::library_adapter::process::ProcessLibraryAdapterRunner::new(root.to_path_buf());
     let analyzer =
-        crate::library_analyzer_impl::ProcessLibraryAnalyzer::new(runner, config.clone());
+        crate::library_analyzer_impl::ProcessLibraryAnalyzer::new(runner, config.clone(), envs);
     let responses = analyzer.analyze_all(root, &manifest)?;
 
     // Collect source bytes for every managed library file plus every
@@ -1166,6 +1167,91 @@ pub(crate) fn build_analysis(
         &source_bytes,
     )?;
     Ok((manifest, snapshot))
+}
+
+/// Build the per-language analyze env map used by both `ce site-data
+/// generate` and `build_analysis`. Locates the single prepared set under
+/// `<repo>/target/library-analyzers/prepared/<dep-id>/` on disk and asks
+/// `analyze_language_env` for the per-language layering.
+///
+/// Fails if the analyzer root has zero or several prepared sets (a
+/// prepared-time invariant), or if the Lean layout under an existing
+/// prepared set is broken.
+pub(crate) fn build_analyze_envs(
+    root: &std::path::Path,
+    config: &domain::library::LibraryProjectConfig,
+) -> Result<
+    std::collections::BTreeMap<
+        domain::library::LanguageId,
+        std::collections::BTreeMap<String, String>,
+    >,
+> {
+    use std::collections::BTreeMap;
+
+    let analyzer_root = root.join("target").join("library-analyzers");
+    let platform = domain::adapter_build::TargetPlatform {
+        os: std::env::consts::OS.into(),
+        arch: std::env::consts::ARCH.into(),
+    };
+    // Skip prepared-set discovery when no language needs it. Right now only
+    // Lean layers extra env on top; Rust / C++ share `sanitized_language_env`.
+    let needs_prepared_root = config
+        .languages
+        .keys()
+        .any(|id| id.as_str() == crate::library_adapter::language_plans::LEAN_LANGUAGE);
+    let prepared_root = if needs_prepared_root {
+        Some(discover_prepared_root(&analyzer_root)?)
+    } else {
+        None
+    };
+    let mut envs: BTreeMap<domain::library::LanguageId, BTreeMap<String, String>> = BTreeMap::new();
+    for language_id in config.languages.keys() {
+        let env = if language_id.as_str() == crate::library_adapter::language_plans::LEAN_LANGUAGE {
+            let root_path = prepared_root.as_ref().expect("prepared_root computed");
+            crate::library_adapter::language_plans::analyze_language_env(
+                root_path,
+                &platform,
+                language_id.as_str(),
+            )
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to build analyze env for `{}`: {e}",
+                    language_id.as_str()
+                )
+            })?
+        } else {
+            crate::library_adapter::language_plans::sanitized_language_env()
+        };
+        envs.insert(language_id.clone(), env);
+    }
+    Ok(envs)
+}
+
+/// Locate the single prepared set directory under
+/// `<analyzer_root>/prepared/`. Skips `staging-*` entries so an
+/// interrupted `prepare` run cannot mask a healthy install. Fails if the
+/// count is not exactly one — the prepare pipeline never writes more than
+/// one, so a mismatch means manual state that needs operator attention.
+fn discover_prepared_root(analyzer_root: &std::path::Path) -> Result<std::path::PathBuf> {
+    let prepared_dir = analyzer_root.join("prepared");
+    let entries: Vec<std::path::PathBuf> = std::fs::read_dir(&prepared_dir)
+        .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", prepared_dir.display()))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !name.starts_with("staging-")
+        })
+        .map(|entry| entry.path())
+        .collect();
+    if entries.len() != 1 {
+        anyhow::bail!(
+            "expected exactly one prepared set under {}, found {}",
+            prepared_dir.display(),
+            entries.len()
+        );
+    }
+    Ok(entries.into_iter().next().unwrap())
 }
 
 /// Runs the full `ce verify [solution-id]` pipeline and returns an exit code.
