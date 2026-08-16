@@ -869,10 +869,26 @@ fn persist_fails_after_second_ref_conflict() {
 
 #[test]
 fn set_pull_request_state_marks_draft() {
-    let script = vec![Reply::json(
-        200,
-        serde_json::json!({ "number": 42, "draft": true }),
-    )];
+    // Ready → Draft routes through `convert_pr_to_draft`: GET pulls/{n} to
+    // resolve the node id, then POST /graphql with the
+    // `convertPullRequestToDraft` mutation. REST PATCH does not accept a
+    // `draft` field, so the writer never touches it here.
+    let script = vec![
+        Reply::json(
+            200,
+            serde_json::json!({
+                "number": 42,
+                "node_id": "PR_kwDOTEST",
+                "draft": false,
+            }),
+        ),
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": { "convertPullRequestToDraft": { "clientMutationId": "ok" } }
+            }),
+        ),
+    ];
     let fx = Fixture::start(script);
     let w = writer(fx.base_url());
     w.bind_repository("owner/repo").expect("bind repo");
@@ -883,19 +899,31 @@ fn set_pull_request_state_marks_draft() {
     .expect("mark draft");
 
     let recorded = fx.recorded();
-    assert_eq!(recorded.len(), 1);
-    assert_eq!(recorded[0].method, "PATCH");
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded[0].method, "GET");
     assert_eq!(recorded[0].url, "/repos/owner/repo/pulls/42");
-    let body: serde_json::Value = serde_json::from_str(&recorded[0].body).unwrap();
-    assert_eq!(body["draft"], true);
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/graphql");
+    let body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    assert!(
+        body["query"]
+            .as_str()
+            .unwrap()
+            .contains("convertPullRequestToDraft"),
+        "graphql body missing mutation: {body}"
+    );
+    assert_eq!(body["variables"]["pullRequestId"], "PR_kwDOTEST");
 }
 
 #[test]
 fn set_pull_request_state_ready_resolves_node_id_then_enables_auto_merge() {
-    // GraphQL requires the PR's opaque base64-shaped node id, not the numeric
-    // number. The writer must fetch `.node_id` from the REST endpoint first,
-    // then PATCH `draft: false`, then POST the GraphQL mutation with the
-    // resolved node id as the `pullRequestId` variable.
+    // GraphQL requires the PR's opaque base64-shaped node id. The writer
+    // fetches `.node_id` from the REST endpoint first, then POSTs the
+    // `markPullRequestReadyForReview` mutation (Draft → Ready), and finally
+    // the `enablePullRequestAutoMerge` mutation. REST's `PATCH /pulls/{n}`
+    // silently ignores `{draft: false}`, so the Draft transition must go
+    // through GraphQL — otherwise the subsequent auto-merge call is
+    // rejected because auto-merge is not permitted on Draft PRs.
     let script = vec![
         // 1. GET /pulls/{n} → { node_id: "PR_kwDOTEST" }
         Reply::json(
@@ -906,8 +934,15 @@ fn set_pull_request_state_ready_resolves_node_id_then_enables_auto_merge() {
                 "draft": true
             }),
         ),
-        // 2. PATCH /pulls/{n} { draft: false }
-        Reply::json(200, serde_json::json!({ "number": 7, "draft": false })),
+        // 2. POST /graphql (markPullRequestReadyForReview)
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": {
+                    "markPullRequestReadyForReview": { "clientMutationId": "ok" }
+                }
+            }),
+        ),
         // 3. POST /graphql (enablePullRequestAutoMerge)
         Reply::json(
             200,
@@ -935,20 +970,25 @@ fn set_pull_request_state_ready_resolves_node_id_then_enables_auto_merge() {
     assert_eq!(recorded[0].method, "GET");
     assert_eq!(recorded[0].url, "/repos/owner/repo/pulls/7");
 
-    // Second: PATCH pulls/7 with { draft: false }
-    assert_eq!(recorded[1].method, "PATCH");
-    assert_eq!(recorded[1].url, "/repos/owner/repo/pulls/7");
+    // Second: POST /graphql with markPullRequestReadyForReview.
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/graphql");
     let body1: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
-    assert_eq!(body1["draft"], false);
+    let query1 = body1["query"].as_str().unwrap();
+    assert!(
+        query1.contains("markPullRequestReadyForReview"),
+        "graphql body missing mutation: {query1}"
+    );
+    assert_eq!(body1["variables"]["pullRequestId"], "PR_kwDOTEST");
 
     // Third: POST /graphql with enablePullRequestAutoMerge, node id in vars.
     assert_eq!(recorded[2].method, "POST");
     assert_eq!(recorded[2].url, "/graphql");
     let body2: serde_json::Value = serde_json::from_str(&recorded[2].body).unwrap();
-    let query = body2["query"].as_str().unwrap();
+    let query2 = body2["query"].as_str().unwrap();
     assert!(
-        query.contains("enablePullRequestAutoMerge"),
-        "graphql body missing mutation: {query}"
+        query2.contains("enablePullRequestAutoMerge"),
+        "graphql body missing mutation: {query2}"
     );
     // The mutation body must reference the resolved base64-shaped node id,
     // NOT the numeric PR number.
@@ -979,9 +1019,16 @@ fn set_pull_request_state_ready_errors_when_graphql_returns_errors() {
                 "draft": true
             }),
         ),
-        // 2. PATCH /pulls/{n}
-        Reply::json(200, serde_json::json!({ "number": 7, "draft": false })),
-        // 3. POST /graphql — HTTP 200 but errors present in body
+        // 2. POST /graphql (markPullRequestReadyForReview) — succeeds
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": {
+                    "markPullRequestReadyForReview": { "clientMutationId": "ok" }
+                }
+            }),
+        ),
+        // 3. POST /graphql (enablePullRequestAutoMerge) — HTTP 200 with errors
         Reply::json(
             200,
             serde_json::json!({

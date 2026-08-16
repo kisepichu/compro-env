@@ -487,20 +487,20 @@ impl GitHubVerificationStateWriter {
             BotPullRequestState::Draft {
                 pull_request_number,
             } => {
-                self.patch_pr(&owner, &repo, pull_request_number, false)?;
+                // Ready → Draft path is unchanged: `convert_pr_to_draft`
+                // resolves the node id and invokes the GraphQL mutation.
+                self.convert_pr_to_draft(pull_request_number)?;
             }
             BotPullRequestState::Ready {
                 pull_request_number,
                 auto_merge,
             } => {
+                // Resolve the node id BEFORE any mutation so a lookup
+                // failure does not leave the PR half-marked ready.
+                let node_id = self.resolve_pr_node_id(&owner, &repo, pull_request_number)?;
+                self.mark_pr_ready(&node_id)?;
                 if auto_merge {
-                    // Resolve the node id BEFORE we mutate anything so a
-                    // lookup failure does not leave the PR half-marked ready.
-                    let node_id = self.resolve_pr_node_id(&owner, &repo, pull_request_number)?;
-                    self.patch_pr(&owner, &repo, pull_request_number, true)?;
                     self.enable_auto_merge(&node_id)?;
-                } else {
-                    self.patch_pr(&owner, &repo, pull_request_number, true)?;
                 }
             }
         }
@@ -968,10 +968,12 @@ impl GitHubVerificationStateWriter {
     /// Convert a currently-open Ready PR back to draft via GitHub's
     /// `convertPullRequestToDraft` GraphQL mutation (spec §15.1).
     ///
-    /// REST's `PATCH /pulls/{n}` supports `{draft: false}` (Draft → Ready)
-    /// but rejects `{draft: true}` on a non-draft PR with 422 — the only
-    /// supported reverse direction is the GraphQL mutation used here.
-    /// Callers should pre-check the PR's current draft state via
+    /// REST's `PATCH /pulls/{n}` does not document a `draft` request
+    /// parameter — GitHub silently accepts 200 but ignores it in both
+    /// directions, so the Draft ↔ Ready transitions are routed through
+    /// GraphQL (`markPullRequestReadyForReview` for the forward direction
+    /// via [`mark_pr_ready`], and this mutation for the reverse). Callers
+    /// should pre-check the PR's current draft state via
     /// [`find_or_open_bot_pr`]'s [`BotPullRequestRef::is_draft`] and skip
     /// this call when it is already `true`; the mutation may error on
     /// an already-draft PR depending on GitHub's server-side behaviour.
@@ -1011,23 +1013,6 @@ impl GitHubVerificationStateWriter {
         Ok(())
     }
 
-    fn patch_pr(&self, owner: &str, repo: &str, pr: u64, ready: bool) -> PersistResult<()> {
-        let url = format!("{}/repos/{owner}/{repo}/pulls/{pr}", self.base_url);
-        let body = json!({ "draft": !ready });
-        let resp = self.authed(self.http.patch(&url)).json(&body).send()?;
-        let status = resp.status();
-        if status.is_success() {
-            let _ = resp.text();
-            Ok(())
-        } else {
-            let _ = resp.text();
-            Err(PersistError::UpstreamStatus {
-                status: status.as_u16(),
-                op: "PATCH pulls/{n}",
-            })
-        }
-    }
-
     /// Resolve a numeric PR number to GitHub's opaque node id.
     ///
     /// GraphQL identifies pull requests by their base64-shaped node id
@@ -1054,6 +1039,50 @@ impl GitHubVerificationStateWriter {
             op: "GET pulls/{n} (resolve node_id)",
             field: "node_id",
         })
+    }
+
+    /// Convert a currently-open Draft PR to Ready via GitHub's
+    /// `markPullRequestReadyForReview` GraphQL mutation (spec §15.1).
+    ///
+    /// REST's `PATCH /pulls/{n}` documents no `draft` field on the request
+    /// body — GitHub silently accepts (200) but ignores `{draft: false}`,
+    /// leaving the PR as a Draft. `enablePullRequestAutoMerge` then rejects
+    /// the mutation because auto-merge is not permitted on Draft PRs. The
+    /// GraphQL mutation used here is the only supported path for the
+    /// Draft → Ready transition and mirrors [`convert_pr_to_draft`]'s
+    /// GraphQL wiring for the reverse direction.
+    fn mark_pr_ready(&self, pull_request_node_id: &str) -> PersistResult<()> {
+        let url = format!("{}/graphql", self.base_url);
+        let mutation = r#"mutation($pullRequestId: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) { clientMutationId } }"#;
+        let body = json!({
+            "query": mutation,
+            "variables": { "pullRequestId": pull_request_node_id },
+        });
+        let resp = self.authed(self.http.post(&url)).json(&body).send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            let _ = resp.text();
+            return Err(PersistError::UpstreamStatus {
+                status: status.as_u16(),
+                op: "POST graphql (markPullRequestReadyForReview)",
+            });
+        }
+        let text = resp.text().map_err(PersistError::from)?;
+        #[derive(Deserialize)]
+        struct GraphqlBody {
+            #[serde(default)]
+            errors: Option<Vec<serde_json::Value>>,
+        }
+        let parsed: GraphqlBody = serde_json::from_str(&text).map_err(PersistError::from)?;
+        if let Some(errs) = parsed.errors
+            && !errs.is_empty()
+        {
+            return Err(PersistError::GraphqlError {
+                op: "POST graphql (markPullRequestReadyForReview)",
+                count: errs.len(),
+            });
+        }
+        Ok(())
     }
 
     fn enable_auto_merge(&self, pull_request_node_id: &str) -> PersistResult<()> {

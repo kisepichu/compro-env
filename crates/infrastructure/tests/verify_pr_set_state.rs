@@ -309,7 +309,12 @@ fn starting_record_converts_ready_pr_back_to_draft_via_graphql() {
 }
 
 /// Completed(Accepted) → ReadyAutoMerge branch: list → open new PR →
-/// resolve node id → PATCH ready → POST GraphQL enable-auto-merge.
+/// resolve node id → POST GraphQL markReady → POST GraphQL enable-auto-merge.
+///
+/// REST's `PATCH /pulls/{n}` silently ignores a `{draft: false}` body, so
+/// the Draft → Ready flip must go through the `markPullRequestReadyForReview`
+/// GraphQL mutation. Otherwise `enablePullRequestAutoMerge` rejects the
+/// still-Draft PR ("Draft pull requests cannot be merged").
 #[test]
 fn completed_accepted_flips_pr_to_ready_and_auto_merge() {
     let script = vec![
@@ -322,8 +327,13 @@ fn completed_accepted_flips_pr_to_ready_and_auto_merge() {
             200,
             serde_json::json!({ "number": 9, "node_id": "PR_kwDOTEST" }),
         ),
-        // 4. PATCH /pulls/9 { draft: false }
-        Reply::json(200, serde_json::json!({ "number": 9, "draft": false })),
+        // 4. POST /graphql → markPullRequestReadyForReview
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": { "markPullRequestReadyForReview": { "clientMutationId": "ok" } }
+            }),
+        ),
         // 5. POST /graphql → enablePullRequestAutoMerge
         Reply::json(
             200,
@@ -353,11 +363,34 @@ fn completed_accepted_flips_pr_to_ready_and_auto_merge() {
     assert_eq!(recorded[1].url, "/repos/owner/repo/pulls");
     assert_eq!(recorded[2].method, "GET");
     assert_eq!(recorded[2].url, "/repos/owner/repo/pulls/9");
-    assert_eq!(recorded[3].method, "PATCH");
-    let patch_body: serde_json::Value = serde_json::from_str(&recorded[3].body).unwrap();
-    assert_eq!(patch_body["draft"], false);
+    assert_eq!(recorded[3].method, "POST");
+    assert_eq!(recorded[3].url, "/graphql");
+    let mark_ready_body: serde_json::Value = serde_json::from_str(&recorded[3].body).unwrap();
+    assert!(
+        mark_ready_body["query"]
+            .as_str()
+            .unwrap()
+            .contains("markPullRequestReadyForReview"),
+        "expected markPullRequestReadyForReview mutation, got {}",
+        mark_ready_body["query"]
+    );
+    assert_eq!(mark_ready_body["variables"]["pullRequestId"], "PR_kwDOTEST");
     assert_eq!(recorded[4].method, "POST");
     assert_eq!(recorded[4].url, "/graphql");
+    let auto_merge_body: serde_json::Value = serde_json::from_str(&recorded[4].body).unwrap();
+    assert!(
+        auto_merge_body["query"]
+            .as_str()
+            .unwrap()
+            .contains("enablePullRequestAutoMerge"),
+        "expected enablePullRequestAutoMerge mutation, got {}",
+        auto_merge_body["query"]
+    );
+    // No PATCH must be issued — REST's PATCH ignores the `draft` field.
+    assert!(
+        !recorded.iter().any(|r| r.method == "PATCH"),
+        "no PATCH must be issued for Draft → Ready, got {recorded:#?}"
+    );
 }
 
 #[test]
