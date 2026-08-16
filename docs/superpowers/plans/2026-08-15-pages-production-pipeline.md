@@ -32,7 +32,7 @@
 
 The `build` job currently goes straight from `npm ci` to `npm run site:build`. Insert the steps below between `npm ci` and `npm run site:build`.
 
-- [ ] **Step 1: Add Rust toolchain and `ce` build**
+- [x] **Step 1: Add Rust toolchain and `ce` build**
 
 After the `Install dependencies` step, add:
 
@@ -60,7 +60,7 @@ After the `Install dependencies` step, add:
 
 Use the **same** cache key as `verify.yml` (`cargo-verify-*`) so warm runs after a recent verify tick skip recompilation.
 
-- [ ] **Step 2: Add adapter prepare/build (with shared cache)**
+- [x] **Step 2: Add adapter prepare/build (with shared cache)**
 
 ```yaml
 - name: Cache prepared adapter dependencies
@@ -97,7 +97,7 @@ Use the **same** cache key as `verify.yml` (`cargo-verify-*`) so warm runs after
 
 Copy the **same** cache keys and `--check` guard from `verify-worker.yml` (lines 160–200) verbatim so cache hits are shared across workflows.
 
-- [ ] **Step 3: Overlay verification records from `automation/verify`**
+- [x] **Step 3: Overlay verification records from `automation/verify`**
 
 ```yaml
 - name: Overlay verification records from automation/verify
@@ -120,7 +120,7 @@ Copy the **same** cache keys and `--check` guard from `verify-worker.yml` (lines
 
 Use `git ls-remote` (without `--exit-code`) in a standalone variable assignment. Under `set -euo pipefail`, a variable assignment `VAR=$(cmd)` aborts the job when `cmd` exits non-zero — so a network or auth failure propagates as a hard failure rather than silently falling to the else branch. `git ls-remote` without `--exit-code` exits 0 whether the branch exists or not, returning empty output when the ref is absent. After fetching, `git ls-tree -r --name-only FETCH_HEAD` checks whether `verification/results/` actually contains files before running `git archive`; this avoids `|| true` which would swallow both the expected "path absent" exit 128 from `git archive` and unexpected `tar` write failures. `git archive … | tar -x` writes `verification/results/**` into the working tree without touching the index or other tracked files; the success message only prints when files were actually extracted.
 
-- [ ] **Step 4: Run `ce site-data generate` and update the build step**
+- [x] **Step 4: Run `ce site-data generate` and update the build step**
 
 Add after the overlay:
 
