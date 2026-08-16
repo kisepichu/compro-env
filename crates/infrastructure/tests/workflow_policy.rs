@@ -91,7 +91,7 @@ fn as_map<'a>(v: &'a Value, label: &str) -> &'a serde_yaml::Mapping {
 }
 
 fn get<'a>(map: &'a serde_yaml::Mapping, key: &str) -> Option<&'a Value> {
-    map.get(&Value::String(key.to_string()))
+    map.get(Value::String(key.to_string()))
 }
 
 fn jobs(v: &Value) -> &serde_yaml::Mapping {
@@ -297,7 +297,7 @@ fn environment_names_are_from_allowlist() {
 ///   - `automation/verify`: the App-managed state branch, which `submit`
 ///     and `poll` read so `ce internal verify-{start,poll}` can see the
 ///     record `persist_starting` / `persist_handle` just committed.
-/// The `actions/checkout` SHA pin is covered by test #3.
+///     The `actions/checkout` SHA pin is covered by test #3.
 #[test]
 fn no_build_or_unpinned_checkout_in_secret_jobs() {
     let banned_cargo_verbs = ["cargo build", "cargo test", "cargo run"];
@@ -510,7 +510,8 @@ fn verify_dispatcher_wires_before_after_through_env() {
     let inputs = get(as_map(workflow_call, "workflow_call"), "inputs")
         .expect("workflow_call missing `inputs:`");
     let inputs_map = as_map(inputs, "inputs");
-    for name in ["after"] {
+    {
+        let name = "after";
         let input = get(inputs_map, name)
             .unwrap_or_else(|| panic!("workflow_call.inputs missing {name:?}"));
         let input_map = as_map(input, name);
@@ -570,10 +571,10 @@ fn all_run_steps(doc: &Value) -> Vec<(String, String)> {
     for (job_name, job) in jobs(doc) {
         let job_label = job_name.as_str().unwrap_or("").to_string();
         for step in steps(job) {
-            if let Some(m) = step.as_mapping() {
-                if let Some(run) = get(m, "run").and_then(Value::as_str) {
-                    out.push((job_label.clone(), run.to_string()));
-                }
+            if let Some(m) = step.as_mapping()
+                && let Some(run) = get(m, "run").and_then(Value::as_str)
+            {
+                out.push((job_label.clone(), run.to_string()));
             }
         }
     }
@@ -1103,10 +1104,11 @@ fn pages_build_emits_source_sha_metadata() {
             Some(m) => m,
             None => continue,
         };
-        if let Some(run) = get(map, "run").and_then(Value::as_str) {
-            if run.contains("build-source.json") && run.contains("source_commit_sha") {
-                writes_metadata = true;
-            }
+        if let Some(run) = get(map, "run").and_then(Value::as_str)
+            && run.contains("build-source.json")
+            && run.contains("source_commit_sha")
+        {
+            writes_metadata = true;
         }
     }
     assert!(
@@ -1205,13 +1207,13 @@ const APP_ONLY_JOBS: [&str; 3] = ["persist_starting", "persist_handle", "persist
 const OJ_ONLY_JOBS: [&str; 2] = ["submit", "poll"];
 const LIVE_ONLY_JOBS: [&str; 4] = ["submit", "persist_handle", "poll", "persist_terminal"];
 
-fn seq_str_values<'a>(v: &'a Value) -> Vec<&'a str> {
+fn seq_str_values(v: &Value) -> Vec<&str> {
     v.as_sequence()
         .map(|s| s.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default()
 }
 
-fn needs_of<'a>(job: &'a Value) -> Vec<&'a str> {
+fn needs_of(job: &Value) -> Vec<&str> {
     let map = match job.as_mapping() {
         Some(m) => m,
         None => return vec![],
