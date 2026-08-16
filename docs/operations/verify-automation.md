@@ -202,14 +202,19 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
   only `pages.yml` republishes the site. The picker never runs on
   this path because `decide` already gave `run_worker=false`.
 - **Retry backoff** target is `5 → 10 → 20 → 40 → 80` minutes, capped
-  at 6 hours. The record's `next_retry_at` encodes the schedule and
-  the 5-minute cron is dense enough to honor it. Production
-  persisters (`crates/usecases/src/submission_lifecycle.rs`) currently
-  always write `next_retry_at: None`, so every retryable failure is
-  immediately eligible on the next tick — the picker's "`None` treated
-  as past" branch is the sole runtime path today. Wiring persisters
-  to schedule concrete retry deadlines is a follow-up plan; the
-  `Some(t) <= now` branch is tested and ready to activate.
+  at 6 hours. Every retryable `InfrastructureFailure` is persisted with
+  `next_retry_at = updated_at + retry_delay(retry_count)`
+  (`crates/usecases/src/verification/backoff.rs`) and the 5-minute cron
+  is dense enough to honor it. The streak lives on
+  `InfrastructureFailure.retry_count`: transitioning
+  `InfrastructureFailure -> InfrastructureFailure` bumps the counter,
+  and any other predecessor resets it to `1` (spec §8.3 "OJ 接続成功
+  または判定進行で reset する"). The `Retry-After` hint
+  (`sleep_with_hint`) still overrides intra-command sleeps when the OJ
+  asks for a longer wait; it does not affect the cross-workflow
+  `next_retry_at`. Non-retryable failures (`HandleNotFound`,
+  `AuthenticationRejected`, `CredentialsMissing`, `SchemaError`) leave
+  `next_retry_at: None` so an operator has to clear them.
 
 ### Picker eligibility rules
 
