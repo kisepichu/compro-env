@@ -652,7 +652,20 @@
         ],
         "state": "partial"
       },
-      "diagnostics": [],
+      "diagnostics": [
+        {
+          "code": "rust.symbols.partial",
+          "location": {
+            "path": "libraries/rust/symbols/macros.rs",
+            "start": {
+              "column": 1,
+              "line": 1
+            }
+          },
+          "message": "symbol analysis is partial for libraries/rust/symbols/macros.rs (item-level macro or dropped span)",
+          "severity": "warning"
+        }
+      ],
       "path": "libraries/rust/symbols/macros.rs",
       "symbol_analysis": {
         "state": "partial",
