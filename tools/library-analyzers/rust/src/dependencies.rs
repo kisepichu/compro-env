@@ -37,8 +37,8 @@ use crate::module_graph::{
 /// Per-target result returned by [`analyze_dependencies`].
 ///
 /// A `TargetDependencyAnalysis` fits directly into an `AnalysisResponse`: it
-/// exposes either the library shape (with pending symbol analysis) or the
-/// solution shape, never both.
+/// exposes either the library shape (with dependency **and** symbol analysis
+/// populated) or the solution shape (dependency analysis only), never both.
 #[derive(Debug, Clone)]
 pub enum TargetDependencyAnalysis {
     Library(LibraryAnalysis),
@@ -55,18 +55,18 @@ pub fn analyze_dependencies(
     for target in &request.libraries {
         let target_id = target.path.clone();
         let entry_path = &target_id;
-        let (deps, state, diagnostics) = analyze_target(workspace, &target_id, entry_path);
+        let (deps, dep_state, mut diagnostics) =
+            analyze_target(workspace, &target_id, entry_path);
+        let (symbol_analysis, mut symbol_diagnostics) =
+            run_symbol_analysis(workspace, entry_path);
+        diagnostics.append(&mut symbol_diagnostics);
         out.push(TargetDependencyAnalysis::Library(LibraryAnalysis {
             path: target.path.clone(),
             dependency_analysis: DependencyAnalysis {
-                state,
+                state: dep_state,
                 dependencies: deps,
             },
-            // Symbols land in a follow-up plan (043 constraint: `partial`).
-            symbol_analysis: SymbolAnalysis {
-                state: AnalysisState::Partial,
-                symbols: vec![],
-            },
+            symbol_analysis,
             diagnostics,
         }));
     }
@@ -88,6 +88,65 @@ pub fn analyze_dependencies(
         }));
     }
     out
+}
+
+/// Read `library_path` from disk and delegate to
+/// [`crate::symbols::analyze_symbols`], attaching a diagnostic whenever the
+/// walker returns a non-`Complete` result. The dependency pass is untouched
+/// by any error this helper reports — the two pipelines emit independent
+/// diagnostic codes on the same `LibraryAnalysis`.
+fn run_symbol_analysis(
+    workspace: &RustWorkspace,
+    library_path: &str,
+) -> (SymbolAnalysis, Vec<Diagnostic>) {
+    let absolute = workspace.absolute(library_path);
+    let source = match std::fs::read_to_string(&absolute) {
+        Ok(s) => s,
+        Err(err) => {
+            return (
+                SymbolAnalysis {
+                    state: AnalysisState::Failed,
+                    symbols: vec![],
+                },
+                vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: "rust.symbols.read".into(),
+                    message: format!("failed to read {library_path}: {err}"),
+                    location: Some(entry_location(library_path)),
+                }],
+            );
+        }
+    };
+    let analysis = crate::symbols::analyze_symbols(&source, library_path, &[]);
+    let diagnostics = match analysis.state {
+        AnalysisState::Complete => Vec::new(),
+        AnalysisState::Partial => vec![Diagnostic {
+            severity: Severity::Warning,
+            code: "rust.symbols.partial".into(),
+            message: format!(
+                "symbol analysis is partial for {library_path} (item-level macro or dropped span)"
+            ),
+            location: Some(entry_location(library_path)),
+        }],
+        AnalysisState::Failed => vec![Diagnostic {
+            severity: Severity::Warning,
+            code: "rust.symbols.parse".into(),
+            message: format!("failed to parse {library_path} for symbol analysis"),
+            location: Some(entry_location(library_path)),
+        }],
+    };
+    (analysis, diagnostics)
+}
+
+fn entry_location(path: &str) -> Location {
+    Location {
+        path: path.to_string(),
+        start: Position {
+            line: 1,
+            column: Some(1),
+        },
+        end: None,
+    }
 }
 
 fn analyze_target(
