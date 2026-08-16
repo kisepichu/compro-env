@@ -385,5 +385,5 @@ JSON
 #[test]
 #[serial]
 fn stderr_tail_default_is_finite() {
-    assert!(DEFAULT_STDERR_TAIL_BYTES <= 64 * 1024);
+    const { assert!(DEFAULT_STDERR_TAIL_BYTES <= 64 * 1024) };
 }

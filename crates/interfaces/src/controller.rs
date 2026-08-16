@@ -158,6 +158,7 @@ impl Controller {
             manual_dependency_edges,
             solution_has_preprocess,
             library_descriptions,
+            starters: self.service.starter_registry(),
             mode,
         };
         let data = generate_site_data(&spec)?;

@@ -1123,33 +1123,7 @@ fn map_unavailable_reason(
 fn capabilities_of_starter(
     starter: &dyn SubmissionStarter,
 ) -> domain::online_judge::SubmissionCapabilities {
-    let d = starter.descriptor();
-    use crate::submission::{
-        RecoveryMode as PortRecoveryMode, ResultDetailLevel as PortResultDetail,
-        SubmissionMode as PortMode,
-    };
-    use domain::online_judge::{
-        RecoveryMode as DomRecoveryMode, ResultDetail as DomResultDetail,
-        SubmissionCapabilities as DomCaps, SubmissionMode as DomMode,
-    };
-    DomCaps {
-        submission_mode: match d.submission_mode {
-            PortMode::UnattendedTrackable => DomMode::UnattendedTrackable,
-            PortMode::InteractiveTrackable => DomMode::InteractiveTrackable,
-            PortMode::InteractiveUntrackable => DomMode::InteractiveUntrackable,
-            PortMode::Unsupported => DomMode::Unsupported,
-        },
-        result_detail: match d.result_detail {
-            PortResultDetail::OverallOnly => DomResultDetail::OverallOnly,
-            PortResultDetail::SummaryMetrics => DomResultDetail::SummaryMetrics,
-            PortResultDetail::TestcaseDetails => DomResultDetail::TestcaseDetails,
-        },
-        recovery_mode: match d.recovery_mode {
-            PortRecoveryMode::Exact => DomRecoveryMode::Exact,
-            PortRecoveryMode::BestEffort => DomRecoveryMode::BestEffort,
-            PortRecoveryMode::None => DomRecoveryMode::None,
-        },
-    }
+    crate::verification::fingerprint::capabilities_from_descriptor(&starter.descriptor())
 }
 
 fn build_completed_state(

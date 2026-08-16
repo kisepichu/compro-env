@@ -377,9 +377,11 @@ impl NoopSleeper {
 // Fake starter: scripted outcomes + call counter. When the outcomes queue is
 // exhausted, `default` is returned repeatedly — this keeps tests with an
 // unknown number of solutions from having to precount.
+type StartFn = Box<dyn Fn() -> Result<SubmissionStart, StartSubmissionError> + Send>;
+
 struct FakeStarter {
     outcomes: Mutex<Vec<Result<SubmissionStart, StartSubmissionError>>>,
-    default: Mutex<Option<Box<dyn Fn() -> Result<SubmissionStart, StartSubmissionError> + Send>>>,
+    default: Mutex<Option<StartFn>>,
     mode: SubmissionMode,
     calls: Arc<Mutex<u32>>,
 }
@@ -711,7 +713,7 @@ fn find_status<'a>(outcome: &'a VerifyOutcome, id: &SolutionId) -> Option<&'a Ve
 // ─── Tests ────────────────────────────────────────────────────────────────
 
 /// 1. `verify` walks the entire manifest by default. LC → Accepted, AtCoder →
-/// Unavailable. Overall exit 1 due to Unavailable.
+///    Unavailable. Overall exit 1 due to Unavailable.
 #[test]
 fn verify_bulk_mixed_ojs_exits_1_due_to_atcoder_unavailable() {
     let env = build_env(BuildEnv {
@@ -750,7 +752,7 @@ fn verify_single_target_lc_only_exits_0() {
 }
 
 /// 3. Existing terminal Accepted record with a matching fingerprint skips the
-/// starter entirely.
+///    starter entirely.
 #[test]
 fn verify_skips_when_stored_record_matches_fingerprint() {
     // We first do a real accepted run to seed the on-disk record + fingerprint.
@@ -816,7 +818,7 @@ fn verify_skips_when_stored_record_matches_fingerprint() {
 }
 
 /// 4. Stable ordering: two LC solutions both verified → status lines in
-/// ascending solution-id order.
+///    ascending solution-id order.
 #[test]
 fn verify_status_lines_are_sorted_by_solution_id() {
     let env = build_env(BuildEnv {
@@ -835,7 +837,7 @@ fn verify_status_lines_are_sorted_by_solution_id() {
 }
 
 /// 5. Resume-first: seed a Starting record for LC. Fake recovery says
-/// Recovered → poller returns Completed. Starter's start-count stays 0.
+///    Recovered → poller returns Completed. Starter's start-count stays 0.
 #[test]
 fn verify_resumes_starting_record_before_launching_new_work() {
     let env = build_env(BuildEnv::default_lc_only());
@@ -1010,7 +1012,7 @@ fn verify_rejected_verdict_returns_exit_1() {
 }
 
 /// 9. Budget exhausted then resume: first run polls forever (BudgetExhausted).
-/// Second run's poller returns Accepted → exit 0.
+///    Second run's poller returns Accepted → exit 0.
 #[test]
 fn verify_budget_exhausted_then_resume_to_accepted() {
     let env = build_env(BuildEnv {
@@ -1090,7 +1092,7 @@ fn verify_budget_exhausted_then_resume_to_accepted() {
 }
 
 /// 10. One in-flight per OJ: seed a Queued record for LC solution A; verify
-/// solution B (same OJ) → starter is NOT called for B; A resumes to Completed.
+///     solution B (same OJ) → starter is NOT called for B; A resumes to Completed.
 #[test]
 fn verify_one_in_flight_per_oj_blocks_second_solution() {
     // Repo has both LC solutions but the second (LC_SOLUTION_B) is the target.
@@ -1151,7 +1153,7 @@ fn seed_queued_record(solution: &SolutionId) -> VerificationRecord {
 }
 
 /// 11. Hidden internal verify-prepare writes a plan JSON that round-trips;
-/// verify-start on that plan succeeds; verify-poll drives to terminal.
+///     verify-start on that plan succeeds; verify-poll drives to terminal.
 #[test]
 fn internal_verify_prepare_start_and_poll_round_trip() {
     let env = build_env(BuildEnv::default_lc_only());
@@ -1297,11 +1299,11 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
 }
 
 /// 12. Credential-split path (spec §15.4): the `persist_starting` job writes
-/// the Starting record before `verify-start` runs. `internal_verify_start`
-/// must accept the pre-persisted record instead of erroring with
-/// "start_plan called twice", and the emitted `StartEvent`'s record must
-/// carry `replaces_attempt_id = Some(current.attempt_id)` so the downstream
-/// `persist_handle` CAS check round-trips.
+///     the Starting record before `verify-start` runs. `internal_verify_start`
+///     must accept the pre-persisted record instead of erroring with
+///     "start_plan called twice", and the emitted `StartEvent`'s record must
+///     carry `replaces_attempt_id = Some(current.attempt_id)` so the downstream
+///     `persist_handle` CAS check round-trips.
 #[test]
 fn internal_verify_start_accepts_pre_persisted_starting_record() {
     let env = build_env(BuildEnv::default_lc_only());

@@ -58,7 +58,13 @@ runs the per-language analyzer via [`LibraryAdapterRunner`], loads
 verification records from the on-disk repository, queries `git log` for
 per-file `updated_at`, projects into [`SiteData`], and writes atomically.
 
-Current fingerprint recomputation for `stale` detection is intentionally
-deferred to plan 052 — the classifier treats a missing fingerprint as
-"blocked", which folds to `Stale`/`Never` per spec §11 without corrupting
-evidence links.
+Per-solution *current* fingerprints are recomputed inline: the generator
+reuses `verification_closure` + `calculate_fingerprint` from
+`crates/usecases/src/verification/fingerprint.rs` so a `Completed` record
+whose hashed inputs still match the working tree surfaces as `Verified`,
+while any source, closure library, adapter, or `[verify]`-block drift folds
+the solution to `Stale` per spec §11.
+
+Preprocess hooks are not invoked during recomputation — site-data is
+offline — so records persisted with a source-mutating `[submit].preprocess`
+hook can legitimately read as `Stale` until the source is re-verified.

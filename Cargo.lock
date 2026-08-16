@@ -1051,6 +1051,7 @@ dependencies = [
  "libc",
  "library-adapter-protocol",
  "nix",
+ "parking_lot",
  "reqwest",
  "rpassword",
  "secrecy",
