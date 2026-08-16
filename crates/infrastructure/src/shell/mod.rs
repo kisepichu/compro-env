@@ -322,7 +322,7 @@ pub fn run() -> Result<()> {
                 };
                 let runner = crate::library_adapter::process::ProcessLibraryAdapterRunner::new(
                     root.clone(),
-                    std::collections::BTreeMap::new(),
+                    crate::library_adapter::language_plans::sanitized_language_env(),
                 );
                 let analyzer = crate::library_analyzer_impl::ProcessLibraryAnalyzer::new(
                     runner,
