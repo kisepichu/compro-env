@@ -913,8 +913,7 @@ fn resume_via_recovery(
         Err(RecoverSubmissionError::Infrastructure { kind, summary: msg }) => {
             let updated_at = ports.clock.now();
             let retryable = is_retryable_kind(&kind);
-            let (retry_count, next_retry_at) =
-                schedule_retry(&rec.state, retryable, updated_at);
+            let (retry_count, next_retry_at) = schedule_retry(&rec.state, retryable, updated_at);
             let failure = InfrastructureFailure {
                 stage: FailureStage::Prepare,
                 error_kind: map_infra_kind(&kind),
