@@ -464,17 +464,20 @@ impl GitHubVerificationStateWriter {
     /// Toggle the bot PR between draft and ready-for-review, optionally
     /// enabling auto-merge for terminal results (spec §15.1, §15.2).
     ///
-    /// Draft/ready is toggled via `PATCH /repos/{owner}/{repo}/pulls/{n}`
-    /// with a `{ "draft": bool }` body. Auto-merge is enabled by posting
-    /// the `enablePullRequestAutoMerge` GraphQL mutation to
-    /// `{base_url}/graphql`.
+    /// Both transitions go through GraphQL mutations. REST's
+    /// `PATCH /pulls/{n}` does not accept a `draft` field on the request
+    /// body — GitHub silently returns 200 without changing state — so the
+    /// writer routes Draft → Ready through `markPullRequestReadyForReview`
+    /// and Ready → Draft through `convertPullRequestToDraft`. Auto-merge is
+    /// enabled by posting the `enablePullRequestAutoMerge` mutation.
     ///
-    /// GitHub's GraphQL mutation requires the PR's opaque base64-shaped
-    /// **node id** (e.g. `PR_kwDO...`), not the numeric PR number, so when
-    /// `auto_merge` is requested the writer first resolves the number to
-    /// its node id via `GET /repos/{owner}/{repo}/pulls/{n}` (reading the
-    /// `.node_id` field) before performing the PATCH and the mutation. Only
-    /// the auto-merge path incurs the extra REST call.
+    /// GitHub's GraphQL mutations require the PR's opaque base64-shaped
+    /// **node id** (e.g. `PR_kwDO...`), not the numeric PR number. Every
+    /// branch resolves the node id via `GET /repos/{owner}/{repo}/pulls/{n}`
+    /// (reading the `.node_id` field) before issuing the mutation(s), so
+    /// the two-request minimum applies to both `Draft` and `Ready`; the
+    /// `auto_merge: true` sub-case adds a third request for the auto-merge
+    /// mutation.
     ///
     /// The writer must have a bound repository before this call — either
     /// through a prior [`persist`] or an explicit [`bind_repository`]. That

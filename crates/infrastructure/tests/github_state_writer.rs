@@ -1004,6 +1004,62 @@ fn set_pull_request_state_ready_resolves_node_id_then_enables_auto_merge() {
 }
 
 #[test]
+fn set_pull_request_state_ready_without_auto_merge_skips_auto_merge_mutation() {
+    // `Ready { auto_merge: false }` must run the Draft → Ready flip via
+    // GraphQL and stop there. It must not send `enablePullRequestAutoMerge`
+    // and must not send any REST PATCH (which GitHub silently ignores).
+    let script = vec![
+        Reply::json(
+            200,
+            serde_json::json!({
+                "number": 7,
+                "node_id": "PR_kwDOTEST",
+                "draft": true,
+            }),
+        ),
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": {
+                    "markPullRequestReadyForReview": { "clientMutationId": "ok" }
+                }
+            }),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+    w.bind_repository("owner/repo").expect("bind repo");
+
+    w.set_pull_request_state(BotPullRequestState::Ready {
+        pull_request_number: 7,
+        auto_merge: false,
+    })
+    .expect("mark ready without auto-merge");
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 2, "expected 2 requests, got {recorded:#?}");
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(recorded[0].url, "/repos/owner/repo/pulls/7");
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/graphql");
+    let body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    let query = body["query"].as_str().unwrap();
+    assert!(
+        query.contains("markPullRequestReadyForReview"),
+        "graphql body missing markReady mutation: {query}"
+    );
+    assert!(
+        !query.contains("enablePullRequestAutoMerge"),
+        "auto_merge: false must not enable auto-merge, got: {query}"
+    );
+    assert_eq!(body["variables"]["pullRequestId"], "PR_kwDOTEST");
+    assert!(
+        !recorded.iter().any(|r| r.method == "PATCH"),
+        "no PATCH must be issued for Draft → Ready, got {recorded:#?}"
+    );
+}
+
+#[test]
 fn set_pull_request_state_ready_errors_when_graphql_returns_errors() {
     // GraphQL returns HTTP 200 even when the mutation itself failed — the
     // real signal lives in the response body's `errors` array. The writer
