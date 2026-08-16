@@ -260,6 +260,29 @@ fn split_repository(repo: &str) -> PersistResult<(&str, &str)> {
     Ok((owner, name))
 }
 
+/// GraphQL responses always return HTTP 200 on protocol success, even when the
+/// mutation itself failed. Callers must inspect the top-level `errors` array
+/// and surface a [`PersistError::GraphqlError`] tagged with the mutation `op`.
+/// Only the error count crosses the boundary — the raw body may echo repo or
+/// token metadata and must never leak into error surfaces.
+fn check_graphql_body(text: &str, op: &'static str) -> PersistResult<()> {
+    #[derive(Deserialize)]
+    struct GraphqlBody {
+        #[serde(default)]
+        errors: Option<Vec<serde_json::Value>>,
+    }
+    let parsed: GraphqlBody = serde_json::from_str(text).map_err(PersistError::from)?;
+    if let Some(errs) = parsed.errors
+        && !errs.is_empty()
+    {
+        return Err(PersistError::GraphqlError {
+            op,
+            count: errs.len(),
+        });
+    }
+    Ok(())
+}
+
 // ─── Writer ──────────────────────────────────────────────────────────────────
 
 /// GitHub verification-state writer.
@@ -490,8 +513,6 @@ impl GitHubVerificationStateWriter {
             BotPullRequestState::Draft {
                 pull_request_number,
             } => {
-                // Ready → Draft path is unchanged: `convert_pr_to_draft`
-                // resolves the node id and invokes the GraphQL mutation.
                 self.convert_pr_to_draft(pull_request_number)?;
             }
             BotPullRequestState::Ready {
@@ -999,21 +1020,7 @@ impl GitHubVerificationStateWriter {
             });
         }
         let text = resp.text().map_err(PersistError::from)?;
-        #[derive(Deserialize)]
-        struct GraphqlBody {
-            #[serde(default)]
-            errors: Option<Vec<serde_json::Value>>,
-        }
-        let parsed: GraphqlBody = serde_json::from_str(&text).map_err(PersistError::from)?;
-        if let Some(errs) = parsed.errors
-            && !errs.is_empty()
-        {
-            return Err(PersistError::GraphqlError {
-                op: "POST graphql (convertPullRequestToDraft)",
-                count: errs.len(),
-            });
-        }
-        Ok(())
+        check_graphql_body(&text, "POST graphql (convertPullRequestToDraft)")
     }
 
     /// Resolve a numeric PR number to GitHub's opaque node id.
@@ -1071,21 +1078,7 @@ impl GitHubVerificationStateWriter {
             });
         }
         let text = resp.text().map_err(PersistError::from)?;
-        #[derive(Deserialize)]
-        struct GraphqlBody {
-            #[serde(default)]
-            errors: Option<Vec<serde_json::Value>>,
-        }
-        let parsed: GraphqlBody = serde_json::from_str(&text).map_err(PersistError::from)?;
-        if let Some(errs) = parsed.errors
-            && !errs.is_empty()
-        {
-            return Err(PersistError::GraphqlError {
-                op: "POST graphql (markPullRequestReadyForReview)",
-                count: errs.len(),
-            });
-        }
-        Ok(())
+        check_graphql_body(&text, "POST graphql (markPullRequestReadyForReview)")
     }
 
     fn enable_auto_merge(&self, pull_request_node_id: &str) -> PersistResult<()> {
@@ -1101,11 +1094,6 @@ impl GitHubVerificationStateWriter {
         });
         let resp = self.authed(self.http.post(&url)).json(&body).send()?;
         let status = resp.status();
-        // GraphQL uniformly returns 200 on protocol success even when the
-        // mutation itself failed; the real signal lives in the response body's
-        // top-level `errors` array. We must NOT surface the raw body — it can
-        // echo internal repo/token metadata — so only the count of errors is
-        // exposed to the caller.
         if !status.is_success() {
             let _ = resp.text();
             return Err(PersistError::UpstreamStatus {
@@ -1114,21 +1102,7 @@ impl GitHubVerificationStateWriter {
             });
         }
         let text = resp.text().map_err(PersistError::from)?;
-        #[derive(Deserialize)]
-        struct GraphqlBody {
-            #[serde(default)]
-            errors: Option<Vec<serde_json::Value>>,
-        }
-        let parsed: GraphqlBody = serde_json::from_str(&text).map_err(PersistError::from)?;
-        if let Some(errs) = parsed.errors
-            && !errs.is_empty()
-        {
-            return Err(PersistError::GraphqlError {
-                op: "POST graphql (enablePullRequestAutoMerge)",
-                count: errs.len(),
-            });
-        }
-        Ok(())
+        check_graphql_body(&text, "POST graphql (enablePullRequestAutoMerge)")
     }
 
     fn read_sha(resp: reqwest::blocking::Response, op: &'static str) -> PersistResult<String> {
