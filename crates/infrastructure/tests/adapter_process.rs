@@ -40,8 +40,46 @@ fn empty_request(language: &str) -> AnalysisRequest {
     }
 }
 
-fn runner(env: BTreeMap<String, String>) -> ProcessLibraryAdapterRunner {
-    ProcessLibraryAdapterRunner::new(std::env::current_dir().unwrap(), env)
+/// Test-local runner wrapper that captures the sanitized child env so the
+/// existing `.analyze(exe, req, timeout)` call sites can stay unchanged
+/// after the trait moved env from the runner constructor to a per-call
+/// argument.
+struct EnvRunner {
+    inner: ProcessLibraryAdapterRunner,
+    env: BTreeMap<String, String>,
+}
+
+impl EnvRunner {
+    fn analyze(
+        &self,
+        executable: &Path,
+        request: &AnalysisRequest,
+        timeout: Duration,
+    ) -> Result<library_adapter_protocol::AnalysisResponse, AdapterRunError> {
+        self.inner.analyze(executable, request, timeout, &self.env)
+    }
+
+    fn with_stdout_limit_bytes(mut self, limit: usize) -> Self {
+        self.inner = self.inner.with_stdout_limit_bytes(limit);
+        self
+    }
+
+    fn with_stderr_tail_bytes(mut self, limit: usize) -> Self {
+        self.inner = self.inner.with_stderr_tail_bytes(limit);
+        self
+    }
+
+    fn with_extra_args(mut self, args: Vec<String>) -> Self {
+        self.inner = self.inner.with_extra_args(args);
+        self
+    }
+}
+
+fn runner(env: BTreeMap<String, String>) -> EnvRunner {
+    EnvRunner {
+        inner: ProcessLibraryAdapterRunner::new(std::env::current_dir().unwrap()),
+        env,
+    }
 }
 
 fn minimal_env() -> BTreeMap<String, String> {
@@ -206,8 +244,7 @@ cat >/dev/null
 head -c 10240 /dev/urandom | base64
 "#,
     );
-    let r = ProcessLibraryAdapterRunner::new(std::env::current_dir().unwrap(), minimal_env())
-        .with_stdout_limit_bytes(512);
+    let r = runner(minimal_env()).with_stdout_limit_bytes(512);
     let err = r
         .analyze(&script, &empty_request("rust"), Duration::from_secs(5))
         .unwrap_err();
@@ -231,8 +268,7 @@ done
 exit 1
 "#,
     );
-    let r = ProcessLibraryAdapterRunner::new(std::env::current_dir().unwrap(), minimal_env())
-        .with_stderr_tail_bytes(512);
+    let r = runner(minimal_env()).with_stderr_tail_bytes(512);
     let err = r
         .analyze(&script, &empty_request("rust"), Duration::from_secs(5))
         .unwrap_err();
@@ -320,7 +356,7 @@ JSON
     );
     let mut env = minimal_env();
     env.insert("CE_ADAPTER_TAG".into(), "allowed".into());
-    let r = ProcessLibraryAdapterRunner::new(std::env::current_dir().unwrap(), env);
+    let r = runner(env);
     let response = r
         .analyze(&script, &empty_request("rust"), Duration::from_secs(5))
         .unwrap();
@@ -371,8 +407,8 @@ JSON
 "#,
         ),
     );
-    let r = ProcessLibraryAdapterRunner::new(std::env::current_dir().unwrap(), minimal_env())
-        .with_extra_args(vec!["--first".into(), "value with space".into()]);
+    let r =
+        runner(minimal_env()).with_extra_args(vec!["--first".into(), "value with space".into()]);
     let _ = r
         .analyze(&script, &empty_request("rust"), Duration::from_secs(5))
         .unwrap();

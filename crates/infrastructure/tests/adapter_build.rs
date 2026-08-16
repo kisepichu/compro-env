@@ -159,8 +159,14 @@ fn request_for(td: &Path, plans: Vec<LanguageBuildPlan>) -> BuildRequest {
     }
 }
 
-fn runner_with(env: BTreeMap<String, String>) -> ProcessLibraryAdapterRunner {
-    ProcessLibraryAdapterRunner::new(std::env::current_dir().unwrap(), env)
+fn runner_with(_env: BTreeMap<String, String>) -> ProcessLibraryAdapterRunner {
+    // `ProcessLibraryAdapterRunner` no longer owns an env: each `analyze`
+    // (and therefore each `handshake_adapter`) call takes the sanitized
+    // env directly, sourced from `LanguageBuildPlan::handshake_environment`.
+    // The env argument is kept for callsite readability at the tests, so
+    // the intent-carrying `allowlist_path_env()` value still appears next
+    // to the plan it will feed.
+    ProcessLibraryAdapterRunner::new(std::env::current_dir().unwrap())
 }
 
 // ─── Successful atomic switch ───────────────────────────────────────────────

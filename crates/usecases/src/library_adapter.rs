@@ -4,6 +4,7 @@
 //! future in-process runner without pulling `std::process` into the domain or
 //! use-case layers.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ pub trait LibraryAdapterRunner {
         executable: &Path,
         request: &AnalysisRequest,
         timeout: Duration,
+        environment: &BTreeMap<String, String>,
     ) -> Result<AnalysisResponse, AdapterRunError>;
 }
 

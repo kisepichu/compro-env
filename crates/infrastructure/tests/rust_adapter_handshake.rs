@@ -39,26 +39,21 @@ fn workspace_root() -> &'static Path {
         }
     })
 }
-
-/// Environment allowlist that mirrors `sanitized_language_env`: enough to run
-/// rustup shims and rustc, nothing more.
+/// Environment allowlist for the Rust analyzer's handshake. This mirrors
+/// exactly what `build_analyze_envs` hands to Rust at run time
+/// (`analyze_language_env` → `sanitized_language_env`), so any drift in
+/// the production env will surface here.
 fn sanitized_env() -> BTreeMap<String, String> {
-    let mut env = BTreeMap::new();
-    for key in [
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "CARGO_HOME",
-        "RUSTUP_HOME",
-    ] {
-        if let Ok(v) = std::env::var(key) {
-            env.insert(key.into(), v);
-        }
-    }
-    env.entry("PATH".into())
-        .or_insert_with(|| "/usr/bin:/bin".into());
-    env
+    use domain::adapter_build::TargetPlatform;
+    use infrastructure::library_adapter::language_plans::analyze_language_env;
+
+    // Rust does not consult the prepared set; pass the workspace root as a
+    // safe stand-in — `analyze_language_env` inspects it only for Lean.
+    let platform = TargetPlatform {
+        os: std::env::consts::OS.into(),
+        arch: std::env::consts::ARCH.into(),
+    };
+    analyze_language_env(workspace_root(), &platform, "rust").expect("rust analyze env")
 }
 
 /// Build `ce-library-rust-analyzer` (release) once per test process and return
@@ -104,9 +99,10 @@ fn empty_rust_request() -> AnalysisRequest {
 #[serial]
 fn rust_adapter_handshake_returns_ce_rust_identity() {
     let bin = built_rust_analyzer();
-    let runner = ProcessLibraryAdapterRunner::new(workspace_root().to_path_buf(), sanitized_env());
+    let runner = ProcessLibraryAdapterRunner::new(workspace_root().to_path_buf());
+    let env = sanitized_env();
     let response = runner
-        .analyze(bin, &empty_rust_request(), Duration::from_secs(30))
+        .analyze(bin, &empty_rust_request(), Duration::from_secs(30), &env)
         .expect("handshake succeeds");
 
     assert_eq!(response.schema_version, SCHEMA_VERSION);
