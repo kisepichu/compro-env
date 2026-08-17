@@ -133,13 +133,16 @@ jobs:
         # Mirrors verify-worker's `--check` fast-path: a warm cache
         # restore already leaves a finalized `builds/<id>/`, and
         # `library-adapter-build` refuses to overwrite it. `--check`
-        # returns 0 only when `bin` is a valid symlink into a matching
-        # finalized build, so re-invoking the driver only fires on a
-        # cold cache or a mismatched restore.
+        # is a diagnostic and returns 0 even when nothing is built yet
+        # (see the `build_state` module: `CurrentBinMissing` is a
+        # reportable state, not a gate failure). Testing `-L
+        # target/library-analyzers/bin` first resolves the ambiguity —
+        # without a cache restore the symlink is absent, so we fall
+        # through to a real build.
         if: inputs.solution == null || inputs.solution == ''
         run: |
           set -euo pipefail
-          if ./tools/library-analyzers/build --check; then
+          if [ -L target/library-analyzers/bin ] && ./tools/library-analyzers/build --check; then
             echo "Cache restored a fully-finalized analyzer build set; skipping re-invocation."
             exit 0
           fi
