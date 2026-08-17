@@ -189,16 +189,17 @@ jobs:
         # mutating a published build set). A warm cache restore replays
         # a previous completed build, so re-invoking the driver would fail
         # with `build directory already exists`. Use the driver's own
-        # `--check` mode to validate the on-disk state: it returns 0 only
-        # when `bin` is a valid symlink into an already-finalized
-        # `builds/<id>/` with a matching manifest and no in-progress
-        # marker. Any partial / stale / mismatched state exits non-zero,
-        # so a fresh build is invoked in exactly the cases where it is
-        # needed.
+        # `--check` mode to validate the on-disk state — but note that
+        # `--check` is a diagnostic and returns 0 even when nothing is
+        # built yet (see the `build_state` module: `CurrentBinMissing`
+        # is a reportable state, not a gate failure). Testing `-L
+        # target/library-analyzers/bin` first resolves the ambiguity —
+        # without a cache restore the symlink is absent, so we fall
+        # through to a real build.
         if: inputs.solution != ''
         run: |
           set -euo pipefail
-          if ./tools/library-analyzers/build --check; then
+          if [ -L target/library-analyzers/bin ] && ./tools/library-analyzers/build --check; then
             echo "Cache restored a fully-finalized analyzer build set; skipping re-invocation."
             exit 0
           fi

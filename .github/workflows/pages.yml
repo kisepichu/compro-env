@@ -84,9 +84,15 @@ jobs:
         run: ./tools/library-analyzers/prepare
 
       - name: Build library analyzer executables
+        # `--check` is a diagnostic and returns 0 even when nothing is
+        # built yet (see the `build_state` module: `CurrentBinMissing`
+        # is a reportable state, not a gate failure). Testing `-L
+        # target/library-analyzers/bin` first resolves the ambiguity —
+        # without a cache restore the symlink is absent, so we fall
+        # through to a real build.
         run: |
           set -euo pipefail
-          if ./tools/library-analyzers/build --check; then
+          if [ -L target/library-analyzers/bin ] && ./tools/library-analyzers/build --check; then
             echo "Warm cache: analyzer build already finalized."
             exit 0
           fi
