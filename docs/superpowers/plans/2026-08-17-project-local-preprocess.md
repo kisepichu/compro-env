@@ -92,9 +92,7 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
   - env も未設定 → cwd/`src`（fallback。テストでは常に env を渡す）。
 - 循環検出: `visited: set[Path]` に `resolve()` した絶対パスを積む。展開中のファイルが再度参照されたら `sys.stderr` にエラーを吐いて `sys.exit(2)`。
 - ファイル欠損 / 非 UTF-8 → 同様に非 0 exit（1: file not found, 3: not-UTF-8）。
-- comment / string literal 内の `#[path]`-風文字列は簡易除外:
-  - 正規表現マッチ前に `//` 行末コメント、`/* … */` ブロックコメント、`"…"` string literal、`r"…"` / `r#"…"#` raw string literal を「同長のスペース列」に置換したスキャンバッファを作る（オリジナル位置と 1:1 対応させて置換位置を保存）。
-  - 「同長スペース置換」が実装上重いなら、素の regex での誤検出はサンプル解法で発生しない範囲で許容してよい（この方針は user brief で明示的に許可）。
+- comment / string literal 内の `#[path]`-風文字列: **素の regex で走査し、誤検出を許容する** (user brief で明示的に許可された路線)。サンプル解法で `//` 行末コメントや `"..."` string literal 内に本物の `#[path = "..."]` 相当が現れる状況はまず起きない前提。将来「同長のスペース列で comment / string を潰したスキャンバッファ」実装に格上げする可能性は残すが、本 plan のスコープ外。
 - 出力: 展開後 source を stdout に、末尾改行 1 個で終わるよう normalize する。
 - 「diamond dependency」（A → B → D, A → C → D）は **重複展開が仕様どおり**。B と C はそれぞれの親スコープを持ち、Rust の module システムでは `crate::b::d` と `crate::c::d` が別 module として存在するため、bundler が両方に `mod d { … }` を出しても重複定義エラーにはならない（rustc で確認済み）。`visited.discard(target)` を DFS 巻き戻し時に呼ぶ現行設計はこの Rust semantics に合致しており、意図的な選択。「同一親スコープに同じ module 名が 2 回」というケースは元のソースが Rust としてすでに不正なので bundler の責務外。
 - 既知の限界: bare `mod NAME;` の暗黙解決は「現在処理中のファイルの親ディレクトリ」を基準に行い、`mod outer { mod inner; }` のような inline module 内でも Rust 本来の `<outer>/inner.rs` サブディレクトリを参照しない (regex は inline ブロックの nesting を追跡しない)。inline module 内でファイルを include したい場合は必ず `#[path]` 属性を明示すること。競プロ想定のサンプル解法では bare `mod` を top-level だけで使うため実害はない前提。この limitation は `docs/operations/library-expand.md` にも明記する。
@@ -281,10 +279,8 @@ esac
 > **限界 (nesting 未追跡)**: bare `mod NAME;` の解決は常に「処理中のファイルの親ディレクトリ」を基準に行い、`mod outer { mod inner; }` のような inline module 内でも Rust 本来の `<outer>/inner.rs` を参照しない。inline module 内でファイルを include したい場合は必ず `#[path]` 属性を書く。sample 解法では bare `mod` を top-level に限る運用で実害なし。
 
 ### コメント/文字列の扱い
-- 簡易除外: 正規表現マッチ前に `//` 行末コメント、`/* … */` ブロックコメント、`"…"` / `r"…"` /
-  `r#"…"#` string literal を「同長スペース列」に置換したスキャン用バッファを作る。マッチ位置は
-  この scan buffer で検出し、置換はオリジナル source に対して行う。
-- 上記実装が難しければ素の regex で誤検出を許容してよい (user 判断: サンプル解法で発生しない範囲)。
+- **採用**: 素の regex で走査し、コメント / 文字列 literal 内の誤検出は許容する (sample 解法で発生しない前提)。
+- **将来拡張**: `//` 行末コメント、`/* … */` ブロックコメント、`"…"` / `r"…"` / `r#"…"#` string literal を「同長スペース列」に置換したスキャン用バッファを別途作り、マッチ位置検出だけそちらで行う。実装コスト高のため必要になった時点で切り替える。
 
 ### entry file の決定
 - 引数 (`python3 rust_expand.py <entry_file>`) を優先。
@@ -1005,14 +1001,14 @@ from typing import NoReturn
 
 COMBINED_MOD_RE = re.compile(
     r"""^[ \t]*                                    # anchored to line start (re.MULTILINE)
-        (?:                                        # optional #[path = "REL"] prefix
-          \#\s*\[\s*path\s*=\s*"(?P<path>[^"]+)"\s*\]\s+
-          (?P<extra_attrs>(?:\#\s*\[[^\]]*\]\s+)*) # additional attributes to preserve (e.g. #[allow(...)])
-        )?                                         # \s+ covers `newline + indent` and single space
+        (?P<attrs>(?:\#\s*\[[^\]]*\]\s+)*)         # zero or more leading attributes (any kind, incl. #[path])
         (?P<vis>pub(?:\s*\(\s*[^)]+\s*\))?\s+)?
         mod\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;""",
     re.MULTILINE | re.VERBOSE,
 )
+
+# Individual `#[path = "..."]` picker for the callback below.
+PATH_ATTR_RE = re.compile(r'\#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]\s*')
 
 
 def die(code: int, msg: str) -> NoReturn:
@@ -1038,14 +1034,18 @@ def expand_source(source: str, entry_dir: Path, visited: set[Path]) -> str:
     # `entry_dir` after the sub-body was spliced in, which would wrongly
     # resolve it against a same-named file in the outer directory.
     def repl(m: re.Match[str]) -> str:
-        rel_path = m.group("path")
         name = m.group("name")
         vis = (m.group("vis") or "").strip()
         vis_prefix = f"{vis} " if vis else ""
-        # Preserve any `#[allow(...)]` / `#[cfg(...)]` etc. that sat between
-        # #[path] and mod so we don't silently change semantics.
-        extras_raw = (m.group("extra_attrs") or "").strip()
-        extras_prefix = f"{extras_raw}\n" if extras_raw else ""
+        # Attributes may appear in any order (e.g. `#[allow(...)] #[path = "..."]`
+        # or `#[path = "..."] #[cfg(test)]`). Extract the last `#[path]` — Rust
+        # only honors one — and preserve everything else on top of the expanded
+        # `mod NAME { ... }` so semantics (cfg-gating, allow-lints) survive.
+        attrs_raw = m.group("attrs") or ""
+        path_matches = list(PATH_ATTR_RE.finditer(attrs_raw))
+        rel_path = path_matches[-1].group(1) if path_matches else None
+        other_attrs = PATH_ATTR_RE.sub("", attrs_raw).strip()
+        extras_prefix = f"{other_attrs}\n" if other_attrs else ""
         if rel_path is not None:
             target = (entry_dir / rel_path).resolve()
             if not target.is_file():
@@ -1057,8 +1057,9 @@ def expand_source(source: str, entry_dir: Path, visited: set[Path]) -> str:
                     target = cand.resolve()
                     break
             if target is None:
-                # Passthrough: leave the declaration verbatim so the caller
-                # can still compile against std / external crates. Warn once.
+                # Passthrough: leave the declaration verbatim (attributes and
+                # all) so the caller can still compile against std / external
+                # crates. Warn once.
                 print(
                     f"rust_expand: warning: unresolved mod {name}",
                     file=sys.stderr,
