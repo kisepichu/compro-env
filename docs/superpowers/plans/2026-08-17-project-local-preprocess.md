@@ -669,9 +669,14 @@ PreprocessContext {
 `crates/usecases/src/service/verify.rs::run_preprocess`:
 
 ```rust
-// 既存の env チェーンに以下 2 行を追加。CE_SOURCE_FILE は rust_expand.py が
-// entry_dir を導出するために必須 (submit.rs::run_preprocess_hook は既に
-// CE_SOURCE_FILE を設定しているので、verify 経路とここで同期させる)。
+// `run_preprocess(command, source, solution_id, language, oj, repository_root, entry_rel)`
+// の既存パラメータ `entry_rel: &str` (呼び出し側 `build_plan_context` で
+// `published.root + '/' + published.entry` として構築される、解法エントリの
+// リポジトリ相対パス。例: `solutions/librarychecker-aplusb/aplusb/rust/src/main.rs`)
+// と `repository_root: &Path` をそのまま使い、既存 env チェーンに以下 2 行を追加。
+// CE_SOURCE_FILE は rust_expand.py が entry_dir を導出するために必須
+// (submit.rs::run_preprocess_hook は既に CE_SOURCE_FILE を設定しているので、
+// verify 経路とここで同期させる)。
 .env("CE_PROJECT_ROOT", repository_root)
 .env("CE_SOURCE_FILE", repository_root.join(entry_rel))
 ```
