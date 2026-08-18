@@ -96,6 +96,7 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
   - 正規表現マッチ前に `//` 行末コメント、`/* … */` ブロックコメント、`"…"` string literal、`r"…"` / `r#"…"#` raw string literal を「同長のスペース列」に置換したスキャンバッファを作る（オリジナル位置と 1:1 対応させて置換位置を保存）。
   - 「同長スペース置換」が実装上重いなら、素の regex での誤検出はサンプル解法で発生しない範囲で許容してよい（この方針は user brief で明示的に許可）。
 - 出力: 展開後 source を stdout に、末尾改行 1 個で終わるよう normalize する。
+- 「diamond dependency」（A → B → D, A → C → D）は **重複展開が仕様どおり**。B と C はそれぞれの親スコープを持ち、Rust の module システムでは `crate::b::d` と `crate::c::d` が別 module として存在するため、bundler が両方に `mod d { … }` を出しても重複定義エラーにはならない（rustc で確認済み）。`visited.discard(target)` を DFS 巻き戻し時に呼ぶ現行設計はこの Rust semantics に合致しており、意図的な選択。「同一親スコープに同じ module 名が 2 回」というケースは元のソースが Rust としてすでに不正なので bundler の責務外。
 
 ### D7. Docs: 別ファイルか節追加か
 
@@ -555,12 +556,13 @@ impl ConfigImpl {
 /// Value の resolve ルール (docs/commands/submit.md 参照)。
 fn resolve_project_local_preprocess(raw: &str, project_root: &Path) -> String {
     let trimmed = raw.trim();
-    // 絶対パス・tilde・空白 (= 引数付きコマンド) はそのまま
+    // 絶対パス・tilde・空白 (= 引数付きコマンド) はそのまま。ただし toml 側で
+    // 誤って前後空白が混入していても sh -c に漏らさないよう trim 済み値を使う。
     if trimmed.starts_with('/')
         || trimmed.starts_with('~')
         || trimmed.chars().any(char::is_whitespace)
     {
-        return raw.to_string();
+        return trimmed.to_string();
     }
     project_root.join(trimmed).to_string_lossy().into_owned()
 }
@@ -1013,18 +1015,33 @@ fail=0
 
 diff_case() {
     local case_dir="$1"
+    local expected_stderr_fragment="${2:-}"
     local entry="$case_dir/main.rs.in"
     local expected="$case_dir/main.rs.expected"
-    # Pipe stdout straight into `diff`. Capturing via `actual=$(…)` would
-    # strip trailing newlines, but the bundler normalizes its output to end
-    # with exactly one `\n` and `.expected` files also carry one — the
-    # capture would guarantee a "\ No newline at end of file" mismatch.
-    if ! python3 "$SCRIPT" "$entry" <"$entry" | diff -u - "$expected"; then
-        echo "FAIL: $case_dir" >&2
+    local stderr_log; stderr_log="$(mktemp)"
+    # Pipe stdout straight into `diff` (capturing via `actual=$(…)` would strip
+    # the trailing newline and mismatch the on-disk `.expected` file).
+    # Redirect stderr to a file so we can also assert on warnings when the
+    # caller supplies `expected_stderr_fragment` (e.g. passthrough case).
+    if ! python3 "$SCRIPT" "$entry" <"$entry" 2>"$stderr_log" \
+            | diff -u - "$expected"; then
+        echo "FAIL: $case_dir (stdout diff)" >&2
+        cat "$stderr_log" >&2
+        rm -f "$stderr_log"
         fail=1
-    else
-        echo "ok:   $case_dir"
+        return
     fi
+    if [ -n "$expected_stderr_fragment" ]; then
+        if ! grep -q -F "$expected_stderr_fragment" "$stderr_log"; then
+            echo "FAIL: $case_dir stderr missing '$expected_stderr_fragment'" >&2
+            cat "$stderr_log" >&2
+            rm -f "$stderr_log"
+            fail=1
+            return
+        fi
+    fi
+    rm -f "$stderr_log"
+    echo "ok:   $case_dir"
 }
 
 exit_case() {
@@ -1053,9 +1070,9 @@ exit_case() {
     esac
 }
 
-for case_dir in "$FIXTURES/rust/basic" "$FIXTURES/rust/nested" "$FIXTURES/rust/passthrough"; do
-    diff_case "$case_dir"
-done
+diff_case "$FIXTURES/rust/basic"
+diff_case "$FIXTURES/rust/nested"
+diff_case "$FIXTURES/rust/passthrough" "warning: unresolved mod std_only_no_local_file"
 
 exit_case "$FIXTURES/rust/cycle" 2 "cycle detected"
 exit_case "$FIXTURES/rust/missing" 1 "file not found"
