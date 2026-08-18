@@ -44,7 +44,7 @@
 
 **Rationale:**
 - ケース 4 は「引数付きコマンド (`hooks/expand-libraries.sh --debug`)」だと絶対パス化で第 1 引数だけ書き換わらず全体を join してしまう。したがって **space 検出時は 4 ではなく 5 (下記) にフォールバック** する。
-5. 上記 4 でさらに値に ASCII space を含む場合は「shell command」とみなしてそのまま返し、資料 (`docs/commands/submit.md`) に「引数を付ける場合は `$CE_PROJECT_ROOT` を使うこと」を明記する。
+5. 上記 4 でさらに値に ASCII whitespace (space / tab) を含む場合は「shell command」とみなしてそのまま返し、資料 (`docs/commands/submit.md`) に「引数を付ける場合は `$CE_PROJECT_ROOT` を使うこと」を明記する。Unicode の NBSP (U+00A0) 等は含まれるパスとして扱う (通常は起きないが、`char::is_ascii_whitespace` で判定することで挙動を明示)。
 
 **Trade-off / 却下案:**
 - 「値をパースして最初のトークンだけ join」→ シェルクォート/エスケープを正しく扱えず脆い。
@@ -130,6 +130,7 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
 - `hooks/tests/fixtures/rust/cycle/main.rs.in` / `cycled.rs`（循環パターン、exit 2 を確認）
 - `hooks/tests/fixtures/rust/missing/main.rs.in`（欠損 `#[path]` file、exit 1 を確認）
 - `hooks/tests/fixtures/rust/passthrough/main.rs.in` / `main.rs.expected`（`mod NAME;` (path 属性なし) で `NAME.rs` が無い → passthrough + stderr 警告）
+- `hooks/tests/fixtures/rust/diamond/main.rs.in` / `main.rs.expected` / `b.rs` / `c.rs` / `shared.rs`（diamond dep: A → {B, C} → D、`shared` が両親スコープに 1 回ずつ現れることを確認）
 
 ---
 
@@ -589,7 +590,7 @@ fn resolve_project_local_preprocess(raw: &str, project_root: &Path) -> String {
     // 誤って前後空白が混入していても sh -c に漏らさないよう trim 済み値を使う。
     if trimmed.starts_with('/')
         || trimmed.starts_with('~')
-        || trimmed.chars().any(char::is_whitespace)
+        || trimmed.chars().any(|c: char| c.is_ascii_whitespace())
     {
         return trimmed.to_string();
     }
@@ -751,6 +752,8 @@ git commit -m "feat(config): [submit].preprocess を project-local で上書き�
 - Create: `hooks/tests/fixtures/rust/missing/main.rs.in`
 - Create: `hooks/tests/fixtures/rust/passthrough/`
   - `main.rs.in`, `main.rs.expected`
+- Create: `hooks/tests/fixtures/rust/diamond/`
+  - `main.rs.in`, `main.rs.expected`, `b.rs`, `c.rs`, `shared.rs`
 - Create: `hooks/tests/run.sh` (Task 4 で本体を書くが、この Task では diff 比較の骨組みだけ作る)
 
 **Interfaces:**
@@ -882,6 +885,57 @@ mod cycled;
 ```
 
 期待動作: exit 2, stderr に `cycle detected: .../cycled.rs`。
+
+**diamond** (D6 の意図確認: `visited.discard(target)` が sibling 経由の再展開を許すことを検証):
+
+`hooks/tests/fixtures/rust/diamond/main.rs.in`:
+```rust
+#[path = "b.rs"]
+mod b;
+#[path = "c.rs"]
+mod c;
+
+fn main() {}
+```
+
+`hooks/tests/fixtures/rust/diamond/b.rs`:
+```rust
+#[path = "shared.rs"]
+pub mod shared;
+```
+
+`hooks/tests/fixtures/rust/diamond/c.rs`:
+```rust
+#[path = "shared.rs"]
+pub mod shared;
+```
+
+`hooks/tests/fixtures/rust/diamond/shared.rs`:
+```rust
+pub const V: u32 = 42;
+```
+
+`hooks/tests/fixtures/rust/diamond/main.rs.expected` (骨格。空白は実装出力に合わせて微調整):
+```rust
+mod b {
+pub mod shared {
+pub const V: u32 = 42;
+
+}
+
+}
+mod c {
+pub mod shared {
+pub const V: u32 = 42;
+
+}
+
+}
+
+fn main() {}
+```
+
+期待動作: exit 0、`pub mod shared { … }` が 2 回 (`crate::b::shared` と `crate::c::shared`) 出現し、rustc でコンパイルできる (dead-code warning のみ)。`visited.discard(target)` を削除すると 2 回目が cycle エラーになるため、この fixture でリグレッションを検出できる。
 
 **missing** (欠損 file):
 
@@ -1115,6 +1169,7 @@ exit_case() {
 diff_case "$FIXTURES/rust/basic"
 diff_case "$FIXTURES/rust/nested"
 diff_case "$FIXTURES/rust/passthrough" "warning: unresolved mod std_only_no_local_file"
+diff_case "$FIXTURES/rust/diamond"
 
 exit_case "$FIXTURES/rust/cycle" 2 "cycle detected"
 exit_case "$FIXTURES/rust/missing" 1 "file not found"
