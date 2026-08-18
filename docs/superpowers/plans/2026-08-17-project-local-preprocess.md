@@ -323,9 +323,9 @@ git commit -m "docs(preprocess): project-local [submit].preprocess を仕様に�
 - Consumes: `find_project_root() -> Result<PathBuf>` (既存、`shell/mod.rs`)。
 - Produces: `pub struct ConfigImpl { project_root: PathBuf }` + `pub fn new(project_root: PathBuf) -> Self`. `Config::submit_preprocess()` の resolve 順は「project-local → global」に変更。project-local relative は絶対パス化して返す。
 
-- [ ] **Step 1: 失敗テストを 4 本追加**
+- [ ] **Step 1: 失敗テストを 6 本追加**
 
-`crates/infrastructure/src/config_impl.rs` の `#[cfg(test)] mod tests` 末尾に以下 4 テストを追加。
+`crates/infrastructure/src/config_impl.rs` の `#[cfg(test)] mod tests` 末尾に以下 6 テストを追加。
 
 ```rust
 /// project-local [submit].preprocess が global を上書きする。
@@ -936,10 +936,9 @@ from typing import NoReturn
 
 COMBINED_MOD_RE = re.compile(
     r"""^[ \t]*                                    # anchored to line start (re.MULTILINE)
-        (?:                                        # optional #[path = "REL"] on the preceding line
-          \#\s*\[\s*path\s*=\s*"(?P<path>[^"]+)"\s*\]\s*\r?\n
-          [ \t]*
-        )?
+        (?:                                        # optional #[path = "REL"] prefix (same line OR preceding line)
+          \#\s*\[\s*path\s*=\s*"(?P<path>[^"]+)"\s*\]\s+
+        )?                                         # \s+ covers `newline + indent` (two-line) and single space (one-liner)
         (?P<vis>pub(?:\s*\(\s*[^)]+\s*\))?\s+)?
         mod\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;""",
     re.MULTILINE | re.VERBOSE,
@@ -1056,7 +1055,7 @@ diff_case() {
     # Redirect stderr to a file so we can also assert on warnings when the
     # caller supplies `expected_stderr_fragment` (e.g. passthrough case).
     if ! python3 "$SCRIPT" "$entry" <"$entry" 2>"$stderr_log" \
-            | diff -u - "$expected"; then
+            | diff -u "$expected" -; then
         echo "FAIL: $case_dir (stdout diff)" >&2
         cat "$stderr_log" >&2
         rm -f "$stderr_log"
@@ -1202,7 +1201,7 @@ end_to_end_rust() {
     # Pipe to diff; capturing via $() would strip the trailing newline.
     if ! CE_LANGUAGE=rust CE_SOURCE_FILE="$entry" \
             bash "$HERE/../expand-libraries.sh" <"$entry" \
-            | diff -u - "$expected"; then
+            | diff -u "$expected" -; then
         echo "FAIL: shell rust end-to-end" >&2
         fail=1
     else
