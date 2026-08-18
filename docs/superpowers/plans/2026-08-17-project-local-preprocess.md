@@ -119,7 +119,7 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
 - `.github/workflows/ci.yml`（`cargo test` の後に `bash hooks/tests/run.sh` を実行する step を追加）
 - `crates/usecases/src/config.rs`（`Config` trait に `fn project_root(&self) -> &std::path::Path` を追加）
 - `crates/usecases/src/service/submit.rs`（`PreprocessContext.project_root` フィールド + `run_preprocess_hook` の `.env("CE_PROJECT_ROOT", …)` 追加、`prepare_submission` で `self.config.project_root()` を差し込む）
-- `crates/usecases/src/service/verify.rs`（`run_preprocess` の `.env("CE_PROJECT_ROOT", repository_root)` 追加）
+- `crates/usecases/src/service/verify.rs`（`run_preprocess` の env チェーンに `.env("CE_PROJECT_ROOT", repository_root)` と `.env("CE_SOURCE_FILE", repository_root.join(entry_rel))` を追加）
 
 **Create:**
 - `docs/operations/library-expand.md`（`hooks/expand-libraries.sh` 設計 / 言語別 branch 拡張方針）
@@ -665,8 +665,11 @@ PreprocessContext {
 `crates/usecases/src/service/verify.rs::run_preprocess`:
 
 ```rust
-// 既存の env チェーンに以下を追加
+// 既存の env チェーンに以下 2 行を追加。CE_SOURCE_FILE は rust_expand.py が
+// entry_dir を導出するために必須 (submit.rs::run_preprocess_hook は既に
+// CE_SOURCE_FILE を設定しているので、verify 経路とここで同期させる)。
 .env("CE_PROJECT_ROOT", repository_root)
+.env("CE_SOURCE_FILE", repository_root.join(entry_rel))
 ```
 
 - [ ] **Step 3c: 各 `StubConfig` に `project_root()` を追加**
