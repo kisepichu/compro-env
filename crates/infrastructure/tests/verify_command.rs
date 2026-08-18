@@ -1416,3 +1416,152 @@ fn internal_verify_start_accepts_pre_persisted_starting_record() {
         Some(&stored.attempt_id),
     );
 }
+
+/// project-local `[submit].preprocess` が verify pipeline から呼ばれ、
+/// フックの stdout が提出ソースとして採用されることを end-to-end で確認する。
+///
+/// StubConfig ではなく実 `ConfigImpl::new(root)` を差し込むことで、
+/// project-local `<root>/config.toml` の `[submit].preprocess` 解決 →
+/// `sh -c` 起動 → stdout 採用のチェーン全体を走らせる。
+#[test]
+fn verify_uses_project_local_preprocess_hook() {
+    use infrastructure::config_impl::ConfigImpl;
+    use std::os::unix::fs::PermissionsExt;
+
+    let (tmp, root, config, manifest) = make_repo(true, false, false, "true");
+    let snapshot = make_snapshot(&manifest);
+
+    // Repo-local shell hook that prepends `// bundled\n` and then cats stdin.
+    // Simulates the shape rust_expand.py's output has (a header line + body).
+    let hook = root.join("hooks/echo-bundle.sh");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\nprintf '// bundled\\n'\ncat\n").unwrap();
+    let mut perms = std::fs::metadata(&hook).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&hook, perms).unwrap();
+
+    // Write a project-local config.toml wiring `[submit].preprocess`.
+    // `make_repo` does not create one, so this is the sole config file the
+    // real `ConfigImpl` will find under `root`.
+    std::fs::write(
+        root.join("config.toml"),
+        "[submit]\npreprocess = \"hooks/echo-bundle.sh\"\n",
+    )
+    .unwrap();
+
+    // Custom starter that captures the SubmissionRequest.source so the test
+    // can assert on what was actually fed to the OJ boundary.
+    // parking_lot::Mutex avoids the poisoning-unwrap boilerplate; test-only.
+    use parking_lot::Mutex as PlMutex;
+    let captured: Arc<PlMutex<Option<String>>> = Arc::new(PlMutex::new(None));
+    struct CapturingStarter {
+        captured: Arc<PlMutex<Option<String>>>,
+        calls: Arc<PlMutex<u32>>,
+    }
+    impl SubmissionStarter for CapturingStarter {
+        fn descriptor(&self) -> SubmissionAdapterDescriptor {
+            SubmissionAdapterDescriptor {
+                name: "capture-lc".into(),
+                version: "1".into(),
+                submission_mode: SubmissionMode::UnattendedTrackable,
+                result_detail: ResultDetailLevel::TestcaseDetails,
+                recovery_mode: RecoveryMode::BestEffort,
+            }
+        }
+        fn start_submission(
+            &self,
+            request: &SubmissionRequest,
+            _session: Option<&Session>,
+        ) -> Result<SubmissionStart, StartSubmissionError> {
+            *self.calls.lock() += 1;
+            *self.captured.lock() = Some(request.source.clone());
+            Ok(SubmissionStart::Trackable {
+                handle: PortHandle {
+                    online_judge: OJKind::LibraryChecker,
+                    submission_id: "cap-1".into(),
+                    submission_url: "https://judge/cap-1".into(),
+                    locator: None,
+                    submitted_at: Utc::now(),
+                },
+            })
+        }
+    }
+    let starter_calls = Arc::new(PlMutex::new(0u32));
+    let starter = CapturingStarter {
+        captured: Arc::clone(&captured),
+        calls: Arc::clone(&starter_calls),
+    };
+
+    let mut starters = StarterRegistry::new();
+    starters.register(OJKind::LibraryChecker, Box::new(starter));
+    let mut pollers = PollerRegistry::new();
+    pollers.register(
+        OJKind::LibraryChecker,
+        Box::new(FakePoller::always_completed(JudgeVerdict::Accepted)),
+    );
+    let mut recovery = RecoveryRegistry::new();
+    recovery.register(
+        OJKind::LibraryChecker,
+        Box::new(FakeRecovery::always(RecoveryOutcome::AcceptanceUnknown)),
+    );
+
+    let service = Service::with_verification(
+        Box::new(StubOJRegistry),
+        starters,
+        Box::new(ContestRepositoryImpl::new(root.clone())),
+        Box::new(SolutionRepositoryImpl::new(root.clone())),
+        Box::new(SessionRepositoryImpl),
+        Box::new(ConfigImpl::new(root.clone())),
+        Box::new(UnixCommandRunner),
+        VerificationServices {
+            pollers,
+            recovery,
+            verifications: Box::new(VerificationRepositoryImpl::new(root.clone())),
+        },
+    );
+    let controller = Controller::new(service);
+
+    let out = controller
+        .verify(
+            &SelectionInput { selection: None },
+            &root,
+            &config,
+            &manifest,
+            &snapshot,
+            &TestClock::new(),
+            &SequenceIdGenerator::new("preproc"),
+            &NoopSleeper::new(),
+            &NoRetryHint,
+            PollingPolicy {
+                initial_interval: Duration::from_millis(1),
+                max_interval: Duration::from_millis(1),
+                max_error_backoff: Duration::from_millis(1),
+                total_budget: Duration::from_millis(50),
+            },
+        )
+        .unwrap();
+
+    let lc = find_status(&out, &lc_id()).unwrap();
+    assert!(
+        matches!(lc.status, VerifyStatus::Verified),
+        "expected Verified after preprocess-then-accept; got {:?}",
+        lc.status,
+    );
+    assert_eq!(*starter_calls.lock(), 1, "starter must be called once");
+    let source = captured
+        .lock()
+        .clone()
+        .expect("starter should have captured a submission source");
+    assert!(
+        source.starts_with("// bundled\n"),
+        "expected preprocess output prefix, got: {source:?}",
+    );
+    // The hook `cat`s the original source after the header, so the raw entry
+    // bytes should also appear intact — confirming stdin was piped through.
+    assert!(
+        source.contains("fn main(){println!(\"lc\");}"),
+        "expected the original source body to survive the preprocess `cat`, got: {source:?}",
+    );
+
+    drop(tmp);
+}

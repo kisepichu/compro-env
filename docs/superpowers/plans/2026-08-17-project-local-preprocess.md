@@ -1421,7 +1421,7 @@ git commit -m "ci: hooks/tests/run.sh を CI Rust ジョブに追加"
 - Consumes: `ConfigImpl::new(root)` を tempdir で組み立て、`Controller::verify` を呼ぶ既存パターン。
 - Produces: project-local `[submit].preprocess = "hooks/expand-libraries.sh"` が verify pipeline で呼ばれ、CE_SOURCE_FILE / cwd = repository_root / CE_LANGUAGE=rust が渡って stdout を採用することの証明。
 
-- [ ] **Step 1: 統合テストを追加**
+- [x] **Step 1: 統合テストを追加**
 
 verify_command.rs 末尾に:
 
@@ -1472,7 +1472,7 @@ fn verify_uses_project_local_preprocess_hook() {
 >
 > 判断基準: Task 7 に着手してから 45 分以内に既存 test refactor がまとまらなければ、上記代替を採る。
 
-- [ ] **Step 2: 実行 → 通す**
+- [x] **Step 2: 実行 → 通す**
 
 ```bash
 cargo test -p infrastructure --test verify_command verify_uses_project_local_preprocess_hook -- --nocapture
@@ -1480,7 +1480,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-- [ ] **Step 3: commit**
+- [x] **Step 3: commit**
 
 ```bash
 git add crates/infrastructure/tests/verify_command.rs

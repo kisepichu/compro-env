@@ -70,7 +70,10 @@ impl ConfigImpl {
         if trimmed.is_empty() {
             return None;
         }
-        Some(resolve_project_local_preprocess(trimmed, &self.project_root))
+        Some(resolve_project_local_preprocess(
+            trimmed,
+            &self.project_root,
+        ))
     }
 
     /// Reads global `[submit].preprocess` and returns the raw value unchanged
@@ -247,7 +250,10 @@ mod tests {
     #[serial]
     fn default_online_judge_returns_atcoder() {
         let root = tmp_root_without_config();
-        assert_eq!(config_at(root.path()).default_online_judge(), OJKind::AtCoder);
+        assert_eq!(
+            config_at(root.path()).default_online_judge(),
+            OJKind::AtCoder
+        );
     }
 
     /// When config.toml contains `[default]\nlanguage = "rust"`, default_language() returns Ok(Language::new("rust")).
@@ -381,7 +387,8 @@ mod tests {
         let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         let root = tmp_root_without_config();
-        let result = config_at(root.path()).lang_id(&Language::new("rust"), &OJKind::LibraryChecker);
+        let result =
+            config_at(root.path()).lang_id(&Language::new("rust"), &OJKind::LibraryChecker);
         assert_eq!(result, Some("rust".to_string()));
     }
 
@@ -398,7 +405,8 @@ mod tests {
         let _guard = EnvVarGuard::set("CE_CONFIG_DIR", tmp.path());
 
         let root = tmp_root_without_config();
-        let result = config_at(root.path()).lang_id(&Language::new("rust"), &OJKind::LibraryChecker);
+        let result =
+            config_at(root.path()).lang_id(&Language::new("rust"), &OJKind::LibraryChecker);
         assert_eq!(result, None);
     }
 
@@ -572,10 +580,7 @@ mod tests {
         )
         .unwrap();
         let config = ConfigImpl::new(project_dir.path().to_path_buf());
-        assert_eq!(
-            config.submit_preprocess(),
-            Some("~/foo/x.sh".to_string())
-        );
+        assert_eq!(config.submit_preprocess(), Some("~/foo/x.sh".to_string()));
     }
 
     /// project-local が空白を含む (引数付きコマンド) 場合はそのまま返る (絶対パス化しない)。
