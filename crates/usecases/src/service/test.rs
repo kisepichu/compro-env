@@ -192,6 +192,9 @@ mod tests {
         fn lang_id(&self, _: &Language, _: &OJKind) -> Option<String> {
             None
         }
+        fn project_root(&self) -> &std::path::Path {
+            std::path::Path::new("/tmp/stub-project-root")
+        }
     }
 
     struct StubContestRepo {

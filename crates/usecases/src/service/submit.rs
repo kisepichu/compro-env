@@ -167,6 +167,7 @@ impl Service {
                     solution_dir: &solution_dir,
                     source_file: &solution_dir.join(&file_path),
                     lang_id: &lang_id,
+                    project_root: self.config.project_root(),
                 },
             )?,
             _ => source,
@@ -193,6 +194,7 @@ struct PreprocessContext<'a> {
     solution_dir: &'a std::path::Path,
     source_file: &'a std::path::Path,
     lang_id: &'a str,
+    project_root: &'a std::path::Path,
 }
 
 /// Runs the user's preprocess `command` via `sh -c`, feeding `source` on stdin and
@@ -216,6 +218,7 @@ fn run_preprocess_hook(command: &str, source: &str, ctx: &PreprocessContext) -> 
         .env("CE_SOLUTION_DIR", ctx.solution_dir)
         .env("CE_SOURCE_FILE", ctx.source_file)
         .env("CE_LANG_ID", ctx.lang_id)
+        .env("CE_PROJECT_ROOT", ctx.project_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -393,6 +396,9 @@ mod tests {
         }
         fn lang_id(&self, _: &Language, _: &OJKind) -> Option<String> {
             self.lang_id.clone()
+        }
+        fn project_root(&self) -> &std::path::Path {
+            std::path::Path::new("/tmp/stub-project-root")
         }
     }
 

@@ -328,7 +328,7 @@ git commit -m "docs(preprocess): project-local [submit].preprocess を仕様に�
 - Consumes: `find_project_root() -> Result<PathBuf>` (既存、`shell/mod.rs`)。
 - Produces: `pub struct ConfigImpl { project_root: PathBuf }` + `pub fn new(project_root: PathBuf) -> Self`. `Config::submit_preprocess()` の resolve 順は「project-local → global」に変更。project-local relative は絶対パス化して返す。
 
-- [ ] **Step 1: 失敗テストを 6 本追加**
+- [x] **Step 1: 失敗テストを 6 本追加**
 
 `crates/infrastructure/src/config_impl.rs` の `#[cfg(test)] mod tests` 末尾に以下 6 テストを追加。
 
@@ -503,7 +503,7 @@ fn tmp_root_without_config() -> tempfile::TempDir {
 }
 ```
 
-- [ ] **Step 2: テストを実行 → 全 6 本失敗を確認**
+- [x] **Step 2: テストを実行 → 全 6 本失敗を確認**
 
 ```bash
 cargo test -p infrastructure config_impl:: -- --nocapture 2>&1 | grep -E 'FAILED|running|test result'
@@ -511,7 +511,7 @@ cargo test -p infrastructure config_impl:: -- --nocapture 2>&1 | grep -E 'FAILED
 
 **Expected:** 新しい 6 テストが `FAILED` になる（`ConfigImpl::new` が存在しない / project-local resolve 未実装）。
 
-- [ ] **Step 3: `ConfigImpl` を struct 化 + `submit_preprocess()` を書き換え**
+- [x] **Step 3: `ConfigImpl` を struct 化 + `submit_preprocess()` を書き換え**
 
 ```rust
 // crates/infrastructure/src/config_impl.rs
@@ -645,7 +645,7 @@ pub trait Config {
 }
 ```
 
-- [ ] **Step 3b: submit / verify サービスに `CE_PROJECT_ROOT` env の設定を追加**
+- [x] **Step 3b: submit / verify サービスに `CE_PROJECT_ROOT` env の設定を追加**
 
 `crates/usecases/src/service/submit.rs`:
 
@@ -681,7 +681,7 @@ PreprocessContext {
 .env("CE_SOURCE_FILE", repository_root.join(entry_rel))
 ```
 
-- [ ] **Step 3c: 各 `StubConfig` に `project_root()` を追加**
+- [x] **Step 3c: 各 `StubConfig` に `project_root()` を追加**
 
 以下 5 箇所の `impl Config for StubConfig` に、`PathBuf` フィールドと `fn project_root(&self) -> &Path { &self.project_root }` を追加する。既存の他フィールドと同じ構造:
 
@@ -707,7 +707,7 @@ impl Config for StubConfig {
 
 テスト側の `StubConfig { ... }` インスタンス化箇所 (現在 6+ 箇所) にも `project_root: std::env::temp_dir(),` 等のダミー値を追加する。既存の submit_preprocess テストでこの値が意味を持たなければ tempdir で十分。
 
-- [ ] **Step 4: `shell/mod.rs` の `ConfigImpl.` 呼び出しをすべて書き換え**
+- [x] **Step 4: `shell/mod.rs` の `ConfigImpl.` 呼び出しをすべて書き換え**
 
 該当箇所 (grep 結果より):
 
@@ -729,7 +729,7 @@ let cfg = ConfigImpl::new(root);
 ```
 を差し込む。
 
-- [ ] **Step 5: テストを実行 → 通ることを確認**
+- [x] **Step 5: テストを実行 → 通ることを確認**
 
 ```bash
 cargo test -p infrastructure config_impl:: -- --nocapture
@@ -739,7 +739,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 すべて green を確認。
 
-- [ ] **Step 6: commit**
+- [x] **Step 6: commit**
 
 ```bash
 git add \

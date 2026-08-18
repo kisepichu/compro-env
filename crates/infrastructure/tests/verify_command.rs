@@ -355,6 +355,9 @@ impl Config for StubConfig {
     fn lang_id(&self, _: &domain::entity::Language, _: &OJKind) -> Option<String> {
         None
     }
+    fn project_root(&self) -> &std::path::Path {
+        std::path::Path::new("/tmp/stub-project-root")
+    }
 }
 
 // A `Sleeper` that records durations but does not actually sleep.

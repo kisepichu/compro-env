@@ -66,7 +66,7 @@ pub fn run() -> Result<()> {
                 Some(s) => s
                     .parse::<domain::entity::OJKind>()
                     .map_err(|e| anyhow::anyhow!(e))?,
-                None => ConfigImpl.default_online_judge(),
+                None => ConfigImpl::new(std::path::PathBuf::new()).default_online_judge(),
             };
 
             // Prompt according to the OJ's credential kind.
@@ -122,7 +122,7 @@ pub fn run() -> Result<()> {
                 Some(s) => s
                     .parse::<domain::entity::OJKind>()
                     .map_err(|e| anyhow::anyhow!(e))?,
-                None => ConfigImpl.default_online_judge(),
+                None => ConfigImpl::new(std::path::PathBuf::new()).default_online_judge(),
             };
 
             match whoami_with_io(oj_kind) {
@@ -144,7 +144,7 @@ pub fn run() -> Result<()> {
                 Some(s) => s
                     .parse::<domain::entity::OJKind>()
                     .map_err(|e| anyhow::anyhow!(e))?,
-                None => ConfigImpl.default_online_judge(),
+                None => ConfigImpl::new(std::path::PathBuf::new()).default_online_judge(),
             };
 
             match logout_with_io(oj_kind.clone()) {
@@ -712,7 +712,7 @@ fn build_controller_no_root() -> Result<Controller> {
         Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SessionRepositoryImpl),
-        Box::new(ConfigImpl),
+        Box::new(ConfigImpl::new(std::path::PathBuf::new())),
         default_command_runner(),
     );
     Ok(Controller::new(service))
@@ -818,7 +818,7 @@ fn resolve_init_args(
     let language = if let Some(lang) = lang_override {
         domain::entity::Language::new(lang)
     } else {
-        ConfigImpl.default_language()?
+        ConfigImpl::new(root.to_path_buf()).default_language()?
     };
 
     validate_language(&language, root)?;
@@ -908,7 +908,7 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
         validate_language(&language, &root)?;
         language
     } else {
-        match ConfigImpl.default_language() {
+        match ConfigImpl::new(root.clone()).default_language() {
             Ok(lang) => {
                 validate_language(&lang, &root)?;
                 lang
@@ -1007,7 +1007,7 @@ pub fn new_solution_with_io(
 
     let resolved_lang = match lang_override {
         Some(l) => l.to_string(),
-        None => match ConfigImpl.default_language() {
+        None => match ConfigImpl::new(root.clone()).default_language() {
             Ok(l) => l.as_str().to_string(),
             Err(_) => prompt_language(&root)?.as_str().to_string(),
         },
@@ -1063,7 +1063,7 @@ fn resolve_new_solution_args(
         validate_language(&language, root)?;
         language
     } else {
-        let lang = ConfigImpl.default_language()?;
+        let lang = ConfigImpl::new(root.to_path_buf()).default_language()?;
         validate_language(&lang, root)?;
         lang
     };
@@ -1080,7 +1080,7 @@ fn build_controller() -> Result<Controller> {
         Box::new(ContestRepositoryImpl::new(root.clone())),
         Box::new(SolutionRepositoryImpl::new(root.clone())),
         Box::new(SessionRepositoryImpl),
-        Box::new(ConfigImpl),
+        Box::new(ConfigImpl::new(root.clone())),
         default_command_runner(),
     );
 
@@ -1107,7 +1107,7 @@ pub(crate) fn build_verify_controller(root: &std::path::Path) -> Result<Controll
         Box::new(ContestRepositoryImpl::new(root.to_path_buf())),
         Box::new(SolutionRepositoryImpl::new(root.to_path_buf())),
         Box::new(SessionRepositoryImpl),
-        Box::new(ConfigImpl),
+        Box::new(ConfigImpl::new(root.to_path_buf())),
         default_command_runner(),
         verification,
     );
