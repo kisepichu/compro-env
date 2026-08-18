@@ -1136,6 +1136,8 @@ fn run_preprocess(
         .env("CE_PROBLEM_CODE", solution_id.problem_code())
         .env("CE_SOLUTION_ID", solution_id.as_str())
         .env("CE_SOLUTION_ENTRY", entry_rel)
+        .env("CE_PROJECT_ROOT", repository_root)
+        .env("CE_SOURCE_FILE", repository_root.join(entry_rel))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

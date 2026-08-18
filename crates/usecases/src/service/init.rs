@@ -409,6 +409,10 @@ mod tests {
         fn lang_id(&self, _lang: &Language, _oj: &OJKind) -> Option<String> {
             None
         }
+
+        fn project_root(&self) -> &std::path::Path {
+            std::path::Path::new("/tmp/stub-project-root")
+        }
     }
 
     fn make_service(

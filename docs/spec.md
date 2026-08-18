@@ -87,13 +87,26 @@ OJ ごとの提出言語 ID は `[language.{lang}.{oj}].lang_id` で対応付け
 整形・ライブラリ展開・提出レイアウトをすべてユーザースクリプトに委ねる拡張点。言語別の分岐は `CE_LANGUAGE`
 env を使ってスクリプト内で行う (per-language config キーは設けない。詳細: `docs/commands/submit.md`)。
 
+`[submit].preprocess` は project-local (`<repository_root>/config.toml`) にも書ける。両方に書かれた
+場合は project-local が global を上書きする。値の解決規則:
+- 絶対パス (`/`) や tilde 始まり (`~`) は shell の展開に任せてそのまま渡す。
+- project-local 側で bare relative path (空白なし) の場合、`<repository_root>` を prefix した絶対
+  パスに書き換えてから hook 実行に渡す。
+- project-local 側で空白を含む値 (引数付きコマンド) は shell command とみなしてそのまま渡す。
+  この場合はスクリプト内で `$CE_PROJECT_ROOT` を参照してリポジトリルートを解決すること。
+- global 側は元の挙動どおり shell に丸投げ (tilde 展開は shell 依存、bare relative は cwd 依存)。
+
+**セキュリティ**: project-local `[submit].preprocess` は clone したリポジトリの `config.toml` に書かれた任意 shell スクリプト
+を `ce submit` / `ce verify` 時にユーザー権限で実行する (Makefile / `package.json` の script と同じ信頼境界)。信頼できるリポジトリでのみ `ce` を使うこと。
+
 言語はユーザーが自由に追加できる。`templates/{lang}/` ディレクトリを追加するだけで `ce` がその言語名を認識する。`[language.{name}]` セクションは提出コマンドの設定に使用する (省略した場合はデフォルト設定のみ)。
 
 テストコマンドはグローバル config には置かず、`templates/{lang}/ce.toml.tera` で言語ごとに定義する（詳細: `docs/commands/test.md`）。`ce init` 時に Tera でレンダリングされ、解法ディレクトリの `ce.toml` として保存される。
 
 ### プロジェクトローカル: `compro-env/config.toml` (任意)
 
-グローバルの同キーを上書き。
+グローバルの同キーを上書き。`[submit].preprocess` もこのキーで global を上書きできる
+(解決規則の詳細は上の §コンフィグ設計 と `docs/commands/submit.md` を参照)。
 
 ### セッション: `~/.config/ce/session.toml` (グローバル固定)
 

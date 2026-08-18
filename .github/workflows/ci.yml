@@ -54,6 +54,12 @@ jobs:
       - name: cargo fmt check
         run: cargo fmt --all --check
 
+      - name: Verify python3 is present (bundler dependency)
+        run: python3 --version
+
+      - name: hooks/tests/run.sh (rust bundler regression tests)
+        run: bash hooks/tests/run.sh
+
   site:
     name: Static site build (root + /compro-env/)
     runs-on: ubuntu-latest

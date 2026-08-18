@@ -1,0 +1,7 @@
+mod libs;
+use libs::algebra::monoid::AddMonoid;
+
+fn main() {
+    let x = AddMonoid::op(&AddMonoid::id(), &42);
+    println!("{x}");
+}

@@ -157,7 +157,7 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
 **Interfaces:**
 - Produces: 「project-local `[submit].preprocess` が global を上書き」「相対パスは project root からの相対 (project-local 側) / tilde/絶対はそのまま」の仕様確定。以降の Task は spec 記述に従う。
 
-- [ ] **Step 1: `docs/spec.md` を編集**
+- [x] **Step 1: `docs/spec.md` を編集**
 
 `docs/spec.md` §コンフィグ設計 の `[submit].preprocess` 説明パラグラフに以下を追記する。編集対象は現行の 80–88 行：
 
@@ -183,7 +183,7 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
 `### プロジェクトローカル: compro-env/config.toml (任意)` 節にも 1 行、`[submit].preprocess` が
 上書き対象キーであることを明記する。
 
-- [ ] **Step 2: `docs/commands/submit.md` を編集**
+- [x] **Step 2: `docs/commands/submit.md` を編集**
 
 現行 113–127 行の「### config キー」節を以下に置き換える：
 
@@ -243,7 +243,7 @@ repo にはユースケース別に 2 本のサンプルを同梱する:
 | -------------------- | ---------------------------------------------------------------- |
 | `CE_PROJECT_ROOT`    | リポジトリルートの絶対パス。project-local の relative (空白あり) から自解決するときに使う |
 
-- [ ] **Step 3: `docs/operations/library-expand.md` を新規作成**
+- [x] **Step 3: `docs/operations/library-expand.md` を新規作成**
 
 ```markdown
 # hooks/expand-libraries.sh 設計
@@ -307,7 +307,7 @@ esac
 アプリ (Rust クレート群) 側の変更は一切不要。
 ```
 
-- [ ] **Step 4: docs を diff で確認 → commit**
+- [x] **Step 4: docs を diff で確認 → commit**
 
 `git diff docs/` で 3 ファイルの差分を確認し、typo / リンク切れがないか目視。
 
@@ -328,7 +328,7 @@ git commit -m "docs(preprocess): project-local [submit].preprocess を仕様に�
 - Consumes: `find_project_root() -> Result<PathBuf>` (既存、`shell/mod.rs`)。
 - Produces: `pub struct ConfigImpl { project_root: PathBuf }` + `pub fn new(project_root: PathBuf) -> Self`. `Config::submit_preprocess()` の resolve 順は「project-local → global」に変更。project-local relative は絶対パス化して返す。
 
-- [ ] **Step 1: 失敗テストを 6 本追加**
+- [x] **Step 1: 失敗テストを 6 本追加**
 
 `crates/infrastructure/src/config_impl.rs` の `#[cfg(test)] mod tests` 末尾に以下 6 テストを追加。
 
@@ -503,7 +503,7 @@ fn tmp_root_without_config() -> tempfile::TempDir {
 }
 ```
 
-- [ ] **Step 2: テストを実行 → 全 6 本失敗を確認**
+- [x] **Step 2: テストを実行 → 全 6 本失敗を確認**
 
 ```bash
 cargo test -p infrastructure config_impl:: -- --nocapture 2>&1 | grep -E 'FAILED|running|test result'
@@ -511,7 +511,7 @@ cargo test -p infrastructure config_impl:: -- --nocapture 2>&1 | grep -E 'FAILED
 
 **Expected:** 新しい 6 テストが `FAILED` になる（`ConfigImpl::new` が存在しない / project-local resolve 未実装）。
 
-- [ ] **Step 3: `ConfigImpl` を struct 化 + `submit_preprocess()` を書き換え**
+- [x] **Step 3: `ConfigImpl` を struct 化 + `submit_preprocess()` を書き換え**
 
 ```rust
 // crates/infrastructure/src/config_impl.rs
@@ -645,7 +645,7 @@ pub trait Config {
 }
 ```
 
-- [ ] **Step 3b: submit / verify サービスに `CE_PROJECT_ROOT` env の設定を追加**
+- [x] **Step 3b: submit / verify サービスに `CE_PROJECT_ROOT` env の設定を追加**
 
 `crates/usecases/src/service/submit.rs`:
 
@@ -681,7 +681,7 @@ PreprocessContext {
 .env("CE_SOURCE_FILE", repository_root.join(entry_rel))
 ```
 
-- [ ] **Step 3c: 各 `StubConfig` に `project_root()` を追加**
+- [x] **Step 3c: 各 `StubConfig` に `project_root()` を追加**
 
 以下 5 箇所の `impl Config for StubConfig` に、`PathBuf` フィールドと `fn project_root(&self) -> &Path { &self.project_root }` を追加する。既存の他フィールドと同じ構造:
 
@@ -707,7 +707,7 @@ impl Config for StubConfig {
 
 テスト側の `StubConfig { ... }` インスタンス化箇所 (現在 6+ 箇所) にも `project_root: std::env::temp_dir(),` 等のダミー値を追加する。既存の submit_preprocess テストでこの値が意味を持たなければ tempdir で十分。
 
-- [ ] **Step 4: `shell/mod.rs` の `ConfigImpl.` 呼び出しをすべて書き換え**
+- [x] **Step 4: `shell/mod.rs` の `ConfigImpl.` 呼び出しをすべて書き換え**
 
 該当箇所 (grep 結果より):
 
@@ -729,7 +729,7 @@ let cfg = ConfigImpl::new(root);
 ```
 を差し込む。
 
-- [ ] **Step 5: テストを実行 → 通ることを確認**
+- [x] **Step 5: テストを実行 → 通ることを確認**
 
 ```bash
 cargo test -p infrastructure config_impl:: -- --nocapture
@@ -739,7 +739,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 すべて green を確認。
 
-- [ ] **Step 6: commit**
+- [x] **Step 6: commit**
 
 ```bash
 git add \
@@ -778,7 +778,7 @@ git commit -m "feat(config): [submit].preprocess を project-local で上書き�
 - Consumes: stdin = Rust source。引数 (optional) = entry file path。
 - Produces: stdout = 展開済み source。exit code = 0 (success), 1 (file not found), 2 (cycle), 3 (non-UTF-8)。
 
-- [ ] **Step 1: fixture in/expected を先に書く (TDD)**
+- [x] **Step 1: fixture in/expected を先に書く (TDD)**
 
 **basic** (`#[path]` 明示、単段):
 
@@ -983,7 +983,7 @@ fn main() { println!("noop"); }
 
 期待動作: exit 0, main は無変更, stderr に `warning: unresolved mod std_only_no_local_file` を含む。
 
-- [ ] **Step 2: `hooks/rust_expand.py` を実装**
+- [x] **Step 2: `hooks/rust_expand.py` を実装**
 
 ```python
 #!/usr/bin/env python3
@@ -1117,7 +1117,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: `hooks/tests/run.sh` を骨組みだけ書く (Task 4 で拡張)**
+- [x] **Step 3: `hooks/tests/run.sh` を骨組みだけ書く (Task 4 で拡張)**
 
 ```bash
 #!/usr/bin/env bash
@@ -1217,7 +1217,7 @@ exit_case "$FIXTURES/rust/missing" 1 "file not found"
 exit "$fail"
 ```
 
-- [ ] **Step 4: 実行 → fixture の期待値を実装出力に合わせて微調整**
+- [x] **Step 4: 実行 → fixture の期待値を実装出力に合わせて微調整**
 
 ```bash
 chmod +x hooks/rust_expand.py hooks/tests/run.sh
@@ -1231,7 +1231,7 @@ oracle" ではあるが、bundler の出力フォーマットが自明でない�
 **中止条件:** `cycle` と `missing` の exit code / stderr 内容だけは実装より優先で fix する。
 これらが期待通りに動かない場合は bundler 側を修正する。
 
-- [ ] **Step 5: commit**
+- [x] **Step 5: commit**
 
 ```bash
 git add hooks/rust_expand.py hooks/tests/
@@ -1250,7 +1250,7 @@ git commit -m "feat(hooks): rust bundler (rust_expand.py) + fixture テスト"
 - Consumes: stdin = source、env (`CE_LANGUAGE`, `CE_SOURCE_FILE`, ...)、cwd = 解法 dir。
 - Produces: stdout = 展開後 source。
 
-- [ ] **Step 1: `hooks/expand-libraries.sh` を作成**
+- [x] **Step 1: `hooks/expand-libraries.sh` を作成**
 
 ```sh
 #!/bin/sh
@@ -1294,7 +1294,7 @@ esac
 
 `chmod +x hooks/expand-libraries.sh`。
 
-- [ ] **Step 2: `hooks/tests/run.sh` に shell 経由の smoke を追加**
+- [x] **Step 2: `hooks/tests/run.sh` に shell 経由の smoke を追加**
 
 `diff_case` の呼び出しループの後に:
 
@@ -1341,13 +1341,13 @@ passthrough_lang lean
 passthrough_lang unknown
 ```
 
-- [ ] **Step 3: 実行 → 通す**
+- [x] **Step 3: 実行 → 通す**
 
 ```bash
 bash hooks/tests/run.sh
 ```
 
-- [ ] **Step 4: commit**
+- [x] **Step 4: commit**
 
 ```bash
 git add hooks/expand-libraries.sh hooks/tests/run.sh
@@ -1361,7 +1361,7 @@ git commit -m "feat(hooks): 言語非依存 expand-libraries.sh を追加 (rust=
 **Files:**
 - Modify: `config.toml`
 
-- [ ] **Step 1: 末尾に追記**
+- [x] **Step 1: 末尾に追記**
 
 ```toml
 
@@ -1369,7 +1369,7 @@ git commit -m "feat(hooks): 言語非依存 expand-libraries.sh を追加 (rust=
 preprocess = "hooks/expand-libraries.sh"
 ```
 
-- [ ] **Step 2: 確認 + commit**
+- [x] **Step 2: 確認 + commit**
 
 ```bash
 cargo test --workspace     # config パーサに悪影響がないことを確認
@@ -1384,7 +1384,7 @@ git commit -m "chore(config): project-local [submit].preprocess = hooks/expand-l
 **Files:**
 - Modify: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: `cargo fmt check` の後に hooks smoke step を追加**
+- [x] **Step 1: `cargo fmt check` の後に hooks smoke step を追加**
 
 ```yaml
       - name: cargo fmt check
@@ -1397,13 +1397,13 @@ git commit -m "chore(config): project-local [submit].preprocess = hooks/expand-l
         run: bash hooks/tests/run.sh
 ```
 
-- [ ] **Step 2: local で act 相当は走らせず、`bash hooks/tests/run.sh` が local で通ることを再確認**
+- [x] **Step 2: local で act 相当は走らせず、`bash hooks/tests/run.sh` が local で通ることを再確認**
 
 ```bash
 bash hooks/tests/run.sh
 ```
 
-- [ ] **Step 3: commit**
+- [x] **Step 3: commit**
 
 ```bash
 git add .github/workflows/ci.yml
@@ -1421,7 +1421,7 @@ git commit -m "ci: hooks/tests/run.sh を CI Rust ジョブに追加"
 - Consumes: `ConfigImpl::new(root)` を tempdir で組み立て、`Controller::verify` を呼ぶ既存パターン。
 - Produces: project-local `[submit].preprocess = "hooks/expand-libraries.sh"` が verify pipeline で呼ばれ、CE_SOURCE_FILE / cwd = repository_root / CE_LANGUAGE=rust が渡って stdout を採用することの証明。
 
-- [ ] **Step 1: 統合テストを追加**
+- [x] **Step 1: 統合テストを追加**
 
 verify_command.rs 末尾に:
 
@@ -1472,7 +1472,7 @@ fn verify_uses_project_local_preprocess_hook() {
 >
 > 判断基準: Task 7 に着手してから 45 分以内に既存 test refactor がまとまらなければ、上記代替を採る。
 
-- [ ] **Step 2: 実行 → 通す**
+- [x] **Step 2: 実行 → 通す**
 
 ```bash
 cargo test -p infrastructure --test verify_command verify_uses_project_local_preprocess_hook -- --nocapture
@@ -1480,7 +1480,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-- [ ] **Step 3: commit**
+- [x] **Step 3: commit**
 
 ```bash
 git add crates/infrastructure/tests/verify_command.rs
