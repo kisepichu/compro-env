@@ -1009,7 +1009,7 @@ from typing import NoReturn
 
 COMBINED_MOD_RE = re.compile(
     r"""^[ \t]*                                    # anchored to line start (re.MULTILINE)
-        (?P<attrs>(?:\#\s*\[[^\]]*\]\s+)*)         # zero or more leading attributes (any kind, incl. #[path])
+        (?P<attrs>(?:\#\s*\[[^\]]*\]\s*)*)         # zero or more leading attributes (any kind, incl. #[path]); \s* between allows adjacent-with-no-space form
         (?P<vis>pub(?:\s*\(\s*[^)]+\s*\))?\s+)?
         mod\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;""",
     re.MULTILINE | re.VERBOSE,
@@ -1133,15 +1133,24 @@ diff_case() {
     local entry="$case_dir/main.rs.in"
     local expected="$case_dir/main.rs.expected"
     local stderr_log; stderr_log="$(mktemp)"
-    # Pipe stdout straight into `diff` (capturing via `actual=$(…)` would strip
-    # the trailing newline and mismatch the on-disk `.expected` file).
-    # Redirect stderr to a file so we can also assert on warnings when the
-    # caller supplies `expected_stderr_fragment` (e.g. passthrough case).
-    if ! python3 "$SCRIPT" "$entry" <"$entry" 2>"$stderr_log" \
-            | diff -u "$expected" -; then
+    local actual_out; actual_out="$(mktemp)"
+    # Run the bundler with its exit code captured separately so we can
+    # distinguish "bundler crashed / non-zero exit" from "content mismatch".
+    # Piping directly into diff would let `pipefail` mask the bundler exit
+    # as a diff failure and print the misleading "(stdout diff)" label.
+    local py_exit=0
+    python3 "$SCRIPT" "$entry" <"$entry" >"$actual_out" 2>"$stderr_log" || py_exit=$?
+    if [ "$py_exit" -ne 0 ]; then
+        echo "FAIL: $case_dir (bundler exit $py_exit)" >&2
+        cat "$stderr_log" >&2
+        rm -f "$stderr_log" "$actual_out"
+        fail=1
+        return
+    fi
+    if ! diff -u "$expected" "$actual_out"; then
         echo "FAIL: $case_dir (stdout diff)" >&2
         cat "$stderr_log" >&2
-        rm -f "$stderr_log"
+        rm -f "$stderr_log" "$actual_out"
         fail=1
         return
     fi
@@ -1149,12 +1158,12 @@ diff_case() {
         if ! grep -q -F "$expected_stderr_fragment" "$stderr_log"; then
             echo "FAIL: $case_dir stderr missing '$expected_stderr_fragment'" >&2
             cat "$stderr_log" >&2
-            rm -f "$stderr_log"
+            rm -f "$stderr_log" "$actual_out"
             fail=1
             return
         fi
     fi
-    rm -f "$stderr_log"
+    rm -f "$stderr_log" "$actual_out"
     echo "ok:   $case_dir"
 }
 
