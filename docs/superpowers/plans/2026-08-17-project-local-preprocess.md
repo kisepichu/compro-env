@@ -1384,7 +1384,7 @@ git commit -m "chore(config): project-local [submit].preprocess = hooks/expand-l
 **Files:**
 - Modify: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: `cargo fmt check` の後に hooks smoke step を追加**
+- [x] **Step 1: `cargo fmt check` の後に hooks smoke step を追加**
 
 ```yaml
       - name: cargo fmt check
@@ -1397,13 +1397,13 @@ git commit -m "chore(config): project-local [submit].preprocess = hooks/expand-l
         run: bash hooks/tests/run.sh
 ```
 
-- [ ] **Step 2: local で act 相当は走らせず、`bash hooks/tests/run.sh` が local で通ることを再確認**
+- [x] **Step 2: local で act 相当は走らせず、`bash hooks/tests/run.sh` が local で通ることを再確認**
 
 ```bash
 bash hooks/tests/run.sh
 ```
 
-- [ ] **Step 3: commit**
+- [x] **Step 3: commit**
 
 ```bash
 git add .github/workflows/ci.yml
