@@ -109,16 +109,39 @@ https://atcoder.jp/contests/{contest_id}/submit?taskScreenName={problem_id}#ce={
 | `CE_SOLUTION_DIR`  | 解法ディレクトリの絶対パス                                         |
 | `CE_SOURCE_FILE`   | 提出元ソースファイルの絶対パス                                     |
 | `CE_LANG_ID`       | 手順 5 で解決した提出言語 ID                                       |
+| `CE_PROJECT_ROOT`  | リポジトリルートの絶対パス。project-local の relative (空白あり) から自解決するときに使う |
 
 ### config キー
 
 ```toml
+# global: ~/.config/ce/config.toml
 [submit]
 preprocess = "~/.config/ce/hooks/submit-preprocess.sh"   # 全言語共通の1本
+
+# project-local: <repository_root>/config.toml (任意、global を上書き)
+[submit]
+preprocess = "hooks/expand-libraries.sh"                 # repo 同梱の言語非依存 hook
 ```
 
-キーは `[submit].preprocess` のみ。未設定なら preprocess を行わず元ソースをそのまま提出する (後方互換)。
-`Config::submit_preprocess(&self) -> Option<String>` を返し、未設定時は `None` とする (`&Language` 引数は取らない)。
+キーは `[submit].preprocess` のみ。project-local と global の両方に書いた場合は **project-local が
+global を上書き**する。値の resolve 規則:
+
+| 値のかたち                                | 解決                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------------- |
+| `/…` (絶対パス)                           | そのまま `sh -c` に渡す                                                    |
+| `~/…` (tilde 付き)                        | そのまま `sh -c` に渡す (shell が展開)                                     |
+| project-local の bare relative (空白なし) | `<repository_root>/<値>` に絶対パス化して渡す                              |
+| project-local の relative (空白あり)      | shell command とみなしそのまま渡す。`$CE_PROJECT_ROOT` を参照して自解決    |
+| global の relative                        | 元の挙動どおり shell に丸投げ (cwd 依存)                                   |
+
+未設定なら preprocess を行わず元ソースをそのまま提出する (後方互換)。
+`Config::submit_preprocess(&self) -> Option<String>` を返し、未設定時は `None` とする
+(`&Language` 引数は取らない)。
+
+> **セキュリティ**: project-local `[submit].preprocess` は clone したリポジトリの `config.toml` に書かれた任意 shell スクリプト
+> を `ce submit` / `ce verify` 時にユーザー権限で実行する。Makefile / `package.json` の script 等と同じ信頼境界にあるため、
+> **信頼できるリポジトリでのみ `ce` を使うこと**。悪意ある `config.toml` を含む repo を clone した第三者が細工したスクリプトを
+> 実行させられるリスクがあることを念頭に置く。
 
 **言語別の分岐はアプリではなくスクリプト側で行う。** 言語は `CE_LANGUAGE` env で渡るので、
 1 本のスクリプト内で `case "$CE_LANGUAGE" in rust) ... ;; cpp) ... esac` のように分岐する。
@@ -139,9 +162,14 @@ preprocess = "~/.config/ce/hooks/submit-preprocess.sh"   # 全言語共通の1�
 
 ### スクリプト例
 
-Rust ライブラリ展開 (cargo-equip) を行う実例は `hooks/submit-preprocess.sh` にある。
-`$CE_LANGUAGE` で分岐し、Rust は `cargo equip --check` で展開後コンパイルまで検証してから提出ソースを
-stdout に出す。他言語は `cat` で素通しする雛形。
+repo にはユースケース別に 2 本のサンプルを同梱する:
+
+- `hooks/submit-preprocess.sh` — **user global 向け例**。Rust 分岐で `cargo-equip --check` を呼び、
+  他言語は `cat` 素通し。`~/.config/ce/hooks/` にコピーして使う。
+- `hooks/expand-libraries.sh` — **project-local 向け例**。言語非依存のエントリポイントで、Rust 分岐は
+  同 dir の `rust_expand.py` を呼び、solution の `#[path = "..."] mod ...;` チェーンを再帰的に inline
+  する。cpp / lean は現状素通し (別 issue で bundler を追加予定)。詳細設計は
+  `docs/operations/library-expand.md`。
 
 ## エラーケース
 

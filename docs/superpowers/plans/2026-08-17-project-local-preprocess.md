@@ -157,7 +157,7 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
 **Interfaces:**
 - Produces: 「project-local `[submit].preprocess` が global を上書き」「相対パスは project root からの相対 (project-local 側) / tilde/絶対はそのまま」の仕様確定。以降の Task は spec 記述に従う。
 
-- [ ] **Step 1: `docs/spec.md` を編集**
+- [x] **Step 1: `docs/spec.md` を編集**
 
 `docs/spec.md` §コンフィグ設計 の `[submit].preprocess` 説明パラグラフに以下を追記する。編集対象は現行の 80–88 行：
 
@@ -183,7 +183,7 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
 `### プロジェクトローカル: compro-env/config.toml (任意)` 節にも 1 行、`[submit].preprocess` が
 上書き対象キーであることを明記する。
 
-- [ ] **Step 2: `docs/commands/submit.md` を編集**
+- [x] **Step 2: `docs/commands/submit.md` を編集**
 
 現行 113–127 行の「### config キー」節を以下に置き換える：
 
@@ -243,7 +243,7 @@ repo にはユースケース別に 2 本のサンプルを同梱する:
 | -------------------- | ---------------------------------------------------------------- |
 | `CE_PROJECT_ROOT`    | リポジトリルートの絶対パス。project-local の relative (空白あり) から自解決するときに使う |
 
-- [ ] **Step 3: `docs/operations/library-expand.md` を新規作成**
+- [x] **Step 3: `docs/operations/library-expand.md` を新規作成**
 
 ```markdown
 # hooks/expand-libraries.sh 設計
@@ -307,7 +307,7 @@ esac
 アプリ (Rust クレート群) 側の変更は一切不要。
 ```
 
-- [ ] **Step 4: docs を diff で確認 → commit**
+- [x] **Step 4: docs を diff で確認 → commit**
 
 `git diff docs/` で 3 ファイルの差分を確認し、typo / リンク切れがないか目視。
 
