@@ -1078,6 +1078,10 @@ def expand_source(source: str, entry_dir: Path, visited: set[Path]) -> str:
         visited.add(target)
         body = read_utf8(target)
         expanded = expand_source(body, target.parent, visited)
+        # NOTE: DFS 巻き戻し時に visited から抜くのは意図的。sibling 経由で同じ
+        # ファイルが再展開される「diamond dependency」(A→B→D, A→C→D) を許すため。
+        # Rust の module システム上 `crate::b::d` と `crate::c::d` は別 module なので
+        # 両方に `mod d { … }` を emit するのが正しい。この行を削除するとリグレッション。
         visited.discard(target)
         return f"{extras_prefix}{vis_prefix}mod {name} {{\n{expanded}\n}}"
 
@@ -1175,6 +1179,10 @@ exit_case() {
     local actual_stderr
     set +e
     actual_stderr="$(python3 "$SCRIPT" "$entry" <"$entry" 2>&1 >/dev/null)"
+    # NOTE: `local actual_exit=$?` は宣言と代入を 1 行で行うことで、直前の
+    # コマンド置換の exit code を確実に捕捉する。もし 2 行に分けて `local
+    # actual_exit` を先に書いてしまうと、`local` 自身の exit code (0) が `$?`
+    # を上書きして actual_exit が常に 0 になる。触るときは注意。
     local actual_exit=$?
     set -e
     if [ "$actual_exit" -ne "$expected_exit" ]; then
