@@ -1361,7 +1361,7 @@ git commit -m "feat(hooks): 言語非依存 expand-libraries.sh を追加 (rust=
 **Files:**
 - Modify: `config.toml`
 
-- [ ] **Step 1: 末尾に追記**
+- [x] **Step 1: 末尾に追記**
 
 ```toml
 
@@ -1369,7 +1369,7 @@ git commit -m "feat(hooks): 言語非依存 expand-libraries.sh を追加 (rust=
 preprocess = "hooks/expand-libraries.sh"
 ```
 
-- [ ] **Step 2: 確認 + commit**
+- [x] **Step 2: 確認 + commit**
 
 ```bash
 cargo test --workspace     # config パーサに悪影響がないことを確認

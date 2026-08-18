@@ -64,3 +64,6 @@ timeout_seconds = 900
 
 [library.languages.lean.online_judges.librarychecker]
 language_id = "lean"
+
+[submit]
+preprocess = "hooks/expand-libraries.sh"
