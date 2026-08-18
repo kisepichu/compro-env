@@ -110,11 +110,14 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
 **Modify:**
 - `docs/spec.md` §コンフィグ設計（`[submit].preprocess` の project-local 対応を明記）
 - `docs/commands/submit.md` §config キー（project-local / global の resolve 順を明記、`hooks/expand-libraries.sh` へのリンク）
-- `crates/infrastructure/src/config_impl.rs` (`ConfigImpl` を struct 化、`submit_preprocess()` の resolve 順追加、`config_dir()` は残す)
+- `crates/infrastructure/src/config_impl.rs` (`ConfigImpl` を struct 化、`project_root` フィールド追加、`submit_preprocess()` の resolve 順追加、`project_root()` の trait impl 追加、`config_dir()` は残す)
 - `crates/infrastructure/src/shell/mod.rs`（`ConfigImpl.` の unit 呼び出しをすべて `ConfigImpl::new(root)` に書き換える）
-- `crates/infrastructure/tests/verify_command.rs` (Stub 側に手を入れないが、project-local e2e シナリオを追加する場合はここに寄せる)
+- `crates/infrastructure/tests/verify_command.rs` / `crates/usecases/src/service/{submit,init,new_solution,test}.rs` の `StubConfig` (project_root フィールド + `fn project_root(&self) -> &Path` を追加、既存のダミー値を返す)
 - `config.toml`（末尾に `[submit]\npreprocess = "hooks/expand-libraries.sh"\n` を追記）
 - `.github/workflows/ci.yml`（`cargo test` の後に `bash hooks/tests/run.sh` を実行する step を追加）
+- `crates/usecases/src/config.rs`（`Config` trait に `fn project_root(&self) -> &std::path::Path` を追加）
+- `crates/usecases/src/service/submit.rs`（`PreprocessContext.project_root` フィールド + `run_preprocess_hook` の `.env("CE_PROJECT_ROOT", …)` 追加、`prepare_submission` で `self.config.project_root()` を差し込む）
+- `crates/usecases/src/service/verify.rs`（`run_preprocess` の `.env("CE_PROJECT_ROOT", repository_root)` 追加）
 
 **Create:**
 - `docs/operations/library-expand.md`（`hooks/expand-libraries.sh` 設計 / 言語別 branch 拡張方針）
@@ -129,10 +132,6 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
 - `hooks/tests/fixtures/rust/cycle/main.rs`（循環パターン、exit != 0 を確認するケース）
 - `hooks/tests/fixtures/rust/missing/main.rs`（欠損 mod ファイルパターン、exit != 0）
 - `hooks/tests/fixtures/rust/passthrough/main.rs.in` / `.expected`（`mod NAME;`（path 属性なし）で `NAME.rs` が無いパターン → passthrough）
-
-**Touched but unchanged behavior:**
-- `crates/usecases/src/service/submit.rs`（`submit_preprocess()` の resolve 済みパスを受け取るだけなので変更なし）
-- `crates/usecases/src/service/verify.rs`（同様、変更なし）
 
 ---
 
@@ -231,6 +230,12 @@ repo にはユースケース別に 2 本のサンプルを同梱する:
   する。cpp / lean は現状素通し (別 issue で bundler を追加予定)。詳細設計は
   `docs/operations/library-expand.md`。
 ````
+
+加えて、同ファイル §環境変数 の表 (現行 101–111 行) に以下の行を追記する:
+
+| 変数                 | 内容                                                             |
+| -------------------- | ---------------------------------------------------------------- |
+| `CE_PROJECT_ROOT`    | リポジトリルートの絶対パス。project-local の relative (空白あり) から自解決するときに使う |
 
 - [ ] **Step 3: `docs/operations/library-expand.md` を新規作成**
 
@@ -564,6 +569,10 @@ impl Config for ConfigImpl {
     // default_language / default_online_judge / submit_file / lang_id は既存実装を維持
     // (config_toml_path を触るところは同じ、self を追加パラメタとしない場合はそのまま)
 
+    fn project_root(&self) -> &Path {
+        &self.project_root
+    }
+
     fn submit_preprocess(&self) -> Option<String> {
         self.read_project_local_preprocess()
             .filter(|s| !s.trim().is_empty())
@@ -576,6 +585,77 @@ impl Config for ConfigImpl {
 ```
 
 `default_language` / `submit_file` / `lang_id` は既存ロジックそのままだが `&self` を通す関数シグネチャに揃える (すでに `&self` を取っているのでボディ側の変更は不要)。関数内で `Self::config_toml_path()` を呼んでいる箇所は変更なし。
+
+加えて `crates/usecases/src/config.rs` の `Config` trait に対応シグネチャを追加する:
+
+```rust
+// crates/usecases/src/config.rs
+use std::path::Path;
+// ...
+pub trait Config {
+    // ...既存メソッド...
+
+    /// リポジトリルート (project-local `config.toml` を持つディレクトリ)。
+    /// preprocess hook の `CE_PROJECT_ROOT` env と、絶対パス化に使う。
+    fn project_root(&self) -> &Path;
+
+    // 既存の submit_preprocess / lang_id / submit_file / default_language は変更なし。
+}
+```
+
+- [ ] **Step 3b: submit / verify サービスに `CE_PROJECT_ROOT` env の設定を追加**
+
+`crates/usecases/src/service/submit.rs`:
+
+```rust
+// PreprocessContext に project_root を追加
+struct PreprocessContext<'a> {
+    // ... 既存フィールド ...
+    project_root: &'a std::path::Path,
+}
+
+// prepare_submission の PreprocessContext 構築時
+PreprocessContext {
+    // ... 既存 ...
+    project_root: self.config.project_root(),
+}
+
+// run_preprocess_hook の Command::new("sh") チェーンに 1 行追加
+.env("CE_PROJECT_ROOT", ctx.project_root)
+```
+
+`crates/usecases/src/service/verify.rs::run_preprocess`:
+
+```rust
+// 既存の env チェーンに以下を追加
+.env("CE_PROJECT_ROOT", repository_root)
+```
+
+- [ ] **Step 3c: 各 `StubConfig` に `project_root()` を追加**
+
+以下 5 箇所の `impl Config for StubConfig` に、`PathBuf` フィールドと `fn project_root(&self) -> &Path { &self.project_root }` を追加する。既存の他フィールドと同じ構造:
+
+- `crates/usecases/src/service/submit.rs` (tests)
+- `crates/usecases/src/service/init.rs` (tests)
+- `crates/usecases/src/service/new_solution.rs` (tests)
+- `crates/usecases/src/service/test.rs` (tests)
+- `crates/infrastructure/tests/verify_command.rs`
+
+```rust
+// 例: crates/usecases/src/service/submit.rs tests
+struct StubConfig {
+    // ... 既存 ...
+    project_root: std::path::PathBuf,
+}
+impl Config for StubConfig {
+    // ... 既存 ...
+    fn project_root(&self) -> &std::path::Path {
+        &self.project_root
+    }
+}
+```
+
+テスト側の `StubConfig { ... }` インスタンス化箇所 (現在 6+ 箇所) にも `project_root: std::env::temp_dir(),` 等のダミー値を追加する。既存の submit_preprocess テストでこの値が意味を持たなければ tempdir で十分。
 
 - [ ] **Step 4: `shell/mod.rs` の `ConfigImpl.` 呼び出しをすべて書き換え**
 
@@ -716,7 +796,7 @@ impl Monoid for AddMonoid {
 ```rust
 mod libs {
 pub mod algebra {
-mod monoid {
+pub mod monoid {
 pub trait Monoid {
     type T: Clone;
     fn id() -> Self::T;
@@ -818,6 +898,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 COMBINED_MOD_RE = re.compile(
     r"""^[ \t]*                                    # anchored to line start (re.MULTILINE)
@@ -831,7 +912,7 @@ COMBINED_MOD_RE = re.compile(
 )
 
 
-def die(code: int, msg: str) -> None:
+def die(code: int, msg: str) -> NoReturn:
     print(f"rust_expand: {msg}", file=sys.stderr)
     sys.exit(code)
 
@@ -1033,6 +1114,7 @@ git commit -m "feat(hooks): rust bundler (rust_expand.py) + fixture テスト"
 #   cwd    = solution directory
 #   env    = CE_LANGUAGE CE_OJ CE_CONTEST_ID CE_PROBLEM_CODE CE_PROBLEM_ID
 #            CE_SOLUTION_NAME CE_SOLUTION_DIR CE_SOURCE_FILE CE_LANG_ID
+#            CE_PROJECT_ROOT
 #
 # Language branches live HERE. Adding a language means adding a case arm and
 # a hooks/<lang>_expand.{py,sh} sibling; the Rust binaries stay unchanged.
