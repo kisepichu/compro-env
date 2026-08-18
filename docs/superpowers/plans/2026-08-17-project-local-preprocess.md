@@ -175,6 +175,9 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
 - project-local 側で空白を含む値 (引数付きコマンド) は shell command とみなしてそのまま渡す。
   この場合はスクリプト内で `$CE_PROJECT_ROOT` を参照してリポジトリルートを解決すること。
 - global 側は元の挙動どおり shell に丸投げ (tilde 展開は shell 依存、bare relative は cwd 依存)。
+
+**セキュリティ**: project-local `[submit].preprocess` は clone したリポジトリの `config.toml` に書かれた任意 shell スクリプト
+を `ce submit` / `ce verify` 時にユーザー権限で実行する (Makefile / `package.json` の script と同じ信頼境界)。信頼できるリポジトリでのみ `ce` を使うこと。
 ```
 
 `### プロジェクトローカル: compro-env/config.toml (任意)` 節にも 1 行、`[submit].preprocess` が
@@ -211,6 +214,11 @@ global を上書き**する。値の resolve 規則:
 未設定なら preprocess を行わず元ソースをそのまま提出する (後方互換)。
 `Config::submit_preprocess(&self) -> Option<String>` を返し、未設定時は `None` とする
 (`&Language` 引数は取らない)。
+
+> **セキュリティ**: project-local `[submit].preprocess` は clone したリポジトリの `config.toml` に書かれた任意 shell スクリプト
+> を `ce submit` / `ce verify` 時にユーザー権限で実行する。Makefile / `package.json` の script 等と同じ信頼境界にあるため、
+> **信頼できるリポジトリでのみ `ce` を使うこと**。悪意ある `config.toml` を含む repo を clone した第三者が細工したスクリプトを
+> 実行させられるリスクがあることを念頭に置く。
 
 **言語別の分岐はアプリではなくスクリプト側で行う。** 言語は `CE_LANGUAGE` env で渡るので、
 1 本のスクリプト内で `case "$CE_LANGUAGE" in rust) ... ;; cpp) ... esac` のように分岐する。
