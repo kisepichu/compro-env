@@ -819,17 +819,12 @@ import re
 import sys
 from pathlib import Path
 
-MOD_ATTR_RE = re.compile(
-    r"""^(?P<indent>[ \t]*)                    # leading indent (kept for warn)
-        \#\s*\[\s*path\s*=\s*"(?P<path>[^"]+)"\s*\]\s*\r?\n
-        (?P<pre>[ \t]*)                        # attribute-to-mod indent
-        (?P<vis>pub(?:\s*\(\s*[^)]+\s*\))?\s+)?  # optional visibility
-        mod\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;""",
-    re.MULTILINE | re.VERBOSE,
-)
-
-BARE_MOD_RE = re.compile(
-    r"""^(?P<indent>[ \t]*)
+COMBINED_MOD_RE = re.compile(
+    r"""^[ \t]*                                    # anchored to line start (re.MULTILINE)
+        (?:                                        # optional #[path = "REL"] on the preceding line
+          \#\s*\[\s*path\s*=\s*"(?P<path>[^"]+)"\s*\]\s*\r?\n
+          [ \t]*
+        )?
         (?P<vis>pub(?:\s*\(\s*[^)]+\s*\))?\s+)?
         mod\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;""",
     re.MULTILINE | re.VERBOSE,
@@ -851,13 +846,36 @@ def read_utf8(path: Path) -> str:
 
 
 def expand_source(source: str, entry_dir: Path, visited: set[Path]) -> str:
-    # First pass: `#[path = "..."] mod NAME;`
-    def path_repl(m: re.Match[str]) -> str:
-        rel = m.group("path")
+    # Single-pass expansion: one regex covers both `#[path] mod NAME;` and
+    # bare `mod NAME;`. Passing them as one alternation guarantees each
+    # declaration is scanned exactly once, at the correct nesting level with
+    # the correct `entry_dir`. A two-pass approach would let a bare `mod`
+    # that was left passthrough by a sub-file get re-scanned in the outer
+    # `entry_dir` after the sub-body was spliced in, which would wrongly
+    # resolve it against a same-named file in the outer directory.
+    def repl(m: re.Match[str]) -> str:
+        rel_path = m.group("path")
         name = m.group("name")
         vis = (m.group("vis") or "").strip()
         vis_prefix = f"{vis} " if vis else ""
-        target = (entry_dir / rel).resolve()
+        if rel_path is not None:
+            target = (entry_dir / rel_path).resolve()
+            if not target.is_file():
+                die(1, f"file not found: {target}")
+        else:
+            target = None
+            for cand in (entry_dir / f"{name}.rs", entry_dir / name / "mod.rs"):
+                if cand.is_file():
+                    target = cand.resolve()
+                    break
+            if target is None:
+                # Passthrough: leave the declaration verbatim so the caller
+                # can still compile against std / external crates. Warn once.
+                print(
+                    f"rust_expand: warning: unresolved mod {name}",
+                    file=sys.stderr,
+                )
+                return m.group(0)
         if target in visited:
             die(2, f"cycle detected: {target}")
         visited.add(target)
@@ -866,30 +884,7 @@ def expand_source(source: str, entry_dir: Path, visited: set[Path]) -> str:
         visited.discard(target)
         return f"{vis_prefix}mod {name} {{\n{expanded}\n}}"
 
-    src = MOD_ATTR_RE.sub(path_repl, source)
-
-    # Second pass: bare `mod NAME;` — implicit resolution.
-    def bare_repl(m: re.Match[str]) -> str:
-        name = m.group("name")
-        vis = (m.group("vis") or "").strip()
-        vis_prefix = f"{vis} " if vis else ""
-        candidates = [entry_dir / f"{name}.rs", entry_dir / name / "mod.rs"]
-        for cand in candidates:
-            if cand.is_file():
-                target = cand.resolve()
-                if target in visited:
-                    die(2, f"cycle detected: {target}")
-                visited.add(target)
-                body = read_utf8(target)
-                expanded = expand_source(body, target.parent, visited)
-                visited.discard(target)
-                return f"{vis_prefix}mod {name} {{\n{expanded}\n}}"
-        # No file — passthrough with a stderr warn.
-        print(f"rust_expand: warning: unresolved mod {name}", file=sys.stderr)
-        return m.group(0)
-
-    src = BARE_MOD_RE.sub(bare_repl, src)
-    return src
+    return COMBINED_MOD_RE.sub(repl, source)
 
 
 def resolve_entry_file(argv: list[str]) -> Path:
@@ -939,9 +934,11 @@ diff_case() {
     local case_dir="$1"
     local entry="$case_dir/main.rs.in"
     local expected="$case_dir/main.rs.expected"
-    local actual
-    actual="$(python3 "$SCRIPT" "$entry" <"$entry")"
-    if ! diff -u <(printf '%s' "$actual") "$expected"; then
+    # Pipe stdout straight into `diff`. Capturing via `actual=$(…)` would
+    # strip trailing newlines, but the bundler normalizes its output to end
+    # with exactly one `\n` and `.expected` files also carry one — the
+    # capture would guarantee a "\ No newline at end of file" mismatch.
+    if ! python3 "$SCRIPT" "$entry" <"$entry" | diff -u - "$expected"; then
         echo "FAIL: $case_dir" >&2
         fail=1
     else
@@ -1071,10 +1068,10 @@ end_to_end_rust() {
     local case_dir="$FIXTURES/rust/basic"
     local entry="$case_dir/main.rs.in"
     local expected="$case_dir/main.rs.expected"
-    local actual
-    actual="$(CE_LANGUAGE=rust CE_SOURCE_FILE="$entry" \
-        bash "$HERE/../expand-libraries.sh" <"$entry")"
-    if ! diff -u <(printf '%s' "$actual") "$expected"; then
+    # Pipe to diff; capturing via $() would strip the trailing newline.
+    if ! CE_LANGUAGE=rust CE_SOURCE_FILE="$entry" \
+            bash "$HERE/../expand-libraries.sh" <"$entry" \
+            | diff -u - "$expected"; then
         echo "FAIL: shell rust end-to-end" >&2
         fail=1
     else
