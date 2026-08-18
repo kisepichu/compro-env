@@ -778,7 +778,7 @@ git commit -m "feat(config): [submit].preprocess を project-local で上書き�
 - Consumes: stdin = Rust source。引数 (optional) = entry file path。
 - Produces: stdout = 展開済み source。exit code = 0 (success), 1 (file not found), 2 (cycle), 3 (non-UTF-8)。
 
-- [ ] **Step 1: fixture in/expected を先に書く (TDD)**
+- [x] **Step 1: fixture in/expected を先に書く (TDD)**
 
 **basic** (`#[path]` 明示、単段):
 
@@ -983,7 +983,7 @@ fn main() { println!("noop"); }
 
 期待動作: exit 0, main は無変更, stderr に `warning: unresolved mod std_only_no_local_file` を含む。
 
-- [ ] **Step 2: `hooks/rust_expand.py` を実装**
+- [x] **Step 2: `hooks/rust_expand.py` を実装**
 
 ```python
 #!/usr/bin/env python3
@@ -1117,7 +1117,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: `hooks/tests/run.sh` を骨組みだけ書く (Task 4 で拡張)**
+- [x] **Step 3: `hooks/tests/run.sh` を骨組みだけ書く (Task 4 で拡張)**
 
 ```bash
 #!/usr/bin/env bash
@@ -1217,7 +1217,7 @@ exit_case "$FIXTURES/rust/missing" 1 "file not found"
 exit "$fail"
 ```
 
-- [ ] **Step 4: 実行 → fixture の期待値を実装出力に合わせて微調整**
+- [x] **Step 4: 実行 → fixture の期待値を実装出力に合わせて微調整**
 
 ```bash
 chmod +x hooks/rust_expand.py hooks/tests/run.sh
@@ -1231,7 +1231,7 @@ oracle" ではあるが、bundler の出力フォーマットが自明でない�
 **中止条件:** `cycle` と `missing` の exit code / stderr 内容だけは実装より優先で fix する。
 これらが期待通りに動かない場合は bundler 側を修正する。
 
-- [ ] **Step 5: commit**
+- [x] **Step 5: commit**
 
 ```bash
 git add hooks/rust_expand.py hooks/tests/

@@ -1,0 +1,6 @@
+#[path = "b.rs"]
+mod b;
+#[path = "c.rs"]
+mod c;
+
+fn main() {}
