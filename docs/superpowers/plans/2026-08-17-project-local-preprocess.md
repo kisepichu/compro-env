@@ -540,6 +540,7 @@ impl ConfigImpl {
     }
 
     /// project-local `[submit].preprocess` を読み、resolve 済みの値を返す。
+    /// 空 / 空白のみは「未設定」扱いで `None` を返し、下流で global へ fallback する。
     /// 相対 (bare, no whitespace) は `<project_root>/<value>` に絶対パス化。
     /// 絶対 / tilde / 空白入りはそのまま返す。
     fn read_project_local_preprocess(&self) -> Option<String> {
@@ -557,7 +558,11 @@ impl ConfigImpl {
             .get("submit")
             .and_then(|v| v.get("preprocess"))
             .and_then(|v| v.as_str())?;
-        Some(resolve_project_local_preprocess(raw, &self.project_root))
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(resolve_project_local_preprocess(trimmed, &self.project_root))
     }
 
     /// global `[submit].preprocess` を読み、値をそのまま返す。
@@ -580,17 +585,14 @@ impl ConfigImpl {
     }
 }
 
-/// Value の resolve ルール (docs/commands/submit.md 参照)。
-fn resolve_project_local_preprocess(raw: &str, project_root: &Path) -> String {
-    let trimmed = raw.trim();
-    // 空白のみ / 空文字は project-local「未設定」相当。下流の
-    // `submit_preprocess()` にある `filter(|s| !s.trim().is_empty())` が
-    // これを `None` に畳んで global へフォールバックする。
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    // 絶対パス・tilde・空白 (= 引数付きコマンド) はそのまま。ただし toml 側で
-    // 誤って前後空白が混入していても sh -c に漏らさないよう trim 済み値を使う。
+/// Value の resolve ルール (docs/commands/submit.md 参照)。呼び出し側で
+/// 既に `trim` + `is_empty` チェックを済ませている前提。
+fn resolve_project_local_preprocess(trimmed: &str, project_root: &Path) -> String {
+    debug_assert!(
+        !trimmed.is_empty() && trimmed == trimmed.trim(),
+        "caller must pass a trimmed, non-empty value",
+    );
+    // 絶対パス・tilde・空白入り (= 引数付きコマンド) はそのまま。
     if trimmed.starts_with('/')
         || trimmed.starts_with('~')
         || trimmed.chars().any(|c: char| c.is_ascii_whitespace())
@@ -609,8 +611,9 @@ impl Config for ConfigImpl {
     }
 
     fn submit_preprocess(&self) -> Option<String> {
+        // 空文字 / 空白は `read_project_local_preprocess` 側で `None` に畳まれる
+        // ため、追加の `.filter(...)` は不要 (sentinel `Some("")` を経由しない)。
         self.read_project_local_preprocess()
-            .filter(|s| !s.trim().is_empty())
             .or_else(|| self.read_global_preprocess())
     }
 
@@ -1283,15 +1286,21 @@ end_to_end_rust
 passthrough_lang() {
     local lang="$1"
     local sample; sample="hello, $lang"
-    local actual
-    actual="$(printf '%s' "$sample" | CE_LANGUAGE="$lang" \
-        bash "$HERE/../expand-libraries.sh")"
-    if [ "$actual" != "$sample" ]; then
-        echo "FAIL: $lang passthrough (got '$actual')" >&2
+    local expected; expected="$(mktemp)"
+    printf '%s' "$sample" >"$expected"
+    # Pipe stdin/stdout directly into `diff` so a regression that appends a
+    # trailing newline (or drops one) is caught. `$(…)` capture would strip
+    # trailing `\n` and hide such regressions.
+    if ! printf '%s' "$sample" | CE_LANGUAGE="$lang" \
+            bash "$HERE/../expand-libraries.sh" \
+            | diff -u "$expected" -; then
+        echo "FAIL: $lang passthrough" >&2
+        rm -f "$expected"
         fail=1
-    else
-        echo "ok:   $lang passthrough"
+        return
     fi
+    rm -f "$expected"
+    echo "ok:   $lang passthrough"
 }
 passthrough_lang cpp
 passthrough_lang lean
