@@ -453,9 +453,35 @@ fn submit_preprocess_project_local_command_with_args_passes_through() {
         Some("hooks/expand-libraries.sh --debug".to_string())
     );
 }
+
+/// project-local `preprocess = ""` (空文字 / 空白のみ) は「未設定」扱いで global に fallback する。
+#[test]
+#[serial]
+fn submit_preprocess_project_local_empty_value_falls_back_to_global() {
+    let global_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        global_dir.path().join("config.toml"),
+        "[submit]\npreprocess = \"~/.config/ce/hooks/global.sh\"\n",
+    )
+    .unwrap();
+    let _guard_home = EnvVarGuard::set("CE_CONFIG_DIR", global_dir.path());
+
+    let project_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project_dir.path().join("config.toml"),
+        "[submit]\npreprocess = \"   \"\n",
+    )
+    .unwrap();
+
+    let config = ConfigImpl::new(project_dir.path().to_path_buf());
+    assert_eq!(
+        config.submit_preprocess(),
+        Some("~/.config/ce/hooks/global.sh".to_string()),
+    );
+}
 ```
 
-既存の 3 本 (`submit_preprocess_returns_configured_value`, `submit_preprocess_returns_none_when_not_configured`, `submit_preprocess_returns_none_when_no_config`) は unit-struct 前提。以下のように書き換える:
+既存の 3 本 (`submit_preprocess_returns_configured_value`, `submit_preprocess_returns_none_when_not_configured`, `submit_preprocess_returns_none_when_no_config`) は unit-struct 前提。以下のように書き換える (合計 6 本の新規テストに合わせる):
 
 ```rust
 // 変更前: let result = ConfigImpl.submit_preprocess();
@@ -472,13 +498,13 @@ fn tmp_root_without_config() -> tempfile::TempDir {
 }
 ```
 
-- [ ] **Step 2: テストを実行 → 全 5 本失敗を確認**
+- [ ] **Step 2: テストを実行 → 全 6 本失敗を確認**
 
 ```bash
 cargo test -p infrastructure config_impl:: -- --nocapture 2>&1 | grep -E 'FAILED|running|test result'
 ```
 
-**Expected:** 新しい 5 テストが `FAILED` になる（`ConfigImpl::new` が存在しない / project-local resolve 未実装）。
+**Expected:** 新しい 6 テストが `FAILED` になる（`ConfigImpl::new` が存在しない / project-local resolve 未実装）。
 
 - [ ] **Step 3: `ConfigImpl` を struct 化 + `submit_preprocess()` を書き換え**
 
@@ -556,6 +582,12 @@ impl ConfigImpl {
 /// Value の resolve ルール (docs/commands/submit.md 参照)。
 fn resolve_project_local_preprocess(raw: &str, project_root: &Path) -> String {
     let trimmed = raw.trim();
+    // 空白のみ / 空文字は project-local「未設定」相当。下流の
+    // `submit_preprocess()` にある `filter(|s| !s.trim().is_empty())` が
+    // これを `None` に畳んで global へフォールバックする。
+    if trimmed.is_empty() {
+        return String::new();
+    }
     // 絶対パス・tilde・空白 (= 引数付きコマンド) はそのまま。ただし toml 側で
     // 誤って前後空白が混入していても sh -c に漏らさないよう trim 済み値を使う。
     if trimmed.starts_with('/')
