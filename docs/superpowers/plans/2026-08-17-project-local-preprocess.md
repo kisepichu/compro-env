@@ -97,6 +97,7 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
   - 「同長スペース置換」が実装上重いなら、素の regex での誤検出はサンプル解法で発生しない範囲で許容してよい（この方針は user brief で明示的に許可）。
 - 出力: 展開後 source を stdout に、末尾改行 1 個で終わるよう normalize する。
 - 「diamond dependency」（A → B → D, A → C → D）は **重複展開が仕様どおり**。B と C はそれぞれの親スコープを持ち、Rust の module システムでは `crate::b::d` と `crate::c::d` が別 module として存在するため、bundler が両方に `mod d { … }` を出しても重複定義エラーにはならない（rustc で確認済み）。`visited.discard(target)` を DFS 巻き戻し時に呼ぶ現行設計はこの Rust semantics に合致しており、意図的な選択。「同一親スコープに同じ module 名が 2 回」というケースは元のソースが Rust としてすでに不正なので bundler の責務外。
+- 既知の限界: bare `mod NAME;` の暗黙解決は「現在処理中のファイルの親ディレクトリ」を基準に行い、`mod outer { mod inner; }` のような inline module 内でも Rust 本来の `<outer>/inner.rs` サブディレクトリを参照しない (regex は inline ブロックの nesting を追跡しない)。inline module 内でファイルを include したい場合は必ず `#[path]` 属性を明示すること。競プロ想定のサンプル解法では bare `mod` を top-level だけで使うため実害はない前提。この limitation は `docs/operations/library-expand.md` にも明記する。
 
 ### D7. Docs: 別ファイルか節追加か
 
@@ -276,6 +277,8 @@ esac
 3. 各 `mod NAME;` を `mod NAME { <expanded body> }` に inline 置換。
 4. body 中の mod 宣言も同様に再帰展開 (DFS)。
 5. 展開済みファイルは `visited: set[abs_path]` に記録。再訪 → cycle として exit 2。
+
+> **限界 (nesting 未追跡)**: bare `mod NAME;` の解決は常に「処理中のファイルの親ディレクトリ」を基準に行い、`mod outer { mod inner; }` のような inline module 内でも Rust 本来の `<outer>/inner.rs` を参照しない。inline module 内でファイルを include したい場合は必ず `#[path]` 属性を書く。sample 解法では bare `mod` を top-level に限る運用で実害なし。
 
 ### コメント/文字列の扱い
 - 簡易除外: 正規表現マッチ前に `//` 行末コメント、`/* … */` ブロックコメント、`"…"` / `r"…"` /
