@@ -92,4 +92,45 @@ diff_case "$FIXTURES/rust/diamond"
 exit_case "$FIXTURES/rust/cycle" 2 "cycle detected"
 exit_case "$FIXTURES/rust/missing" 1 "file not found"
 
+# End-to-end via the shell entrypoint (CE_LANGUAGE=rust).
+end_to_end_rust() {
+    local case_dir="$FIXTURES/rust/basic"
+    local entry="$case_dir/main.rs.in"
+    local expected="$case_dir/main.rs.expected"
+    # Pipe to diff; capturing via $() would strip the trailing newline.
+    if ! CE_LANGUAGE=rust CE_SOURCE_FILE="$entry" \
+            bash "$HERE/../expand-libraries.sh" <"$entry" \
+            | diff -u "$expected" -; then
+        echo "FAIL: shell rust end-to-end" >&2
+        fail=1
+    else
+        echo "ok:   shell rust end-to-end"
+    fi
+}
+end_to_end_rust
+
+# End-to-end passthrough for cpp / lean.
+passthrough_lang() {
+    local lang="$1"
+    local sample; sample="hello, $lang"
+    local expected; expected="$(mktemp)"
+    printf '%s' "$sample" >"$expected"
+    # Pipe stdin/stdout directly into `diff` so a regression that appends a
+    # trailing newline (or drops one) is caught. `$(…)` capture would strip
+    # trailing `\n` and hide such regressions.
+    if ! printf '%s' "$sample" | CE_LANGUAGE="$lang" \
+            bash "$HERE/../expand-libraries.sh" \
+            | diff -u "$expected" -; then
+        echo "FAIL: $lang passthrough" >&2
+        rm -f "$expected"
+        fail=1
+        return
+    fi
+    rm -f "$expected"
+    echo "ok:   $lang passthrough"
+}
+passthrough_lang cpp
+passthrough_lang lean
+passthrough_lang unknown
+
 exit "$fail"

@@ -1250,7 +1250,7 @@ git commit -m "feat(hooks): rust bundler (rust_expand.py) + fixture テスト"
 - Consumes: stdin = source、env (`CE_LANGUAGE`, `CE_SOURCE_FILE`, ...)、cwd = 解法 dir。
 - Produces: stdout = 展開後 source。
 
-- [ ] **Step 1: `hooks/expand-libraries.sh` を作成**
+- [x] **Step 1: `hooks/expand-libraries.sh` を作成**
 
 ```sh
 #!/bin/sh
@@ -1294,7 +1294,7 @@ esac
 
 `chmod +x hooks/expand-libraries.sh`。
 
-- [ ] **Step 2: `hooks/tests/run.sh` に shell 経由の smoke を追加**
+- [x] **Step 2: `hooks/tests/run.sh` に shell 経由の smoke を追加**
 
 `diff_case` の呼び出しループの後に:
 
@@ -1341,13 +1341,13 @@ passthrough_lang lean
 passthrough_lang unknown
 ```
 
-- [ ] **Step 3: 実行 → 通す**
+- [x] **Step 3: 実行 → 通す**
 
 ```bash
 bash hooks/tests/run.sh
 ```
 
-- [ ] **Step 4: commit**
+- [x] **Step 4: commit**
 
 ```bash
 git add hooks/expand-libraries.sh hooks/tests/run.sh
