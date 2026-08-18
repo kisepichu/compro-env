@@ -125,14 +125,11 @@ Rust bundler 本体は `hooks/rust_expand.py`（Python 3 標準ライブラリ�
 - `hooks/expand-libraries.sh`（entrypoint。言語分岐のみ）
 - `hooks/rust_expand.py`（Python bundler 本体）
 - `hooks/tests/run.sh`（bash test runner。fixture in/expected を diff 比較）
-- `hooks/tests/fixtures/rust/main-inline.rs.in`（入力: `mod libs;` + `#[path]` チェーン）
-- `hooks/tests/fixtures/rust/main-inline.rs.expected`（期待出力: 展開後の single-file）
-- `hooks/tests/fixtures/rust/libs.rs`（参照される library entry）
-- `hooks/tests/fixtures/rust/libs/algebra/monoid.rs`（library の内側の chain）
-- `hooks/tests/fixtures/rust/expected-basic.rs.in` / `expected-basic.rs.expected`（1 段 `#[path]`）
-- `hooks/tests/fixtures/rust/cycle/main.rs`（循環パターン、exit != 0 を確認するケース）
-- `hooks/tests/fixtures/rust/missing/main.rs`（欠損 mod ファイルパターン、exit != 0）
-- `hooks/tests/fixtures/rust/passthrough/main.rs.in` / `.expected`（`mod NAME;`（path 属性なし）で `NAME.rs` が無いパターン → passthrough）
+- `hooks/tests/fixtures/rust/basic/main.rs.in` / `main.rs.expected` / `helper.rs`（単段 `#[path]`）
+- `hooks/tests/fixtures/rust/nested/main.rs.in` / `main.rs.expected` / `libs.rs` / `algebra/monoid.rs`（`mod libs;` 暗黙解決 + `#[path]` チェーン）
+- `hooks/tests/fixtures/rust/cycle/main.rs.in` / `cycled.rs`（循環パターン、exit 2 を確認）
+- `hooks/tests/fixtures/rust/missing/main.rs.in`（欠損 `#[path]` file、exit 1 を確認）
+- `hooks/tests/fixtures/rust/passthrough/main.rs.in` / `main.rs.expected`（`mod NAME;` (path 属性なし) で `NAME.rs` が無い → passthrough + stderr 警告）
 
 ---
 
@@ -726,8 +723,17 @@ cargo clippy --workspace --all-targets -- -D warnings
 - [ ] **Step 6: commit**
 
 ```bash
-git add crates/infrastructure/src/config_impl.rs crates/infrastructure/src/shell/mod.rs
-git commit -m "feat(config): [submit].preprocess を project-local で上書き可能に"
+git add \
+  crates/infrastructure/src/config_impl.rs \
+  crates/infrastructure/src/shell/mod.rs \
+  crates/usecases/src/config.rs \
+  crates/usecases/src/service/submit.rs \
+  crates/usecases/src/service/verify.rs \
+  crates/usecases/src/service/init.rs \
+  crates/usecases/src/service/new_solution.rs \
+  crates/usecases/src/service/test.rs \
+  crates/infrastructure/tests/verify_command.rs
+git commit -m "feat(config): [submit].preprocess を project-local で上書き可能に + CE_PROJECT_ROOT env 追加"
 ```
 
 ---
@@ -936,9 +942,10 @@ from typing import NoReturn
 
 COMBINED_MOD_RE = re.compile(
     r"""^[ \t]*                                    # anchored to line start (re.MULTILINE)
-        (?:                                        # optional #[path = "REL"] prefix (same line OR preceding line)
+        (?:                                        # optional #[path = "REL"] prefix
           \#\s*\[\s*path\s*=\s*"(?P<path>[^"]+)"\s*\]\s+
-        )?                                         # \s+ covers `newline + indent` (two-line) and single space (one-liner)
+          (?P<extra_attrs>(?:\#\s*\[[^\]]*\]\s+)*) # additional attributes to preserve (e.g. #[allow(...)])
+        )?                                         # \s+ covers `newline + indent` and single space
         (?P<vis>pub(?:\s*\(\s*[^)]+\s*\))?\s+)?
         mod\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;""",
     re.MULTILINE | re.VERBOSE,
@@ -972,6 +979,10 @@ def expand_source(source: str, entry_dir: Path, visited: set[Path]) -> str:
         name = m.group("name")
         vis = (m.group("vis") or "").strip()
         vis_prefix = f"{vis} " if vis else ""
+        # Preserve any `#[allow(...)]` / `#[cfg(...)]` etc. that sat between
+        # #[path] and mod so we don't silently change semantics.
+        extras_raw = (m.group("extra_attrs") or "").strip()
+        extras_prefix = f"{extras_raw}\n" if extras_raw else ""
         if rel_path is not None:
             target = (entry_dir / rel_path).resolve()
             if not target.is_file():
@@ -996,7 +1007,7 @@ def expand_source(source: str, entry_dir: Path, visited: set[Path]) -> str:
         body = read_utf8(target)
         expanded = expand_source(body, target.parent, visited)
         visited.discard(target)
-        return f"{vis_prefix}mod {name} {{\n{expanded}\n}}"
+        return f"{extras_prefix}{vis_prefix}mod {name} {{\n{expanded}\n}}"
 
     return COMBINED_MOD_RE.sub(repl, source)
 
