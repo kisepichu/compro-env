@@ -1,29 +1,13 @@
-// Library Checker A+B — reference implementation using the Rust monoid.
-//
-// The problem reads two integers per line and prints their sum.
-// The `AddMonoid` in `libraries/rust/algebra/monoid.rs` is inlined below to
-// keep the submission self-contained; the on-disk library is what the site
-// publishes and what verification records reference.
+// Library Checker A+B — uses the shared AddMonoid via `#[path]` import so
+// the solution page can surface `libraries/rust/algebra/monoid.rs` as a
+// direct dependency. `hooks/expand-libraries.sh` inlines the library at
+// submission time so the submitted single-file source still compiles on
+// the judge.
+
+mod libs;
+use libs::monoid::{AddMonoid, Monoid};
 
 use std::io::{self, BufRead, BufWriter, Write};
-
-trait Monoid {
-    type T: Clone;
-    fn id() -> Self::T;
-    fn op(a: &Self::T, b: &Self::T) -> Self::T;
-}
-
-struct AddMonoid;
-
-impl Monoid for AddMonoid {
-    type T = i64;
-    fn id() -> Self::T {
-        0
-    }
-    fn op(a: &Self::T, b: &Self::T) -> Self::T {
-        a + b
-    }
-}
 
 fn main() {
     let stdin = io::stdin();
