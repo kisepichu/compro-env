@@ -155,6 +155,7 @@ fn starting_record() -> VerificationRecord {
         plan_context: Some(PlanContext {
             language: language(),
             submitted_source_hash: hash(),
+            verify_libraries: Vec::new(),
         }),
     }
 }
@@ -198,6 +199,7 @@ fn completed_accepted_record() -> VerificationRecord {
         plan_context: Some(PlanContext {
             language: language(),
             submitted_source_hash: hash(),
+            verify_libraries: Vec::new(),
         }),
     }
 }

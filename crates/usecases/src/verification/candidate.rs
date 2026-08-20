@@ -254,6 +254,7 @@ mod tests {
         Some(PlanContext {
             language: language_binding(),
             submitted_source_hash: content(0x11),
+            verify_libraries: Vec::new(),
         })
     }
 

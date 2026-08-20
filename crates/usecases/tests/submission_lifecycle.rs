@@ -1216,10 +1216,12 @@ fn poll_handle_persists_completed_and_refuses_further_polls() {
     );
 }
 
-/// Regression: `CompletedState` must quote the plan's real
-/// `submitted_source_hash` (and `language`) via `PlanContext`, not the zero
-/// fallback (spec §11 "十分な証跡"). Without this the record would silently
-/// persist an all-zero content hash whenever we complete from
+/// Regression: `CompletedState` must quote the plan's frozen
+/// `submitted_source_hash`, `language`, and `verified_libraries` via
+/// `PlanContext`, not zero / empty fallbacks (spec §11 "十分な証跡" and
+/// "result は提出時の direct `verified_libraries` を ID 順で保存する").
+/// Without this the record silently persists an all-zero content hash and
+/// an empty verified_libraries whenever we complete from
 /// Submitted/Queued/Judging (i.e. the normal happy path).
 #[test]
 fn poll_handle_completed_cites_plan_context_hash_and_language() {
@@ -1233,9 +1235,13 @@ fn poll_handle_completed_cites_plan_context_hash_and_language() {
     let plan_hash = hash(0xbb);
     let plan_lang = binding();
     let mut seeded = make_submitted(&lc_solution(), "attempt-1", "librarychecker", "42");
+    let plan_verify_libraries = vec![
+        LibraryId::parse("libraries/rust/algebra/monoid.rs").unwrap(),
+    ];
     seeded.plan_context = Some(domain::verification::PlanContext {
         language: plan_lang.clone(),
         submitted_source_hash: plan_hash.clone(),
+        verify_libraries: plan_verify_libraries.clone(),
     });
     repo.seed(seeded);
 
@@ -1264,6 +1270,10 @@ fn poll_handle_completed_cites_plan_context_hash_and_language() {
                 assert_eq!(
                     c.language, plan_lang,
                     "CompletedState.language must come from PlanContext"
+                );
+                assert_eq!(
+                    c.verified_libraries, plan_verify_libraries,
+                    "CompletedState.verified_libraries must come from PlanContext"
                 );
             }
             other => panic!("expected Completed, got {other:?}"),
