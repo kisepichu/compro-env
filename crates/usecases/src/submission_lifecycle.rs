@@ -1214,7 +1214,11 @@ fn build_completed_state(
 
     Ok(domain::verification::CompletedState {
         verdict: Verdict { kind, raw },
-        verified_libraries: vec![],
+        verified_libraries: current
+            .plan_context
+            .as_ref()
+            .map(|ctx| ctx.verify_libraries.clone())
+            .unwrap_or_default(),
         language,
         verified_at,
         capabilities,

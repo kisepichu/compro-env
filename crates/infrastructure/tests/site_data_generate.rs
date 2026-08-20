@@ -783,6 +783,7 @@ mod fingerprint_recomputation {
             plan_context: Some(PlanContext {
                 language: binding,
                 submitted_source_hash,
+                verify_libraries: Vec::new(),
             }),
         }
     }

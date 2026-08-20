@@ -190,6 +190,7 @@ fn starting_record(attempt: &str, replaces: Option<&str>) -> VerificationRecord 
         plan_context: Some(PlanContext {
             language: language(),
             submitted_source_hash: source_hash(),
+            verify_libraries: Vec::new(),
         }),
     }
 }
