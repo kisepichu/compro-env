@@ -1490,7 +1490,7 @@ fingerprint が stale になった場合だけ通常の自動実行対象へ戻�
 
 fingerprint は最低限、次から作る。
 
-- preprocess 後の実提出ソース
+- 解法の生ソース (`[submit].preprocess` 適用前の on-disk bytes)
 - solution ID
 - 明示的に verify するライブラリの ID とソース
 - その推移的依存先の ID とソース

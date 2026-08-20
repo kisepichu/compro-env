@@ -95,7 +95,12 @@ impl FingerprintSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FingerprintMaterial {
     pub solution_id: SolutionId,
-    pub submitted_source: FingerprintSource,
+    /// Raw solution source bytes as they exist on disk, before any
+    /// `[submit].preprocess` transformation. Hashing the raw file (not the
+    /// OJ-bound "wire content") keeps site-data — which is offline and
+    /// never runs preprocess — able to reproduce the fingerprint that the
+    /// verify pipeline stored on the record.
+    pub raw_source: FingerprintSource,
     pub verified_libraries: BTreeSet<LibraryId>,
     pub dependency_library_sources: BTreeMap<LibraryId, FingerprintSource>,
     pub binding: OjBinding,
@@ -227,7 +232,7 @@ fn find_solution<'a>(
 pub fn calculate_fingerprint(
     material: &FingerprintMaterial,
 ) -> Result<VerifyFingerprint, FingerprintError> {
-    let submitted_hash = material.submitted_source.hash();
+    let raw_source_hash = material.raw_source.hash();
     let mut library_hashes: BTreeMap<String, String> = BTreeMap::new();
     for (id, source) in &material.dependency_library_sources {
         library_hashes.insert(id.to_string(), source.hash().to_string());
@@ -249,7 +254,7 @@ pub fn calculate_fingerprint(
     let payload = serde_json::json!({
         "schema_version": FINGERPRINT_SCHEMA_VERSION,
         "solution_id": material.solution_id.as_str(),
-        "submitted_source_hash": submitted_hash.as_str(),
+        "raw_source_hash": raw_source_hash.as_str(),
         "verified_libraries": material
             .verified_libraries
             .iter()
@@ -633,7 +638,7 @@ mod tests {
     // ─── calculate_fingerprint ─────────────────────────────────────────────
 
     fn material(
-        submitted: FingerprintSource,
+        raw: FingerprintSource,
         verified: Vec<&str>,
         deps: Vec<FingerprintSource>,
     ) -> FingerprintMaterial {
@@ -647,7 +652,7 @@ mod tests {
         }
         FingerprintMaterial {
             solution_id: SolutionId::parse("abc999/a/main").unwrap(),
-            submitted_source: submitted,
+            raw_source: raw,
             verified_libraries: verified_libs,
             dependency_library_sources: sources,
             binding: binding(),

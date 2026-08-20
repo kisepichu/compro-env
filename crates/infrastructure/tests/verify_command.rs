@@ -1563,5 +1563,95 @@ fn verify_uses_project_local_preprocess_hook() {
         "expected the original source body to survive the preprocess `cat`, got: {source:?}",
     );
 
+    // Regression: fingerprint hashes the *raw* on-disk source bytes, not
+    // the preprocess output. The stored record's fingerprint must equal
+    // what site-data would recompute offline from the working-tree source
+    // (spec §11). If someone plumbs preprocess bytes back into the
+    // fingerprint material, this assertion FAILs and reproduces the
+    // Stale-badge regression on `librarychecker-aplusb/aplusb/rust`.
+    use usecases::repository::verification_repository::VerificationRepository;
+    use usecases::verification::fingerprint::{
+        AdapterIdentity, FingerprintMaterial, FingerprintSource, OjBinding, calculate_fingerprint,
+        capabilities_from_descriptor, hash_verify_config,
+    };
+
+    let record = VerificationRepositoryImpl::new(root.clone())
+        .load(&lc_id())
+        .expect("load persisted record")
+        .expect("record persisted for the preprocessed solution");
+
+    let solution = manifest
+        .solutions
+        .iter()
+        .find(|s| s.id == lc_id())
+        .expect("librarychecker solution present in manifest");
+    let verify = solution
+        .verify
+        .as_ref()
+        .expect("librarychecker solution has [verify] block");
+    let entry_path = format!("{}/{}", solution.root, solution.entry);
+    let entry_bytes = std::fs::read(root.join(&entry_path)).expect("read raw entry bytes");
+    // Sanity: the raw file on disk is exactly what we wrote in `make_repo`;
+    // it must NOT start with the "// bundled\n" preprocess header. If this
+    // ever passes, the fingerprint parity assertion below no longer proves
+    // anything.
+    assert!(
+        !entry_bytes.starts_with(b"// bundled\n"),
+        "raw entry bytes must be preprocess-free for this regression to be meaningful"
+    );
+
+    let mut dep_sources: BTreeMap<LibraryId, FingerprintSource> = BTreeMap::new();
+    for lib in &verify.libraries {
+        let lib_path = manifest
+            .libraries
+            .iter()
+            .find(|l| &l.id == lib)
+            .map(|l| l.source_path.clone())
+            .expect("verify library present in manifest");
+        let bytes = std::fs::read(root.join(&lib_path)).expect("read library bytes");
+        dep_sources.insert(
+            lib.clone(),
+            FingerprintSource {
+                path: lib_path,
+                bytes,
+            },
+        );
+    }
+
+    let descriptor = SubmissionAdapterDescriptor {
+        name: "capture-lc".into(),
+        version: "1".into(),
+        submission_mode: SubmissionMode::UnattendedTrackable,
+        result_detail: ResultDetailLevel::TestcaseDetails,
+        recovery_mode: RecoveryMode::BestEffort,
+    };
+    let material = FingerprintMaterial {
+        solution_id: lc_id(),
+        raw_source: FingerprintSource {
+            path: entry_path,
+            bytes: entry_bytes,
+        },
+        verified_libraries: verify.libraries.iter().cloned().collect(),
+        dependency_library_sources: dep_sources,
+        binding: OjBinding {
+            oj: OJKind::LibraryChecker.as_str().to_string(),
+            problem_id: lc_id().problem_code().to_string(),
+            language_id: solution.language.clone(),
+            oj_language_id: verify.oj_language_id.clone(),
+        },
+        adapter: AdapterIdentity {
+            name: descriptor.name.clone(),
+            version: descriptor.version.clone(),
+            capabilities: capabilities_from_descriptor(&descriptor),
+        },
+        verify_config_hash: hash_verify_config(verify),
+    };
+    let recomputed = calculate_fingerprint(&material).expect("fingerprint recomputes");
+    assert_eq!(
+        record.fingerprint, recomputed,
+        "stored fingerprint must equal fingerprint recomputed from raw source \
+         bytes; preprocess hook must not enter the hash input"
+    );
+
     drop(tmp);
 }
