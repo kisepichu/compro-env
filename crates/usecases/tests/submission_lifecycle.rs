@@ -1235,9 +1235,7 @@ fn poll_handle_completed_cites_plan_context_hash_and_language() {
     let plan_hash = hash(0xbb);
     let plan_lang = binding();
     let mut seeded = make_submitted(&lc_solution(), "attempt-1", "librarychecker", "42");
-    let plan_verify_libraries = vec![
-        LibraryId::parse("libraries/rust/algebra/monoid.rs").unwrap(),
-    ];
+    let plan_verify_libraries = vec![LibraryId::parse("libraries/rust/algebra/monoid.rs").unwrap()];
     seeded.plan_context = Some(domain::verification::PlanContext {
         language: plan_lang.clone(),
         submitted_source_hash: plan_hash.clone(),
