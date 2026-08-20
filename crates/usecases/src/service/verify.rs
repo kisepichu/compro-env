@@ -857,7 +857,12 @@ fn build_plan_context(
         );
     }
 
-    // Read the solution's entry file.
+    // Read the solution's entry file. `entry_bytes_raw` participates in
+    // the fingerprint below; `entry_bytes_post` is the wire content sent
+    // to the OJ (identical to the raw bytes when no preprocess hook is
+    // configured). Splitting them keeps site-data — which is offline and
+    // never runs preprocess — able to recompute the same fingerprint that
+    // the verify pipeline stored on the record.
     let mut entry_rel = published.root.clone();
     if !entry_rel.ends_with('/') {
         entry_rel.push('/');
@@ -866,9 +871,11 @@ fn build_plan_context(
     let entry_bytes_raw = std::fs::read(repository_root.join(&entry_rel))
         .map_err(|e| format!("failed to read solution entry {entry_rel}: {e}"))?;
 
-    // Run the global preprocess hook if configured (Unix only).
+    // Run the global preprocess hook if configured (Unix only). The hook
+    // never influences the fingerprint — its output is the wire content
+    // only.
     #[cfg(unix)]
-    let entry_bytes = match submit_preprocess {
+    let entry_bytes_post = match submit_preprocess {
         Some(cmd) if !cmd.trim().is_empty() => {
             match run_preprocess(
                 cmd,
@@ -883,17 +890,21 @@ fn build_plan_context(
                 Err(e) => return Err(format!("preprocess hook failed: {e}")),
             }
         }
-        _ => entry_bytes_raw,
+        _ => entry_bytes_raw.clone(),
     };
     #[cfg(not(unix))]
-    let entry_bytes = {
+    let entry_bytes_post = {
         let _ = submit_preprocess;
-        entry_bytes_raw
+        entry_bytes_raw.clone()
     };
 
+    let raw_source = FingerprintSource {
+        path: entry_rel.clone(),
+        bytes: entry_bytes_raw,
+    };
     let submitted_source = FingerprintSource {
         path: entry_rel.clone(),
-        bytes: entry_bytes,
+        bytes: entry_bytes_post,
     };
 
     // Adapter identity from the starter's descriptor.
@@ -923,7 +934,7 @@ fn build_plan_context(
     }
     let material = FingerprintMaterial {
         solution_id: solution_id.clone(),
-        submitted_source: submitted_source.clone(),
+        raw_source,
         verified_libraries,
         dependency_library_sources,
         binding: ojb,

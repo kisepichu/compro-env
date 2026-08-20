@@ -721,7 +721,7 @@ mod fingerprint_recomputation {
         );
         let material = FingerprintMaterial {
             solution_id: sol.id.clone(),
-            submitted_source: FingerprintSource {
+            raw_source: FingerprintSource {
                 path: format!("{}/{}", sol.root, sol.entry),
                 bytes: entry_bytes.to_vec(),
             },

@@ -340,7 +340,9 @@ fn fingerprint_for_solution(
         .get(&sol.id)
         .ok_or_else(|| FingerprintError::MissingSolutionSource(sol.id.clone()))?
         .clone();
-    let submitted_source = FingerprintSource {
+    // site-data is offline and never runs preprocess, so the working-tree
+    // bytes are already the raw source that the verify pipeline hashed.
+    let raw_source = FingerprintSource {
         path: entry_path,
         bytes: entry_bytes,
     };
@@ -364,7 +366,7 @@ fn fingerprint_for_solution(
 
     let material = FingerprintMaterial {
         solution_id: sol.id.clone(),
-        submitted_source,
+        raw_source,
         verified_libraries,
         dependency_library_sources,
         binding,
