@@ -65,6 +65,7 @@ whose hashed inputs still match the working tree surfaces as `Verified`,
 while any source, closure library, adapter, or `[verify]`-block drift folds
 the solution to `Stale` per spec §11.
 
-Preprocess hooks are not invoked during recomputation — site-data is
-offline — so records persisted with a source-mutating `[submit].preprocess`
-hook can legitimately read as `Stale` until the source is re-verified.
+Preprocess hooks are intentionally never part of the fingerprint. Both
+the verify pipeline and site-data hash the *raw* on-disk source bytes
+(preprocess-free), so a source-mutating `[submit].preprocess` hook does
+not shift the fingerprint away from what site-data recomputes.
