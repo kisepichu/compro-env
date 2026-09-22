@@ -1,8 +1,18 @@
 name: pages
 
 on:
+  # `main` rebuilds the site source. `automation/verify` is the state branch
+  # the verify worker pushes `verification/results/**` to; the build overlays
+  # those records, so a record push has to republish too. No `paths:` filter:
+  # it would apply to both branches and `main` must always rebuild, and every
+  # `automation/verify` commit is a record commit anyway.
+  #
+  # A live verify pushes three times (persist_starting / persist_handle /
+  # persist_terminal). The `pages-publish` concurrency group below cancels
+  # in progress, so the earlier builds are dropped and only the terminal one
+  # runs to completion. That is the intended behavior.
   push:
-    branches: [main]
+    branches: [main, automation/verify]
   workflow_dispatch:
 
 permissions:
@@ -25,6 +35,10 @@ jobs:
       - name: Checkout with full history
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
+          # Always build the site from `main`, never from the trigger ref: a
+          # push to `automation/verify` must not publish that branch's tree.
+          # Records come in through the overlay step below.
+          ref: main
           fetch-depth: 0
 
       - name: Configure Pages
@@ -127,10 +141,16 @@ jobs:
       - name: Record artifact source metadata
         id: record_sha
         env:
-          SOURCE_SHA: ${{ github.sha }}
           SITE_SCHEMA_VERSION: "1"
         run: |
           set -euo pipefail
+          # The checked-out HEAD, not `github.sha`: a run triggered by an
+          # `automation/verify` record push carries that branch's commit in
+          # `github.sha`, which can never equal `main` HEAD and would always
+          # trip the deploy job's stale-rerun guard. With `ref: main` above
+          # this is the `main` tip the artifact was actually built from, so
+          # the guard still rejects artifacts built off an outdated `main`.
+          SOURCE_SHA="$(git rev-parse HEAD)"
           mkdir -p web/dist
           jq -n \
             --arg sha "$SOURCE_SHA" \

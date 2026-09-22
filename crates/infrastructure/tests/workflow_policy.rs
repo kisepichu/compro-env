@@ -911,11 +911,12 @@ fn ci_never_deploys_to_pages() {
 
 // ─── Plan 061 Task 3: Pages workflow policy (spec §15.5) ─────────────────────
 
-/// #061.10: `pages.yml` triggers only on push to main and manual dispatch.
-/// PR and schedule triggers are banned so a stray branch cannot spawn a
-/// deployment.
+/// #061.10: `pages.yml` triggers on pushes to `main` (the site source) and
+/// to `automation/verify` (the verification records the build overlays),
+/// plus manual dispatch. PR and schedule triggers stay banned so a stray
+/// branch cannot spawn a deployment.
 #[test]
-fn pages_triggers_are_main_push_and_manual_only() {
+fn pages_triggers_are_source_and_record_push_and_manual_only() {
     let doc = load_pages();
     let root = as_map(&doc, "pages.yml");
     let on = get(root, "on").expect("pages.yml missing `on:`");
@@ -930,8 +931,15 @@ fn pages_triggers_are_main_push_and_manual_only() {
     let listed: Vec<&str> = branches.iter().filter_map(Value::as_str).collect();
     assert_eq!(
         listed,
-        vec!["main"],
-        "pages.yml push branches must be exactly [main]"
+        vec!["main", "automation/verify"],
+        "pages.yml push branches must be exactly [main, automation/verify]"
+    );
+
+    // A `paths:` filter would apply to both branches, and `main` must
+    // republish on every push regardless of which files changed.
+    assert!(
+        get(push, "paths").is_none() && get(push, "paths-ignore").is_none(),
+        "pages.yml push must not filter on paths — `main` always rebuilds"
     );
 
     assert!(
@@ -1125,6 +1133,59 @@ fn pages_build_emits_source_sha_metadata() {
     assert!(
         source_sha.is_some_and(|s| s.contains("steps.") && s.contains("source_sha")),
         "outputs.source_sha must wire to a step output (got {source_sha:?})"
+    );
+}
+
+/// A record push arrives on `automation/verify`, so the build must pin its
+/// checkout to `main` — the trigger ref carries records only, never the
+/// site source — and take the artifact's source SHA from that checkout.
+/// `github.sha` on a record-triggered run is the record commit, which can
+/// never equal `main` HEAD, so the deploy job's stale-rerun guard would
+/// reject every record-triggered publish.
+#[test]
+fn pages_build_pins_main_and_records_checked_out_head() {
+    let doc = load_pages();
+    let jobs_map = jobs(&doc);
+    let build = get(jobs_map, "build").expect("missing build job");
+    let step_list = steps(build);
+
+    let checkout = step_list
+        .iter()
+        .filter_map(|s| s.as_mapping())
+        .find(|m| {
+            get(m, "uses")
+                .and_then(Value::as_str)
+                .is_some_and(|u| u.starts_with("actions/checkout@"))
+        })
+        .expect("build job must check out the repository");
+    let with = get(checkout, "with")
+        .and_then(Value::as_mapping)
+        .expect("checkout must set `with:`");
+    assert_eq!(
+        get(with, "ref").and_then(Value::as_str),
+        Some("main"),
+        "build checkout must pin `ref: main`, not follow the trigger ref"
+    );
+
+    let record = step_list
+        .iter()
+        .filter_map(|s| s.as_mapping())
+        .find(|m| get(m, "id").and_then(Value::as_str) == Some("record_sha"))
+        .expect("build job must have a `record_sha` step");
+    let run = get(record, "run")
+        .and_then(Value::as_str)
+        .expect("record_sha must be a run step");
+    assert!(
+        run.contains("git rev-parse HEAD"),
+        "record_sha must derive the source SHA from the checked-out HEAD (got {run:?})"
+    );
+    // Whitespace-insensitive so `${{github.sha}}` is caught too. Prose
+    // mentions of the context in comments are not interpolations.
+    let job_yaml = serde_yaml::to_string(build).expect("build job serializes");
+    let dense: String = job_yaml.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        !dense.contains("${{github.sha}}"),
+        "build job must not interpolate `github.sha` — on a record push that is the record commit"
     );
 }
 
