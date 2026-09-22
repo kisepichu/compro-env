@@ -141,8 +141,10 @@ cargo run --bin ce -- init https://judge.yosupo.jp/problem/aplusb --lang rust
 `<problem_code>/main/` (テンプレート展開) ができる。
 
 **コミットするのは解法ディレクトリだけ。** `.ce.toml` と `testcases/` は commit しない
-(公開対象の discovery は解法直下の `ce.toml` しか読まない —
-`crates/infrastructure/src/library_project/discovery.rs`)。
+(公開対象の選択は解法直下の `ce.toml` の `publish` だけで決まり、コンテストの `.ce.toml` は
+影響しない)。ただし `.ce.toml` が存在する場合は discovery が schema 検証のためにパースし、
+壊れていれば discovery 全体が失敗する
+(`crates/infrastructure/src/library_project/discovery.rs` の `parse_contest_ce_toml`)。
 
 ### 3.2 解法ディレクトリを追加する
 
