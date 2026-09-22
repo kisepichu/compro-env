@@ -30,7 +30,7 @@ display_name = "C++"
 root = "libraries/cpp"
 include = ["**/*.hpp", "**/*.cpp"]
 exclude = []
-check_command = "clang++ -std=c++20 -Wall -Wextra -Werror -fsyntax-only libraries/cpp/algebra/monoid.hpp"
+check_command = "\"$CE_REPOSITORY_ROOT/scripts/check-cpp-libraries.sh\""
 check_timeout_seconds = 600
 syntax_highlight = "cpp"
 entry_file = "main.cpp"
@@ -50,7 +50,7 @@ display_name = "Lean"
 root = "libraries/lean"
 include = ["**/*.lean"]
 exclude = []
-check_command = "lake build"
+check_command = "\"$CE_REPOSITORY_ROOT/scripts/check-lean-libraries.sh\""
 check_timeout_seconds = 900
 syntax_highlight = "lean"
 entry_file = "Main.lean"
