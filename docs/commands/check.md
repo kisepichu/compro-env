@@ -17,9 +17,25 @@ ce check [--language <id>]
 
 - `--language <id>`: 単一言語だけを実行する。省略時は `[library.languages]` に登録された全言語を実行する。
 
-CI では toolchain を用意できている言語に限り `--language` filter 付きで実行してよい
-(`.github/workflows/ci.yml` の rust job は clang++ / lake を install しないため `ce check --language rust` だけを実行する)。
-公開 build は言語 filter なしで実行する。filter 付き check の成功だけを repository 全体の公開可否には使わない。
+`.github/workflows/ci.yml` の rust job は filter なしの `ce check` を実行する
+(clang++ は runner image 同梱、Lean は pin 済み toolchain を install する step がある)。
+`--language` は単一 id しか取らないので、toolchain を揃えられない環境では言語ごとに step を分けて
+filter する。filter 付き check の成功だけを repository 全体の公開可否には使わない。
+
+## 言語別の check 内容
+
+`check_command` の中身はアプリの関心事ではないが、実際に設定されているものは次の通り
+(いずれも `scripts/` のスクリプトで、言語 root 配下を再帰列挙して 1 ファイルずつ処理する。
+ファイルを置くだけで検査対象になる)。
+
+| 言語 | check_command                       | 各ファイルへの処理                                             |
+| ---- | ----------------------------------- | -------------------------------------------------------------- |
+| rust | `scripts/check-rust-libraries.sh`   | `rustc --edition 2024 --test` でコンパイルし、生成物を実行     |
+| cpp  | `scripts/check-cpp-libraries.sh`    | `clang++ -std=c++20 -Wall -Wextra -Werror -fsyntax-only`        |
+| lean | `scripts/check-lean-libraries.sh`   | `lean -DwarningAsError=true` (`sorry` を error に昇格)          |
+
+3 スクリプトは共通の規約を持つ: 1 ファイルの失敗で打ち切らず最後に `N passed, M failed` を出し、
+失敗が 1 件でもあれば exit 1。対象 0 件は失敗にしない。`CE_*` が未設定でも単体実行できる。
 
 ## 挙動
 
@@ -66,9 +82,20 @@ OJ credential / GitHub token / cloud credential 等の secret は check には�
 
 ## 例
 
+各 `check_command` の出力はそのままストリーミングされ、最後に言語ごとの集約行が並ぶ。
+
 ```
 $ ce check
-[cpp] skipped (no check_command configured)
+[cpp-lib] libraries/cpp/algebra/monoid.hpp: ok
+[cpp-lib] 1 passed, 0 failed
+[cpp] passed
+[lean-lib] libraries/lean/Algebra/Monoid.lean: ok
+[lean-lib] 1 passed, 0 failed
+[lean] passed
+[rust-lib] libraries/rust/algebra/monoid.rs: ok
+[rust-lib] 1 passed, 0 failed
+[rust] passed
+[cpp] passed
 [lean] passed
 [rust] passed
 ```
@@ -76,6 +103,13 @@ $ ce check
 ```
 $ ce check --language rust
 [rust] passed
+```
+
+`check_command` を設定していない言語は失敗ではなく skip になる。
+
+```
+$ ce check
+[cpp] skipped (no check_command configured)
 ```
 
 ## 関連
