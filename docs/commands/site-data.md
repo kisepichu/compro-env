@@ -52,10 +52,31 @@ invoked. Downstream tools consume the JSON directly.
 - Symbol and diagnostic ordering follows spec §14: severity → location →
   code → message.
 
+## Caller-supplied inputs
+
+Five projection inputs cannot be derived from adapter output, so the shell
+layer collects them before the projection runs
+(`crates/infrastructure/src/library_project/site_inputs.rs`). Collection
+happens after discovery and before the analyzers, so a malformed sidecar
+fails fast.
+
+| Input | Source | Notes |
+| --- | --- | --- |
+| `library_descriptions` | sidecar Markdown body (`<source>.md`, frontmatter stripped and trimmed) | Renders as the page's Documentation section. A missing or body-less sidecar leaves the key unset, so `description` stays absent. |
+| `relations` | sidecar `[[relations]]` | Target must be a managed library; self relations and duplicate `kind`/target pairs are config errors. `manual` is always `false`: relations are declarations, and the badge marks hand-added dependency edges. |
+| `manual_dependency_edges` | sidecar `[[dependency_overrides]]` with `action = "add"` | Target must be a managed library in the same language. `remove` / `resolve` / `external` are rejected — the projection models neither adapter-reported edge removal nor unresolved dependency keys, and silently dropping them would publish a wrong graph. |
+| `solution_has_preprocess` | `[submit].preprocess` (`ConfigImpl::submit_preprocess`) | The hook is repository-wide, so every published solution gets the same flag. Drives the "the actual submission is preprocessed" note on solution pages. |
+| `oj_by_contest` | `solutions/<contest_id>/.ce.toml` `online_judge`, else the contest-ID convention (`OJKind::detect`) | Only used for solutions without a completed verification record; a completed record's `handle.oj` wins. Unrecognised contests stay unmapped and render as `unknown`. |
+
+`_index.md` bodies are parsed by discovery but have no field in
+`site-schema`, so directory and language pages still render without an
+overview.
+
 ## Related files
 
 - Schema: `web/schema/site-data-v1.schema.json`
 - Projection: `crates/usecases/src/site_data.rs`
+- Input collection: `crates/infrastructure/src/library_project/site_inputs.rs`
 - Atomic write: `crates/infrastructure/src/repository_impl/site_data_repository_impl.rs`
 
 ## Status

@@ -56,7 +56,7 @@ libraries/rust/algebra/monoid.rs
 - 生 source が 256 KiB を超えると build warning (設計文書 §12.11)。2 MiB の hard limit は
   `build.mode` が `production` のときしか効かず、`pages.yml` も CI も `--mode preview` で
   生成しているため **現状は発火しない**
-  ([issue #131](https://github.com/kisepichu/compro-env/issues/131))。
+  ([issue #133](https://github.com/kisepichu/compro-env/issues/133))。
 
 ### 2.2 単体テストを同じファイルに書く (rust)
 
@@ -103,11 +103,19 @@ reason = "macro-generated dependency"
 - `publish` 既定 `true`。`false` にすると Web ページを作らない (解析対象には残る)。
 - frontmatter なしも可。sidecar 自体なしでもソースページは生成される。
 - 対応するソースがない orphan sidecar は build error。
+- **Markdown 本文はライブラリページの Documentation セクションになる。** 本文を書けばそのまま
+  公開ページに出る。
 - **Markdown 本文に `h1` を書いてはいけない。** 見出しは `h2` から始め、level を 2 以上飛ばさない
-  (page title が唯一の `h1`。設計文書 §12)。renderer 側には拒否の実装があるが、
-  現状 sidecar 本文は site-data に載らないため **この規約はどこでも検査されていない**
-  ([issue #131](https://github.com/kisepichu/compro-env/issues/131))。破っても CI は緑のまま通る。
+  (page title が唯一の `h1`。設計文書 §12)。破ると renderer が
+  `h1_disallowed_in_markdown` / `heading_level_jump` で build を落とす (2.5)。
+- `[[relations]]` はライブラリページの Relations セクションに出る。target は管理対象ライブラリで
+  なければならず、自己 relation と同じ `kind` / target の重複は build error (設計文書 §5.1)。
+  **公開ページに出るのは公開ライブラリ宛ての relation だけ** で、非公開 target は黙って落ちる。
+- `[[dependency_overrides]]` は `action = "add"` だけが適用され、Dependencies に `manual` 付きで
+  並ぶ。`remove` / `resolve` / `external` は projection が未対応なので **書くと build error**
+  (黙って無視されるより落とす方を選んでいる)。`add` の target は同じ言語の管理対象ライブラリに限る。
 - ディレクトリ / 言語 root の説明は `_index.md` に置き、`title` だけを書ける。
+  **`_index.md` の本文は site-data のスキーマに載る先が無く、まだどこにも描画されない。**
 
 ### 2.4 ローカルで確認する (任意)
 
@@ -139,25 +147,25 @@ CI が自動でやること:
   `ce site-data generate --mode preview` → `npm run site:build` を走らせる。
   merge 後の `pages.yml` と同じ組なので、**ここが緑なら pages build も通る**。
 
-`Real-content site-data build` が落とすもの (いずれも generate の discovery 段で exit 1):
+`Real-content site-data build` が落とすもの:
 
-| 不正 | エラーメッセージの例 |
-| --- | --- |
-| frontmatter の未知キー | ``unknown field `author`, expected one of `title`, `publish`, `relations`, `dependency_overrides` `` |
-| frontmatter の malformed TOML | `malformed frontmatter in ...: TOML parse error at line 1, column 16` |
-| 空の `title` | ``` `title` must not be empty (omit the key to inherit the default) ``` |
-| orphan sidecar | ``discovery rejected 1 problem(s): [orphan_sidecar] sidecar ... has no corresponding source file`` |
-| `[verify].libraries` が非公開 / 不在のライブラリを指す | ``solution ... verifies library `...` which is not a public discovered library`` |
-| 新規ライブラリが未コミット | `no git history recorded for published library ...` |
+| 不正 | 落ちる段階 | エラーメッセージの例 |
+| --- | --- | --- |
+| frontmatter の未知キー | generate (discovery) | ``unknown field `author`, expected one of `title`, `publish`, `relations`, `dependency_overrides` `` |
+| frontmatter の malformed TOML | generate (discovery) | `malformed frontmatter in ...: TOML parse error at line 1, column 16` |
+| 空の `title` | generate (discovery) | ``` `title` must not be empty (omit the key to inherit the default) ``` |
+| orphan sidecar | generate (discovery) | ``discovery rejected 1 problem(s): [orphan_sidecar] sidecar ... has no corresponding source file`` |
+| `[verify].libraries` が非公開 / 不在のライブラリを指す | generate (discovery) | ``solution ... verifies library `...` which is not a public discovered library`` |
+| `[[relations]]` が不在ライブラリ / 自分自身を指す、同じ `kind` / target の重複 | generate (入力収集) | ``libraries/rust/algebra/monoid.rs.md: relation `port` points at `...`, which is not a managed library (spec §5.1)`` |
+| `[[dependency_overrides]]` が `remove` / `resolve` / `external`、または別言語を `add` | generate (入力収集) | ``... dependency override `action = "remove"` is not supported by site-data generation yet; only `add` is applied`` |
+| 新規ライブラリが未コミット | generate (projection) | `no git history recorded for published library ...` |
+| sidecar 本文の `h1` / 見出し level 飛ばし | site:build (renderer) | `MarkdownRenderError: Documentation must not include a level-1 heading; the page owns the <h1>.` |
 
 CI が **まだ検出しないもの** (実測で確認済み。merge 後の `pages.yml` でも落ちない):
 
-- **sidecar Markdown 本文の `h1` / 見出し level 飛ばし** — 本文が site-data に載らないため
-  renderer が検査する機会がない (2.3)。
 - **source の 2 MiB hard limit** — `--mode preview` では発火しない (2.1)。
-
-どちらも [issue #131](https://github.com/kisepichu/compro-env/issues/131) で追跡している。
-規約自体は生きているので 2.1 / 2.3 に従うこと。CI は守ってくれない。
+  [issue #133](https://github.com/kisepichu/compro-env/issues/133) で追跡している。
+  規約自体は生きているので 2.1 に従うこと。CI は守ってくれない。
 
 ### 2.6 cpp / lean の注意
 
@@ -350,7 +358,8 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
 
   cold run で LLVM (~700MB) と Lean (~500MB) を落とす。CI 側は
   `pages.yml` / `verify.yml` と共有の analyzer cache に当たるのでこの download は通常発生しない。
-  なお **このプレビューでも `h1` とサイズ上限は落ちない** (2.3 / 2.1、issue #131)。
+  このプレビューは CI と同じ組なので `h1` も落ちるが、**サイズ上限だけは落ちない**
+  (2.1、[issue #133](https://github.com/kisepichu/compro-env/issues/133))。
 
 ## 関連
 
