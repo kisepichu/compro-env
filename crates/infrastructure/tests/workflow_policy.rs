@@ -91,7 +91,7 @@ fn as_map<'a>(v: &'a Value, label: &str) -> &'a serde_yaml::Mapping {
 }
 
 fn get<'a>(map: &'a serde_yaml::Mapping, key: &str) -> Option<&'a Value> {
-    map.get(&Value::String(key.to_string()))
+    map.get(Value::String(key.to_string()))
 }
 
 fn jobs(v: &Value) -> &serde_yaml::Mapping {
@@ -297,7 +297,7 @@ fn environment_names_are_from_allowlist() {
 ///   - `automation/verify`: the App-managed state branch, which `submit`
 ///     and `poll` read so `ce internal verify-{start,poll}` can see the
 ///     record `persist_starting` / `persist_handle` just committed.
-/// The `actions/checkout` SHA pin is covered by test #3.
+///     The `actions/checkout` SHA pin is covered by test #3.
 #[test]
 fn no_build_or_unpinned_checkout_in_secret_jobs() {
     let banned_cargo_verbs = ["cargo build", "cargo test", "cargo run"];
@@ -510,7 +510,8 @@ fn verify_dispatcher_wires_before_after_through_env() {
     let inputs = get(as_map(workflow_call, "workflow_call"), "inputs")
         .expect("workflow_call missing `inputs:`");
     let inputs_map = as_map(inputs, "inputs");
-    for name in ["after"] {
+    {
+        let name = "after";
         let input = get(inputs_map, name)
             .unwrap_or_else(|| panic!("workflow_call.inputs missing {name:?}"));
         let input_map = as_map(input, name);
@@ -570,10 +571,10 @@ fn all_run_steps(doc: &Value) -> Vec<(String, String)> {
     for (job_name, job) in jobs(doc) {
         let job_label = job_name.as_str().unwrap_or("").to_string();
         for step in steps(job) {
-            if let Some(m) = step.as_mapping() {
-                if let Some(run) = get(m, "run").and_then(Value::as_str) {
-                    out.push((job_label.clone(), run.to_string()));
-                }
+            if let Some(m) = step.as_mapping()
+                && let Some(run) = get(m, "run").and_then(Value::as_str)
+            {
+                out.push((job_label.clone(), run.to_string()));
             }
         }
     }
@@ -910,11 +911,17 @@ fn ci_never_deploys_to_pages() {
 
 // ─── Plan 061 Task 3: Pages workflow policy (spec §15.5) ─────────────────────
 
-/// #061.10: `pages.yml` triggers only on push to main and manual dispatch.
-/// PR and schedule triggers are banned so a stray branch cannot spawn a
+/// #061.10: `pages.yml` triggers on pushes to `main`, on completion of the
+/// `verify` workflow (so records persisted to `automation/verify` get
+/// published), and on manual dispatch. `push` must stay `main`-only: a
+/// push-triggered run executes the workflow file from the pushed ref, so
+/// adding the App-writable state branch here would require widening the
+/// `github-pages` deployment branch policy and let that branch publish
+/// arbitrary content. `workflow_run` runs from the default branch instead.
+/// PR and schedule triggers stay banned so a stray branch cannot spawn a
 /// deployment.
 #[test]
-fn pages_triggers_are_main_push_and_manual_only() {
+fn pages_triggers_are_main_push_verify_run_and_manual_only() {
     let doc = load_pages();
     let root = as_map(&doc, "pages.yml");
     let on = get(root, "on").expect("pages.yml missing `on:`");
@@ -930,7 +937,29 @@ fn pages_triggers_are_main_push_and_manual_only() {
     assert_eq!(
         listed,
         vec!["main"],
-        "pages.yml push branches must be exactly [main]"
+        "pages.yml push branches must be exactly [main] — deploying from a \
+         bot-writable branch would run that branch's copy of this workflow"
+    );
+
+    // `main` must republish on every push regardless of which files changed.
+    assert!(
+        get(push, "paths").is_none() && get(push, "paths-ignore").is_none(),
+        "pages.yml push must not filter on paths — `main` always rebuilds"
+    );
+
+    let workflow_run = get(on_map, "workflow_run")
+        .and_then(Value::as_mapping)
+        .expect("pages.yml must follow the verify workflow via workflow_run");
+    let watched: Vec<&str> = get(workflow_run, "workflows")
+        .and_then(Value::as_sequence)
+        .expect("workflow_run.workflows must be a sequence")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(
+        watched,
+        vec!["verify"],
+        "workflow_run must watch exactly the `verify` workflow"
     );
 
     assert!(
@@ -1103,10 +1132,11 @@ fn pages_build_emits_source_sha_metadata() {
             Some(m) => m,
             None => continue,
         };
-        if let Some(run) = get(map, "run").and_then(Value::as_str) {
-            if run.contains("build-source.json") && run.contains("source_commit_sha") {
-                writes_metadata = true;
-            }
+        if let Some(run) = get(map, "run").and_then(Value::as_str)
+            && run.contains("build-source.json")
+            && run.contains("source_commit_sha")
+        {
+            writes_metadata = true;
         }
     }
     assert!(
@@ -1123,6 +1153,120 @@ fn pages_build_emits_source_sha_metadata() {
     assert!(
         source_sha.is_some_and(|s| s.contains("steps.") && s.contains("source_sha")),
         "outputs.source_sha must wire to a step output (got {source_sha:?})"
+    );
+}
+
+/// The build must pin its checkout to `main` rather than inherit whatever
+/// ref the event happens to carry, and must take the artifact's source SHA
+/// from that checkout. `github.sha` follows the event, not the built tree —
+/// on `workflow_run` it is the default-branch tip captured when `verify`
+/// finished — so trusting it hands the deploy job's stale-rerun guard a SHA
+/// that need not match what was built.
+#[test]
+fn pages_build_pins_main_and_records_checked_out_head() {
+    let doc = load_pages();
+    let jobs_map = jobs(&doc);
+    let build = get(jobs_map, "build").expect("missing build job");
+    let step_list = steps(build);
+
+    let checkout = step_list
+        .iter()
+        .filter_map(|s| s.as_mapping())
+        .find(|m| {
+            get(m, "uses")
+                .and_then(Value::as_str)
+                .is_some_and(|u| u.starts_with("actions/checkout@"))
+        })
+        .expect("build job must check out the repository");
+    let with = get(checkout, "with")
+        .and_then(Value::as_mapping)
+        .expect("checkout must set `with:`");
+    assert_eq!(
+        get(with, "ref").and_then(Value::as_str),
+        Some("main"),
+        "build checkout must pin `ref: main`, not follow the trigger ref"
+    );
+
+    let record = step_list
+        .iter()
+        .filter_map(|s| s.as_mapping())
+        .find(|m| get(m, "id").and_then(Value::as_str) == Some("record_sha"))
+        .expect("build job must have a `record_sha` step");
+    let run = get(record, "run")
+        .and_then(Value::as_str)
+        .expect("record_sha must be a run step");
+    assert!(
+        run.contains("git rev-parse HEAD"),
+        "record_sha must derive the source SHA from the checked-out HEAD (got {run:?})"
+    );
+    // Whitespace-insensitive so `${{github.sha}}` is caught too. Prose
+    // mentions of the context in comments are not interpolations.
+    let job_yaml = serde_yaml::to_string(build).expect("build job serializes");
+    let dense: String = job_yaml.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(
+        !dense.contains("${{github.sha}}"),
+        "build job must not interpolate `github.sha` — it tracks the event, not the built tree"
+    );
+}
+
+/// `verify` wakes every five minutes and most ticks publish nothing, so the
+/// `workflow_run` trigger must be filtered: only a run whose
+/// `persist_terminal` job succeeded wrote a record worth republishing.
+/// Without this the site would rebuild every five minutes. The gate itself
+/// stays read-only — it only reads the triggering run's job list.
+#[test]
+fn pages_gate_filters_verify_runs_without_a_terminal_record() {
+    let doc = load_pages();
+    let jobs_map = jobs(&doc);
+    let gate = get(jobs_map, "gate").expect("pages.yml missing `gate` job");
+    let gate_map = as_map(gate, "gate job");
+
+    let perms = get(gate_map, "permissions")
+        .and_then(Value::as_mapping)
+        .expect("gate job must declare permissions");
+    assert_eq!(
+        get(perms, "actions").and_then(Value::as_str),
+        Some("read"),
+        "gate needs `actions: read` to list the triggering run's jobs"
+    );
+    for (key, value) in perms {
+        let key = key.as_str().unwrap_or_default();
+        assert_ne!(
+            value.as_str(),
+            Some("write"),
+            "gate.permissions.{key} must not be write — the gate only reads"
+        );
+    }
+
+    let gate_yaml = serde_yaml::to_string(gate).expect("gate job serializes");
+    for needle in [
+        "github.event.workflow_run.id",
+        "github.event.workflow_run.conclusion",
+        "Persist terminal result",
+    ] {
+        assert!(
+            gate_yaml.contains(needle),
+            "gate job must consult {needle:?} to decide whether anything was published"
+        );
+    }
+
+    let build = as_map(
+        get(jobs_map, "build").expect("missing build job"),
+        "build job",
+    );
+    let needs = get(build, "needs").expect("build must depend on the gate");
+    let depends_on_gate = match needs {
+        Value::String(s) => s == "gate",
+        Value::Sequence(seq) => seq.iter().any(|v| v.as_str() == Some("gate")),
+        _ => false,
+    };
+    assert!(depends_on_gate, "build.needs must include `gate`");
+    let if_expr = get(build, "if")
+        .and_then(Value::as_str)
+        .expect("build must be gated on the gate's decision");
+    assert!(
+        if_expr.contains("needs.gate.outputs.should_build == 'true'"),
+        "build `if:` must require `needs.gate.outputs.should_build == 'true'` (got {if_expr:?})"
     );
 }
 
@@ -1205,13 +1349,13 @@ const APP_ONLY_JOBS: [&str; 3] = ["persist_starting", "persist_handle", "persist
 const OJ_ONLY_JOBS: [&str; 2] = ["submit", "poll"];
 const LIVE_ONLY_JOBS: [&str; 4] = ["submit", "persist_handle", "poll", "persist_terminal"];
 
-fn seq_str_values<'a>(v: &'a Value) -> Vec<&'a str> {
+fn seq_str_values(v: &Value) -> Vec<&str> {
     v.as_sequence()
         .map(|s| s.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default()
 }
 
-fn needs_of<'a>(job: &'a Value) -> Vec<&'a str> {
+fn needs_of(job: &Value) -> Vec<&str> {
     let map = match job.as_mapping() {
         Some(m) => m,
         None => return vec![],
@@ -1406,6 +1550,39 @@ fn dispatcher_worker_call_is_correctly_gated() {
         secrets,
         Some("inherit"),
         "worker job must pass `secrets: inherit`"
+    );
+}
+
+/// An explicit `workflow_dispatch` `mode` must keep precedence over the
+/// `VERIFY_LIVE` repository variable, and an unset / non-`true`
+/// `VERIFY_LIVE` must fall back to `dry-run`. Dropping either half turns
+/// unattended ticks into unconditional OJ submissions, or makes a manual
+/// `mode: dry-run` silently submit.
+#[test]
+fn dispatcher_mode_prefers_dispatch_input_then_verify_live() {
+    let doc = load_dispatcher();
+    let jobs_map = jobs(&doc);
+    let worker = get(jobs_map, "worker").expect("verify.yml missing worker job");
+    let with = get(as_map(worker, "worker job"), "with")
+        .and_then(Value::as_mapping)
+        .expect("worker call must pass `with:`");
+    let mode = get(with, "mode")
+        .and_then(Value::as_str)
+        .expect("worker call must pass `mode`");
+
+    let dispatch_at = mode
+        .find("inputs.mode")
+        .unwrap_or_else(|| panic!("mode must consider `inputs.mode` (got {mode:?})"));
+    let live_at = mode
+        .find("vars.VERIFY_LIVE == 'true'")
+        .unwrap_or_else(|| panic!("mode must gate the OJ path on `VERIFY_LIVE` (got {mode:?})"));
+    assert!(
+        dispatch_at < live_at,
+        "an explicit dispatch `mode` must win over `VERIFY_LIVE` (got {mode:?})"
+    );
+    assert!(
+        mode.contains("'dry-run'"),
+        "mode must fall back to `dry-run` when `VERIFY_LIVE` is unset (got {mode:?})"
     );
 }
 

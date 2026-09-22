@@ -469,7 +469,13 @@ fn run_one_plan(
         source,
     })?;
 
-    let identity = handshake_adapter(runner, &staged, &plan.language, request.handshake_timeout)?;
+    let identity = handshake_adapter(
+        runner,
+        &staged,
+        &plan.language,
+        request.handshake_timeout,
+        &plan.handshake_environment,
+    )?;
     if identity.name != plan.expected_adapter_name
         || identity.version != plan.expected_adapter_version
     {
@@ -506,17 +512,20 @@ fn run_one_plan(
 /// Run one adapter with the empty analysis request and return its identity.
 ///
 /// This is the same code path as ordinary analysis; there is no separate
-/// handshake protocol. The caller is responsible for supplying a `runner`
-/// configured with a sanitized environment.
+/// handshake protocol. `environment` is the sanitized per-language env the
+/// runner uses for the child process — typically
+/// `LanguageBuildPlan::handshake_environment` at build time or the
+/// analyzer-side equivalent at ordinary analysis time.
 pub fn handshake_adapter(
     runner: &dyn LibraryAdapterRunner,
     executable: &Path,
     language: &str,
     timeout: Duration,
+    environment: &BTreeMap<String, String>,
 ) -> Result<AdapterIdentity, BuildError> {
     let request = empty_handshake_request(language);
     let response = runner
-        .analyze(executable, &request, timeout)
+        .analyze(executable, &request, timeout, environment)
         .map_err(|source| BuildError::HandshakeRun {
             language: language.to_string(),
             source,

@@ -446,11 +446,22 @@ pub struct VerificationRecord {
 /// [`apply_transition`] through every forward move, so downstream states
 /// (`Submitted`, `Queued`, `Judging`, `InfrastructureFailure`, `Completed`)
 /// can quote it without reaching back into the discarded `Starting` body.
+///
+/// `verify_libraries` freezes the sorted, deduplicated `[verify].libraries`
+/// list the plan pinned so `CompletedState.verified_libraries` (spec §11
+/// "result は提出時の direct `verified_libraries` を ID 順で保存する") is
+/// populated from the plan rather than being lost between `Starting` and
+/// `Completed`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanContext {
     pub language: LanguageBinding,
     pub submitted_source_hash: ContentHash,
+    /// Direct `[verify].libraries` from the plan, sorted by ID (spec §8.1).
+    /// `#[serde(default)]` keeps records written before this field existed
+    /// loadable — they simply deserialize with an empty vec.
+    #[serde(default)]
+    pub verify_libraries: Vec<LibraryId>,
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────

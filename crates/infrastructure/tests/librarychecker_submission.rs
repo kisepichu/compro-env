@@ -200,22 +200,30 @@ fn poll_maps_each_known_verdict() {
     }
 }
 
-// ─── Test 5: unknown verdict becomes Other ────────────────────────────────────
+// ─── Test 5: unknown overall status stays pending ─────────────────────────────
 
+/// An overall status outside the terminal allowlist means the judge has not
+/// finished with the attempt (Library Checker answers a bare `-` before a
+/// worker picks the submission up). Reporting `Completed` here froze an
+/// unjudged submission as `Completed{Other}` with blank testcases.
 #[test]
-fn poll_unknown_verdict_becomes_other() {
+fn poll_unknown_overall_status_stays_pending() {
     let body = include_str!("fixtures/librarychecker/submission-unknown-verdict.json").to_string();
     let server = FixtureServer::start(serve_body(body));
     let obs = poller_for(&server)
         .poll_submission(&test_handle("1238"), None)
         .expect("poll ok");
-    match obs {
-        PollObservation::Completed(r) => {
-            assert_eq!(r.verdict, JudgeVerdict::Other("SomethingWeird".to_string()));
-            assert!(r.testcases.is_empty());
-        }
-        other => panic!("expected Completed, got {other:?}"),
-    }
+    assert!(matches!(obs, PollObservation::Queued), "{obs:?}");
+}
+
+#[test]
+fn poll_bare_dash_status_stays_pending() {
+    let body = info_json("-");
+    let server = FixtureServer::start(serve_body(body));
+    let obs = poller_for(&server)
+        .poll_submission(&test_handle("395075"), None)
+        .expect("poll ok");
+    assert!(matches!(obs, PollObservation::Queued), "{obs:?}");
 }
 
 // ─── Test 6: rejected with per-case metrics ───────────────────────────────────

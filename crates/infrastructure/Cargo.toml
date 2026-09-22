@@ -49,6 +49,7 @@ nix = { version = "0.29", features = ["signal", "process"] }
 serial_test = "3"
 tiny_http = "0.12"
 serde_yaml = "0.9"
+parking_lot = "0.12"
 
 [target.'cfg(unix)'.dev-dependencies]
 nix = { version = "0.29", features = ["signal", "process"] }

@@ -1,0 +1,250 @@
+# Verify Candidate Selection Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Make `verify.yml`'s scheduled and eligible-push runs pick one publishable solution per tick automatically, so the `automation/verify → main → pages` verification loop advances without operator dispatch. Retryable failures whose `next_retry_at` has elapsed become candidates too.
+
+**Architecture:** Add a secretless `ce internal pick-candidate` subcommand that reads the project's published+verify-marked solutions (existing `LibraryProjectConfig` + discovery) and overlays the current `automation/verify` state (`verification/results/**`) exactly the way `verify-prepare` does. A pure `select_next_candidate` in `usecases::verification` returns at most one `SolutionId` per invocation using deterministic ordering. The `verify.yml` dispatcher forwards the picker's output as the worker's `solution` input. The worker's six-job chain is not modified — the picker only replaces the currently-hard-coded empty string on schedule/push events.
+
+**Tech Stack:** Rust 1.92.0 / Cargo, existing workspace (`domain`, `usecases`, `infrastructure`, `interfaces`), `clap`, `chrono`, GitHub Actions.
+
+## Global Constraints
+
+- **Branch:** `feat/063-verify-candidate-selection`
+- **Depends on:** plan 062 activation cycle complete on `main` (last merged 062-tagged PR).
+- Secretless: the picker runs in the same dispatcher job as `classify-changes`. It must not read App or OJ credentials and must not open new environments or secrets.
+- Do not touch the six-job worker chain in `verify-worker.yml`; only extend the dispatcher's `solution` computation.
+- `workflow_dispatch` inputs still win: an explicit `solution:` from a manual dispatch skips the picker.
+- Deterministic ordering: parallel ticks colliding on the concurrency group must pick the same target given the same inputs.
+- Never pick a solution whose latest record is in any in-flight `VerificationState` variant (`Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging`). The worker's CAS already protects against races; skipping avoids wasted OJ hits and log noise.
+- Never pick a solution whose latest completed record's fingerprint matches the current source/library closure. That solution is already verified and stable.
+- The picker returns an empty output when no candidate is eligible; the dispatcher must translate that into `run_worker=false` so `prepare` does not spin up.
+- Retry consumption is in scope: `InfrastructureFailure { retryable: true, .. }` records are eligible when either `next_retry_at <= now` or `next_retry_at.is_none()` (unscheduled retryable failures retry on the next tick rather than sitting dormant).
+- **`next_retry_at` scheduling is out of scope for this plan.** Production persisters (`crates/usecases/src/submission_lifecycle.rs`) currently always write `next_retry_at: None`; the `Some(t) <= now` eligibility branch is correct and tested but is dead code until a follow-up plan updates the persisters. The `None`-is-immediately-eligible path is therefore the sole runtime path at present. Do not widen scope here; document the gap in the runbook (Task 4 Step 1).
+
+---
+
+### Task 1: Domain rule for candidate selection
+
+**Files:**
+- Modify: `crates/usecases/src/verification/mod.rs`
+- Create: `crates/usecases/src/verification/candidate.rs`
+
+**Interfaces:**
+- Produces: `pub fn select_next_candidate(now: DateTime<FixedOffset>, published: &[PublishedSolution], records: &BTreeMap<SolutionId, VerificationRecord>, fingerprints: &BTreeMap<SolutionId, VerifyFingerprint>) -> Option<SolutionId>`.
+- Contract: `fingerprints` MUST contain an entry for every `SolutionId` whose latest record in `records` is `VerificationState::Completed(_)`. Solutions in any other state (no record, in-flight, `InfrastructureFailure`, `Unavailable`) need no entry. The function indexes `fingerprints[&id]` only when `records[&id]` is `Completed`; the caller (Task 2 Step 3.4) is responsible for populating these entries before this call. A missing key for a `Completed` id is a programmer error.
+- Consumes: existing `domain::solution::PublishedSolution`, `domain::verification::{VerificationRecord, VerificationState, VerifyFingerprint, InfrastructureFailure, CompletedState}`.
+
+- [ ] **Step 1: Write failing selection-order tests**
+
+Cover in `candidate.rs::tests`:
+
+- Empty state: three published solutions with no records → returns the smallest `SolutionId` by UTF-8 bytes.
+- Retry ready: one solution has a `VerificationState::InfrastructureFailure(InfrastructureFailure { retryable: true, next_retry_at: Some(t0), .. })` record; another has no record; `now = t0` → returns the retry candidate (retry deadline sorts before fresh candidates).
+- Retry not ready: `next_retry_at = Some(t)` with `t > now` → the retry candidate is filtered out; unrecorded solutions still selectable.
+- In-flight skip: latest record is any non-terminal, non-`InfrastructureFailure` variant of `VerificationState` — that is, `Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, or `Judging` (see `crates/domain/src/verification.rs`). Add one test case per variant; every one excludes the solution even when no other candidate exists (returns `None`, not the in-flight one).
+- Stable-fingerprint skip: `VerificationState::Completed(_)` `VerificationRecord` whose `fingerprint` field equals `fingerprints[&id]` (the caller guarantees an entry exists for every `Completed` id per the interface contract) → excluded. Note that `VerifyFingerprint` is stored directly on `VerificationRecord`; it is not re-derived from `input_hashes` here (only `calculate_fingerprint` with the full `FingerprintMaterial` produces one).
+- Fingerprint drift: `Completed` `VerificationRecord` whose `fingerprint` differs from `fingerprints[&id]` → eligible; ordered after retry-ready candidates.
+- Non-retryable failure: `InfrastructureFailure { retryable: false, .. }` → excluded permanently.
+- Retryable with no scheduled retry: `InfrastructureFailure { retryable: true, next_retry_at: None, .. }` → immediately eligible. `None` is treated as "past" for the deadline check; the persister is expected to always schedule a retry, so an unscheduled retryable failure represents unrecoverable-but-recorded state that should retry on the next tick rather than sit dormant.
+- Unavailable skip: `VerificationState::Unavailable(_)` record → excluded even when it is the only published solution; returns `None`. This is the terminal "cannot verify under current inputs" state (`crates/domain/src/verification.rs`); it never becomes eligible again unless the fingerprint drifts, but the drift path is already covered by the `Completed` cases above, so an `Unavailable` record here just proves the exclusion is exhaustive against future eligibility-list edits.
+
+- [ ] **Step 2: Run the focused tests and observe the missing module**
+
+Run: `cargo test -p usecases verification::candidate`
+
+Expected: compilation fails; `candidate` module and `select_next_candidate` do not exist.
+
+- [ ] **Step 3: Implement selection**
+
+Rules, in this order:
+
+1. Build a working set of every `PublishedSolution` whose latest record permits selection: no record OR (`VerificationState::InfrastructureFailure(InfrastructureFailure { retryable: true, next_retry_at, .. })` where `next_retry_at.map_or(true, |t| t <= now)`) OR (`VerificationState::Completed(_)` with `record.fingerprint != fingerprints[&id]`).
+2. Reject solutions whose latest state is any of the five in-flight `VerificationState` variants — `Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging` — or any future non-terminal, non-`InfrastructureFailure` variant introduced by later plans (fail closed).
+3. Order candidates by the pair `(retry_ready_bucket, solution_id.as_str().as_bytes())`, where `retry_ready_bucket` is `(0, next_retry_at_value)` for retry-ready `InfrastructureFailure` records with a `Some(t)` deadline, `(0, chrono::DateTime::<Utc>::MIN_UTC.fixed_offset())` for retry-ready records with `next_retry_at = None` (so they sort ahead of any scheduled retry), and `(1, chrono::DateTime::<Utc>::MIN_UTC.fixed_offset())` for the remaining eligible candidates (no record / fingerprint drift). Use a custom `Ord` impl or a `sort_by` closure — do not rely on a `DateTime::<FixedOffset>::MAX` constant, chrono only exposes `MAX_UTC` on `DateTime<Utc>`.
+4. Return `Some(first)` or `None`.
+
+Keep the module free of I/O; it is a pure function over the caller-provided data.
+
+- [ ] **Step 4: Add stability + tie-break tests**
+
+- Two retry candidates with the same `next_retry_at` → smaller `SolutionId` wins.
+- Retry candidate with `next_retry_at = now` is selected (boundary case).
+- Reordering the input `published` slice does not change the output.
+
+Run: `cargo test -p usecases verification::candidate`
+
+Expected: all cases pass.
+
+- [ ] **Step 5: Commit the domain rule**
+
+Invoke `/commit` with message:
+
+```text
+feat: select next verify candidate deterministically
+```
+
+### Task 2: `ce internal pick-candidate` subcommand
+
+**Files:**
+- Modify: `crates/infrastructure/src/shell/commands.rs`
+- Modify: `crates/interfaces/src/verify.rs`
+- Create: `crates/infrastructure/src/verify_pick_candidate.rs`
+- Create: `crates/infrastructure/tests/pick_candidate.rs`
+
+**Interfaces:**
+- Produces: `ce internal pick-candidate --root <repo> --state <automation-verify-worktree> [--now <rfc3339>]`.
+- Prints the picked `SolutionId` (or empty string) on stdout followed by a single newline. Exits `0` on both hit and miss; non-zero only on configuration or I/O errors.
+- Consumes: existing `ProjectLibraryConfigLoader`, `LibraryDiscovery`, and Task 1's `select_next_candidate`.
+
+- [ ] **Step 1: Write failing integration tests**
+
+Under `crates/infrastructure/tests/pick_candidate.rs`, mount a temp repo containing:
+
+- `config.toml` with one language and one solution.
+- `solutions/<id>/ce.toml` marking the solution as published + verify.
+- A parallel `state/` directory representing the overlay from `automation/verify`, containing one `verification/results/<id>.json` for a mocked `VerificationState::InfrastructureFailure(InfrastructureFailure { retryable: true, next_retry_at: Some(t), .. })` record.
+
+Assert:
+
+- `--now` before `next_retry_at` → prints empty.
+- `--now` at or after `next_retry_at` → prints the solution id.
+- No `state/` overlay → prints the solution id (no record means eligible).
+- `state/` overlay for a non-existent solution id → picker ignores it and still selects the configured solution.
+
+- [ ] **Step 2: Run the focused tests and observe the missing subcommand**
+
+Run: `cargo test -p infrastructure --test pick_candidate`
+
+Expected: compilation fails.
+
+- [ ] **Step 3: Wire the subcommand**
+
+Add `PickCandidate { root: PathBuf, state: PathBuf, now: Option<String> }` to `InternalSubcommand`. In the handler:
+
+1. Load `LibraryProjectConfig` from `--root`.
+2. Discover published+verify solutions via existing `LibraryDiscovery`.
+3. Overlay `<state>/verification/results/**` onto the working set (read every JSON, deserialize as `VerificationRecord`).
+4. Compute the current `VerifyFingerprint` for published+verify solutions whose latest overlay record is `VerificationState::Completed(_)` **only**. Per the Task 1 contract the map need only cover those ids; solutions in any other state require no entry. This avoids running the analyzer binary for every published solution on every scheduler tick. Reuse the fingerprint logic already exercised by `verify-prepare`; do not duplicate it — refactor shared code into a common module in this task if needed.
+5. Call `select_next_candidate`.
+6. Print the selected id, or an empty line.
+
+Reject a `--state` that is not a directory. Skip records whose `SolutionId` is not in the current publication set (they belong to solutions that have since been unpublished; leaving them alone is documented in the runbook).
+
+- [ ] **Step 4: Add error-path tests**
+
+- Missing `config.toml` → non-zero exit, error mentions the file.
+- Malformed record JSON in `state/verification/results/` → non-zero exit, error names the file.
+- Symlinked `state/` target → rejected (spec §6.1 discovery rules).
+
+Run: `cargo test -p infrastructure --test pick_candidate`
+
+Expected: pass.
+
+- [ ] **Step 5: Commit the subcommand**
+
+Invoke `/commit` with message:
+
+```text
+feat: expose ce internal pick-candidate
+```
+
+### Task 3: Wire the dispatcher to auto-pick
+
+**Files:**
+- Modify: `.github/workflows/verify.yml`
+
+**Interfaces:**
+- Consumes: `ce internal pick-candidate` from Task 2 and the existing `automation/verify` overlay pattern used by `verify-prepare`.
+- Produces: the worker's `solution` input on `schedule` and `push` events without operator involvement.
+
+- [ ] **Step 1: Draft the dispatcher change and expected log lines**
+
+Sketch the intended diff in the PR description: add a `Pick verify candidate` step after `Classify main` that runs only when `run_worker=true` AND `inputs.solution` is empty (so `workflow_dispatch` still short-circuits the picker). Overlay `automation/verify` into a `state/` scratch dir — the fetch must not touch the currently-checked-out index (main); use `git worktree add --detach state origin/automation/verify` or `git archive automation/verify verification/ | tar -x -C state/`; never use `git --work-tree=state checkout` as it pollutes the current index. Extend the `dispatch` job's `outputs` block to export `picked_solution`; introduce a `finalize` step (after `pick`) that combines `steps.decide.outputs.run_worker` and the picker result into a final `run_worker` output, since `decide`'s output cannot be overwritten in-place by a later step.
+
+- [ ] **Step 2: Add a workflow lint that asserts the picker branch**
+
+Add a matcher in `verify.yml`'s existing self-check step (or a new `if:` guard test) that fails the job when the picker output would otherwise be silently ignored on `schedule` or `push`. Prefer a small `shell: bash` sanity block over a new action.
+
+- [ ] **Step 3: Implement the dispatcher change**
+
+Update `verify.yml`:
+
+1. After the classify step decides `run_worker=true` and `inputs.solution == ''`, fetch `automation/verify` into `state/` (secretless: only public refs).
+2. Run `./target/release/ce internal pick-candidate --root . --state state --now "$(date -u +%FT%TZ)"` and capture stdout.
+3. In the `finalize` step: if picker output is empty → write `run_worker=false` to `$GITHUB_OUTPUT`; if non-empty → write `run_worker=true` and `picked_solution=<id>`. The `dispatch` job's `outputs` block reads `run_worker` and `picked_solution` from the `finalize` step, not from `decide`.
+4. Change the worker `with:` block to `solution: ${{ inputs.solution || needs.dispatch.outputs.picked_solution || '' }}`.
+5. Keep every existing gate (`VERIFY_ACTIVATED`, `github.ref == 'refs/heads/main'`) unchanged.
+
+Do not introduce new secrets, environments, or reusable-workflow calls.
+
+- [ ] **Step 4: Add a workflow dry-run test**
+
+Add a `workflow_dispatch` scratch case (documented in the PR body, not committed) that sets `mode: dry-run` and leaves `solution:` blank and observes:
+
+- Scheduler picks a candidate.
+- Worker's `prepare` step exits with `has_work=true`.
+- `persist_starting` succeeds against `automation/verify`.
+- Live `submit` / `poll` / `persist_terminal` remain skipped because `mode: dry-run`.
+
+- [ ] **Step 5: Commit the workflow change**
+
+Invoke `/commit` with message:
+
+```text
+feat: pick verify candidates in the dispatcher
+```
+
+### Task 4: Runbook and rollout catch-up
+
+**Files:**
+- Modify: `docs/operations/verify-automation.md`
+- Modify: `docs/superpowers/plans/2026-08-10-library-platform-rollout.md`
+
+- [ ] **Step 1: Rewrite the "no-op" language in the runbook**
+
+Replace the paragraphs at lines ~180–205 that currently say "Scheduled ticks are currently no-ops" with a description of the picker's rules, its determinism, and the in-flight/stable-fingerprint skips. Keep the manual-dispatch section — an operator still needs it for one-off `mode: live` runs against a specific solution. Include a note that the `InfrastructureFailure.next_retry_at` field is currently always `None` in production (persisters do not yet schedule a retry time), so all retryable failures are immediately eligible on the next tick; scheduled-retry consumption is a future improvement.
+
+Remove the sentence "the actual retry consumption path is gated on the same follow-up as automatic candidate selection." after this plan lands. Replace it with a note that `next_retry_at` scheduling in persisters is not yet implemented and all retryable failures currently use the `next_retry_at = None` (immediate-on-next-tick) path.
+
+Add a subsection documenting that `VerificationState::Unavailable` solutions are a permanent dead-letter for automatic candidate selection: once a solution reaches this state, the picker will never select it again because it is not in the allow-list (no record / retry-ready / fingerprint-drift). An operator must re-dispatch it manually via `workflow_dispatch` with an explicit `solution:` id. (The fingerprint-drift path that re-enables `Completed` solutions does not apply to `Unavailable`, because `UnavailableReason` variants such as adapter-not-found are not tracked in the fingerprint.)
+
+- [ ] **Step 2: Add row 063 to the rollout plan**
+
+Under `## Plan Index`, insert `| 063 | feat/063-verify-candidate-selection | 2026-08-14-verify-candidate-selection.md | 062 | Scheduler picks one candidate per tick; retry consumption |`.
+
+Under `## PR Dependency Graph`, extend the last line to `062 verify activation -- 063 verify candidate selection`.
+
+Under the ready sets bullet list, add `- After 062: 063.` and `- After 063: rollout complete.`
+
+- [ ] **Step 3: Commit the docs sync**
+
+Invoke `/commit` with message:
+
+```text
+docs: record verify candidate selection activation
+```
+
+### Task 5: Verify and deliver the PR
+
+- [ ] **Step 1: Run the plan integration suite**
+
+```bash
+cargo test -p usecases verification::candidate
+cargo test -p infrastructure --test pick_candidate
+cargo test --all
+cargo clippy --all --all-features -- -D warnings
+cargo fmt --all --check
+```
+
+Expected: all commands exit 0.
+
+- [ ] **Step 2: End-to-end smoke on a scratch dispatch**
+
+From the PR branch, dispatch `verify.yml` with `mode: dry-run` and blank `solution:`. Confirm the picker log line names one candidate and `persist_starting` succeeds against `automation/verify`. Do not run `mode: live` from the PR branch — activation happens once the PR is merged to `main`.
+
+- [ ] **Step 3: Open and drive the PR**
+
+Invoke `/pr --base main`. PR body links this plan, the runbook diff, and the scratch dispatch run URL. State that this closes out the 039–062 rollout.
+
+Invoke `/pr-review` until Copilot returns no new comments. Merge only after CI is green.

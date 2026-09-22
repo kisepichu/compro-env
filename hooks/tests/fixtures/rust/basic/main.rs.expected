@@ -1,0 +1,10 @@
+mod helper {
+pub fn greet() {
+    println!("hi");
+}
+
+}
+
+fn main() {
+    helper::greet();
+}

@@ -3,18 +3,90 @@ name: pages
 on:
   push:
     branches: [main]
+  # Follow `verify`: when its worker persists a terminal record to the
+  # `automation/verify` state branch, the site (which overlays those records)
+  # has to be republished. `workflow_run` runs take both `github.ref` and
+  # this workflow file from the default branch, so the `github-pages`
+  # environment keeps its `main`-only deployment branch policy.
+  #
+  # A `push:` trigger on `automation/verify` was rejected: a push-triggered
+  # run executes the workflow file *as it exists on the pushed ref*, so
+  # allowing that branch to deploy would let anything able to write the
+  # state branch replace this file and publish arbitrary content.
+  workflow_run:
+    workflows: [verify]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Unchanged from the single-trigger design: the newest publish wins. With the
+# `gate` job only letting terminal-record runs through, a verify attempt
+# produces at most one build, so cancellation now mostly covers back-to-back
+# `main` merges.
 concurrency:
   group: pages-publish
   cancel-in-progress: true
 
 jobs:
+  gate:
+    name: Decide whether to rebuild
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reading the triggering run's job list needs `actions: read`; nothing
+      # here writes.
+      actions: read
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+    steps:
+      - name: Decide whether the triggering verify run published anything
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # `push` to main and manual dispatch always rebuild.
+          if [ "$EVENT_NAME" != "workflow_run" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$RUN_CONCLUSION" != "success" ]; then
+            echo "verify run $RUN_ID concluded '$RUN_CONCLUSION' — nothing published."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # `verify` wakes every 5 minutes and most ticks persist nothing, so
+          # the run conclusion alone is not a publish signal: an unconditional
+          # rebuild would start a ~13-minute site build every 5 minutes and the
+          # `pages-publish` group would just have them cancel each other. Only
+          # a run whose `persist_terminal` job succeeded wrote a terminal
+          # record. That job is reached through the reusable worker, so the
+          # API reports it as `Invoke verify worker / Persist terminal result
+          # (App-only)` — match the distinctive part of the name. One page is
+          # enough: the chain is six jobs plus the dispatcher.
+          persisted="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+            --jq '[.jobs[]
+                   | select(.name | contains("Persist terminal result"))
+                   | select(.conclusion == "success")]
+                  | length')"
+          if [ "$persisted" -gt 0 ]; then
+            echo "verify run $RUN_ID persisted a terminal record; rebuilding."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "verify run $RUN_ID persisted no terminal record; skipping rebuild."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build site from current main
+    needs: gate
+    if: needs.gate.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -25,6 +97,13 @@ jobs:
       - name: Checkout with full history
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
+          # Pin the source to `main` instead of relying on the event's ref.
+          # On `workflow_run` the default checkout would already be the
+          # default branch (the event carries no other ref), but the pin is
+          # what makes that a property of this file rather than of the
+          # trigger. Verification records come in through the overlay step
+          # below, never from the trigger ref's tree.
+          ref: main
           fetch-depth: 0
 
       - name: Configure Pages
@@ -40,19 +119,103 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable @ 2026-08
+        with:
+          toolchain: 1.92.0
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-verify-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-verify-
+            ${{ runner.os }}-cargo-
+
+      - name: Build ce
+        run: cargo build --release --bin ce
+
+      - name: Cache prepared adapter dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: target/library-analyzers/prepared
+          key: ${{ runner.os }}-analyzers-prepared-${{ hashFiles('tools/library-analyzers/dependencies.toml') }}
+
+      - name: Cache built analyzer binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            target/library-analyzers/builds
+            target/library-analyzers/bin
+          key: ${{ runner.os }}-analyzers-builds-${{ hashFiles('tools/library-analyzers/**', 'crates/library-adapter-protocol/**', 'crates/domain/src/adapter_build.rs', 'crates/domain/src/adapter_prepare.rs', 'crates/infrastructure/src/library_adapter/**', 'Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Install analyzer build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build
+
+      - name: Prepare library analyzer dependencies
+        run: ./tools/library-analyzers/prepare
+
+      - name: Build library analyzer executables
+        # `--check` is a diagnostic and returns 0 even when nothing is
+        # built yet (see the `build_state` module: `CurrentBinMissing`
+        # is a reportable state, not a gate failure). Testing `-L
+        # target/library-analyzers/bin` first resolves the ambiguity —
+        # without a cache restore the symlink is absent, so we fall
+        # through to a real build.
+        run: |
+          set -euo pipefail
+          if [ -L target/library-analyzers/bin ] && ./tools/library-analyzers/build --check; then
+            echo "Warm cache: analyzer build already finalized."
+            exit 0
+          fi
+          ./tools/library-analyzers/build
+
+      - name: Overlay verification records from automation/verify
+        run: |
+          set -euo pipefail
+          REMOTE_REF=$(git ls-remote origin refs/heads/automation/verify)
+          if [ -n "$REMOTE_REF" ]; then
+            git fetch --depth=1 origin automation/verify
+            REMOTE_TREE="$(git ls-tree -r --name-only FETCH_HEAD)"
+            if printf '%s\n' "$REMOTE_TREE" | grep -q '^verification/results/'; then
+              git archive FETCH_HEAD verification/results/ | tar -x
+              echo "Overlaid verification records from automation/verify."
+            else
+              echo "::notice::automation/verify has no verification/results yet; site will show no verification data."
+            fi
+          else
+            echo "::warning::automation/verify branch not found; site-data will show no verification results."
+          fi
+
+      - name: Generate site-data
+        run: ./target/release/ce site-data generate --mode preview
+
       - name: Build site (production pipeline)
         env:
           CE_SITE_BASE: ${{ steps.pages_config.outputs.base_path }}
           CE_SITE_ORIGIN: ${{ steps.pages_config.outputs.origin }}
-        run: npm run site:build
+        run: npm run site:build -- --fixture=target/ce-site-data/site-data.json
 
       - name: Record artifact source metadata
         id: record_sha
         env:
-          SOURCE_SHA: ${{ github.sha }}
           SITE_SCHEMA_VERSION: "1"
         run: |
           set -euo pipefail
+          # The checked-out HEAD, not `github.sha`. `github.sha` tracks the
+          # event, not the tree that was built: on `workflow_run` it is the
+          # default-branch tip recorded when the event fired, which can drift
+          # from what `ref: main` resolved a few minutes later. Reading the
+          # real HEAD keeps the deploy job's stale-rerun guard honest — it
+          # still rejects an artifact built off a superseded `main`.
+          SOURCE_SHA="$(git rev-parse HEAD)"
           mkdir -p web/dist
           jq -n \
             --arg sha "$SOURCE_SHA" \

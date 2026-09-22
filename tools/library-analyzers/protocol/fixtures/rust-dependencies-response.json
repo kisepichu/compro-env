@@ -188,11 +188,61 @@
         ],
         "state": "partial"
       },
-      "diagnostics": [],
+      "diagnostics": [
+        {
+          "code": "rust.symbols.partial",
+          "location": {
+            "path": "libraries/rust/a.rs",
+            "start": {
+              "column": 1,
+              "line": 1
+            }
+          },
+          "message": "symbol analysis is partial for libraries/rust/a.rs (item-level macro or dropped span)",
+          "severity": "warning"
+        }
+      ],
       "path": "libraries/rust/a.rs",
       "symbol_analysis": {
         "state": "partial",
-        "symbols": []
+        "symbols": [
+          {
+            "kind": "mod",
+            "location": {
+              "end": {
+                "column": 7,
+                "line": 1
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            },
+            "name": "b",
+            "search_names": [
+              "b"
+            ]
+          },
+          {
+            "kind": "mod",
+            "location": {
+              "end": {
+                "column": 12,
+                "line": 3
+              },
+              "path": "libraries/rust/a.rs",
+              "start": {
+                "column": 1,
+                "line": 2
+              }
+            },
+            "name": "custom",
+            "search_names": [
+              "custom"
+            ]
+          }
+        ]
       }
     },
     {
@@ -236,8 +286,27 @@
       "diagnostics": [],
       "path": "libraries/rust/a/b.rs",
       "symbol_analysis": {
-        "state": "partial",
-        "symbols": []
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "fn",
+            "location": {
+              "end": {
+                "column": 19,
+                "line": 3
+              },
+              "path": "libraries/rust/a/b.rs",
+              "start": {
+                "column": 1,
+                "line": 3
+              }
+            },
+            "name": "helper",
+            "search_names": [
+              "helper"
+            ]
+          }
+        ]
       }
     },
     {
@@ -248,8 +317,27 @@
       "diagnostics": [],
       "path": "libraries/rust/custom/where.rs",
       "symbol_analysis": {
-        "state": "partial",
-        "symbols": []
+        "state": "complete",
+        "symbols": [
+          {
+            "kind": "const",
+            "location": {
+              "end": {
+                "column": 41,
+                "line": 1
+              },
+              "path": "libraries/rust/custom/where.rs",
+              "start": {
+                "column": 1,
+                "line": 1
+              }
+            },
+            "name": "MARKER",
+            "search_names": [
+              "MARKER"
+            ]
+          }
+        ]
       }
     }
   ],

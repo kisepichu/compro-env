@@ -1,0 +1,16 @@
+mod b {
+pub mod shared {
+pub const V: u32 = 42;
+
+}
+
+}
+mod c {
+pub mod shared {
+pub const V: u32 = 42;
+
+}
+
+}
+
+fn main() {}

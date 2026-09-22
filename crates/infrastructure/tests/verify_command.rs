@@ -355,6 +355,9 @@ impl Config for StubConfig {
     fn lang_id(&self, _: &domain::entity::Language, _: &OJKind) -> Option<String> {
         None
     }
+    fn project_root(&self) -> &std::path::Path {
+        std::path::Path::new("/tmp/stub-project-root")
+    }
 }
 
 // A `Sleeper` that records durations but does not actually sleep.
@@ -377,9 +380,11 @@ impl NoopSleeper {
 // Fake starter: scripted outcomes + call counter. When the outcomes queue is
 // exhausted, `default` is returned repeatedly — this keeps tests with an
 // unknown number of solutions from having to precount.
+type StartFn = Box<dyn Fn() -> Result<SubmissionStart, StartSubmissionError> + Send>;
+
 struct FakeStarter {
     outcomes: Mutex<Vec<Result<SubmissionStart, StartSubmissionError>>>,
-    default: Mutex<Option<Box<dyn Fn() -> Result<SubmissionStart, StartSubmissionError> + Send>>>,
+    default: Mutex<Option<StartFn>>,
     mode: SubmissionMode,
     calls: Arc<Mutex<u32>>,
 }
@@ -711,7 +716,7 @@ fn find_status<'a>(outcome: &'a VerifyOutcome, id: &SolutionId) -> Option<&'a Ve
 // ─── Tests ────────────────────────────────────────────────────────────────
 
 /// 1. `verify` walks the entire manifest by default. LC → Accepted, AtCoder →
-/// Unavailable. Overall exit 1 due to Unavailable.
+///    Unavailable. Overall exit 1 due to Unavailable.
 #[test]
 fn verify_bulk_mixed_ojs_exits_1_due_to_atcoder_unavailable() {
     let env = build_env(BuildEnv {
@@ -750,7 +755,7 @@ fn verify_single_target_lc_only_exits_0() {
 }
 
 /// 3. Existing terminal Accepted record with a matching fingerprint skips the
-/// starter entirely.
+///    starter entirely.
 #[test]
 fn verify_skips_when_stored_record_matches_fingerprint() {
     // We first do a real accepted run to seed the on-disk record + fingerprint.
@@ -816,7 +821,7 @@ fn verify_skips_when_stored_record_matches_fingerprint() {
 }
 
 /// 4. Stable ordering: two LC solutions both verified → status lines in
-/// ascending solution-id order.
+///    ascending solution-id order.
 #[test]
 fn verify_status_lines_are_sorted_by_solution_id() {
     let env = build_env(BuildEnv {
@@ -835,7 +840,7 @@ fn verify_status_lines_are_sorted_by_solution_id() {
 }
 
 /// 5. Resume-first: seed a Starting record for LC. Fake recovery says
-/// Recovered → poller returns Completed. Starter's start-count stays 0.
+///    Recovered → poller returns Completed. Starter's start-count stays 0.
 #[test]
 fn verify_resumes_starting_record_before_launching_new_work() {
     let env = build_env(BuildEnv::default_lc_only());
@@ -1010,7 +1015,7 @@ fn verify_rejected_verdict_returns_exit_1() {
 }
 
 /// 9. Budget exhausted then resume: first run polls forever (BudgetExhausted).
-/// Second run's poller returns Accepted → exit 0.
+///    Second run's poller returns Accepted → exit 0.
 #[test]
 fn verify_budget_exhausted_then_resume_to_accepted() {
     let env = build_env(BuildEnv {
@@ -1090,7 +1095,7 @@ fn verify_budget_exhausted_then_resume_to_accepted() {
 }
 
 /// 10. One in-flight per OJ: seed a Queued record for LC solution A; verify
-/// solution B (same OJ) → starter is NOT called for B; A resumes to Completed.
+///     solution B (same OJ) → starter is NOT called for B; A resumes to Completed.
 #[test]
 fn verify_one_in_flight_per_oj_blocks_second_solution() {
     // Repo has both LC solutions but the second (LC_SOLUTION_B) is the target.
@@ -1151,7 +1156,7 @@ fn seed_queued_record(solution: &SolutionId) -> VerificationRecord {
 }
 
 /// 11. Hidden internal verify-prepare writes a plan JSON that round-trips;
-/// verify-start on that plan succeeds; verify-poll drives to terminal.
+///     verify-start on that plan succeeds; verify-poll drives to terminal.
 #[test]
 fn internal_verify_prepare_start_and_poll_round_trip() {
     let env = build_env(BuildEnv::default_lc_only());
@@ -1231,6 +1236,15 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
         other => panic!("expected Starting state, got {other:?}"),
     }
 
+    // Simulate the credential-split `persist_starting` job (spec §15.4):
+    // the Starting record is written by an out-of-band writer BEFORE
+    // `verify-start` runs. Without this seed, `submit_prepared_plan` refuses
+    // (its whole purpose is to require an already-persisted Starting).
+    let repo = VerificationRepositoryImpl::new(env.root.clone());
+    use usecases::repository::verification_repository::VerificationRepository;
+    repo.compare_and_swap(&lc_id(), None, &starting)
+        .expect("seed Starting via CAS");
+
     // Now start via internal-verify-start.
     let ids2 = SequenceIdGenerator::new("internal2");
     let sleeper2 = NoopSleeper::new();
@@ -1285,4 +1299,359 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
         matches!(poll_event, PollEvent::Completed { .. }),
         "{poll_event:?}"
     );
+}
+
+/// 12. Credential-split path (spec §15.4): the `persist_starting` job writes
+///     the Starting record before `verify-start` runs. `internal_verify_start`
+///     must accept the pre-persisted record instead of erroring with
+///     "start_plan called twice", and the emitted `StartEvent`'s record must
+///     carry `replaces_attempt_id = Some(current.attempt_id)` so the downstream
+///     `persist_handle` CAS check round-trips.
+#[test]
+fn internal_verify_start_accepts_pre_persisted_starting_record() {
+    let env = build_env(BuildEnv::default_lc_only());
+    use interfaces::controller::input::{InternalVerifyPrepareInput, InternalVerifyStartInput};
+    struct PrepIn(String, String, Option<String>);
+    impl InternalVerifyPrepareInput for PrepIn {
+        fn solution(&self) -> String {
+            self.0.clone()
+        }
+        fn plan_out(&self) -> String {
+            self.1.clone()
+        }
+        fn starting_out(&self) -> Option<String> {
+            self.2.clone()
+        }
+    }
+    struct StartIn(String);
+    impl InternalVerifyStartInput for StartIn {
+        fn plan_in(&self) -> String {
+            self.0.clone()
+        }
+    }
+    let plan_path = env.root.join("plan.json");
+    let starting_path = env.root.join("starting.json");
+    let ids = SequenceIdGenerator::new("internal");
+    let sleeper = NoopSleeper::new();
+    env.controller
+        .internal_verify_prepare(
+            &PrepIn(
+                LC_SOLUTION.into(),
+                plan_path.display().to_string(),
+                Some(starting_path.display().to_string()),
+            ),
+            &env.root,
+            &env.config,
+            &env.manifest,
+            &env.snapshot,
+            &TestClock::new(),
+            &ids,
+            &sleeper,
+            &NoRetryHint,
+            PollingPolicy {
+                initial_interval: Duration::from_millis(1),
+                max_interval: Duration::from_millis(1),
+                max_error_backoff: Duration::from_millis(1),
+                total_budget: Duration::from_millis(50),
+            },
+        )
+        .expect("prepare succeeds");
+
+    // Simulate the `persist_starting` job: read the Starting sidecar and
+    // write it through the on-disk repository BEFORE `verify-start` runs.
+    let starting_bytes = std::fs::read(&starting_path).expect("starting sidecar exists");
+    let starting: VerificationRecord =
+        serde_json::from_slice(&starting_bytes).expect("starting parses");
+    let repo = VerificationRepositoryImpl::new(env.root.clone());
+    use usecases::repository::verification_repository::VerificationRepository;
+    repo.compare_and_swap(&lc_id(), None, &starting)
+        .expect("seed Starting via CAS");
+
+    // Now run `verify-start` against the pre-persisted record.
+    let ids2 = SequenceIdGenerator::new("internal2");
+    let sleeper2 = NoopSleeper::new();
+    let event = env
+        .controller
+        .internal_verify_start(
+            &StartIn(plan_path.display().to_string()),
+            &env.root,
+            &env.config,
+            &env.manifest,
+            &env.snapshot,
+            &TestClock::new(),
+            &ids2,
+            &sleeper2,
+            &NoRetryHint,
+            PollingPolicy {
+                initial_interval: Duration::from_millis(1),
+                max_interval: Duration::from_millis(1),
+                max_error_backoff: Duration::from_millis(1),
+                total_budget: Duration::from_millis(50),
+            },
+        )
+        .expect("start succeeds even though Starting was pre-persisted");
+
+    use usecases::submission_lifecycle::StartEvent;
+    match event {
+        StartEvent::Trackable { record } => {
+            assert!(matches!(record.state, VerificationState::Submitted(_)));
+            // The emitted record must carry the CAS token so downstream
+            // `persist_handle`'s `cas_check(expected=candidate.rai,
+            // actual=remote.attempt_id)` round-trips.
+            assert_eq!(
+                record.replaces_attempt_id.as_ref(),
+                Some(&record.attempt_id),
+                "emitted record's replaces_attempt_id must equal its own \
+                 attempt_id (the CAS token identifying the pre-persisted Starting)"
+            );
+        }
+        other => panic!("expected Trackable, got {other:?}"),
+    }
+
+    // The record on disk must also be Submitted with the same CAS token.
+    let stored = repo.load(&lc_id()).unwrap().expect("record persisted");
+    assert!(matches!(stored.state, VerificationState::Submitted(_)));
+    assert_eq!(
+        stored.replaces_attempt_id.as_ref(),
+        Some(&stored.attempt_id),
+    );
+}
+
+/// project-local `[submit].preprocess` が verify pipeline から呼ばれ、
+/// フックの stdout が提出ソースとして採用されることを end-to-end で確認する。
+///
+/// StubConfig ではなく実 `ConfigImpl::new(root)` を差し込むことで、
+/// project-local `<root>/config.toml` の `[submit].preprocess` 解決 →
+/// `sh -c` 起動 → stdout 採用のチェーン全体を走らせる。
+#[test]
+fn verify_uses_project_local_preprocess_hook() {
+    use infrastructure::config_impl::ConfigImpl;
+    use std::os::unix::fs::PermissionsExt;
+
+    let (tmp, root, config, manifest) = make_repo(true, false, false, "true");
+    let snapshot = make_snapshot(&manifest);
+
+    // Repo-local shell hook that prepends `// bundled\n` and then cats stdin.
+    // Simulates the shape rust_expand.py's output has (a header line + body).
+    let hook = root.join("hooks/echo-bundle.sh");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\nprintf '// bundled\\n'\ncat\n").unwrap();
+    let mut perms = std::fs::metadata(&hook).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&hook, perms).unwrap();
+
+    // Write a project-local config.toml wiring `[submit].preprocess`.
+    // `make_repo` does not create one, so this is the sole config file the
+    // real `ConfigImpl` will find under `root`.
+    std::fs::write(
+        root.join("config.toml"),
+        "[submit]\npreprocess = \"hooks/echo-bundle.sh\"\n",
+    )
+    .unwrap();
+
+    // Custom starter that captures the SubmissionRequest.source so the test
+    // can assert on what was actually fed to the OJ boundary.
+    // parking_lot::Mutex avoids the poisoning-unwrap boilerplate; test-only.
+    use parking_lot::Mutex as PlMutex;
+    let captured: Arc<PlMutex<Option<String>>> = Arc::new(PlMutex::new(None));
+    struct CapturingStarter {
+        captured: Arc<PlMutex<Option<String>>>,
+        calls: Arc<PlMutex<u32>>,
+    }
+    impl SubmissionStarter for CapturingStarter {
+        fn descriptor(&self) -> SubmissionAdapterDescriptor {
+            SubmissionAdapterDescriptor {
+                name: "capture-lc".into(),
+                version: "1".into(),
+                submission_mode: SubmissionMode::UnattendedTrackable,
+                result_detail: ResultDetailLevel::TestcaseDetails,
+                recovery_mode: RecoveryMode::BestEffort,
+            }
+        }
+        fn start_submission(
+            &self,
+            request: &SubmissionRequest,
+            _session: Option<&Session>,
+        ) -> Result<SubmissionStart, StartSubmissionError> {
+            *self.calls.lock() += 1;
+            *self.captured.lock() = Some(request.source.clone());
+            Ok(SubmissionStart::Trackable {
+                handle: PortHandle {
+                    online_judge: OJKind::LibraryChecker,
+                    submission_id: "cap-1".into(),
+                    submission_url: "https://judge/cap-1".into(),
+                    locator: None,
+                    submitted_at: Utc::now(),
+                },
+            })
+        }
+    }
+    let starter_calls = Arc::new(PlMutex::new(0u32));
+    let starter = CapturingStarter {
+        captured: Arc::clone(&captured),
+        calls: Arc::clone(&starter_calls),
+    };
+
+    let mut starters = StarterRegistry::new();
+    starters.register(OJKind::LibraryChecker, Box::new(starter));
+    let mut pollers = PollerRegistry::new();
+    pollers.register(
+        OJKind::LibraryChecker,
+        Box::new(FakePoller::always_completed(JudgeVerdict::Accepted)),
+    );
+    let mut recovery = RecoveryRegistry::new();
+    recovery.register(
+        OJKind::LibraryChecker,
+        Box::new(FakeRecovery::always(RecoveryOutcome::AcceptanceUnknown)),
+    );
+
+    let service = Service::with_verification(
+        Box::new(StubOJRegistry),
+        starters,
+        Box::new(ContestRepositoryImpl::new(root.clone())),
+        Box::new(SolutionRepositoryImpl::new(root.clone())),
+        Box::new(SessionRepositoryImpl),
+        Box::new(ConfigImpl::new(root.clone())),
+        Box::new(UnixCommandRunner),
+        VerificationServices {
+            pollers,
+            recovery,
+            verifications: Box::new(VerificationRepositoryImpl::new(root.clone())),
+        },
+    );
+    let controller = Controller::new(service);
+
+    let out = controller
+        .verify(
+            &SelectionInput { selection: None },
+            &root,
+            &config,
+            &manifest,
+            &snapshot,
+            &TestClock::new(),
+            &SequenceIdGenerator::new("preproc"),
+            &NoopSleeper::new(),
+            &NoRetryHint,
+            PollingPolicy {
+                initial_interval: Duration::from_millis(1),
+                max_interval: Duration::from_millis(1),
+                max_error_backoff: Duration::from_millis(1),
+                total_budget: Duration::from_millis(50),
+            },
+        )
+        .unwrap();
+
+    let lc = find_status(&out, &lc_id()).unwrap();
+    assert!(
+        matches!(lc.status, VerifyStatus::Verified),
+        "expected Verified after preprocess-then-accept; got {:?}",
+        lc.status,
+    );
+    assert_eq!(*starter_calls.lock(), 1, "starter must be called once");
+    let source = captured
+        .lock()
+        .clone()
+        .expect("starter should have captured a submission source");
+    assert!(
+        source.starts_with("// bundled\n"),
+        "expected preprocess output prefix, got: {source:?}",
+    );
+    // The hook `cat`s the original source after the header, so the raw entry
+    // bytes should also appear intact — confirming stdin was piped through.
+    assert!(
+        source.contains("fn main(){println!(\"lc\");}"),
+        "expected the original source body to survive the preprocess `cat`, got: {source:?}",
+    );
+
+    // Regression: fingerprint hashes the *raw* on-disk source bytes, not
+    // the preprocess output. The stored record's fingerprint must equal
+    // what site-data would recompute offline from the working-tree source
+    // (spec §11). If someone plumbs preprocess bytes back into the
+    // fingerprint material, this assertion FAILs and reproduces the
+    // Stale-badge regression on `librarychecker-aplusb/aplusb/rust`.
+    use usecases::repository::verification_repository::VerificationRepository;
+    use usecases::verification::fingerprint::{
+        AdapterIdentity, FingerprintMaterial, FingerprintSource, OjBinding, calculate_fingerprint,
+        capabilities_from_descriptor, hash_verify_config,
+    };
+
+    let record = VerificationRepositoryImpl::new(root.clone())
+        .load(&lc_id())
+        .expect("load persisted record")
+        .expect("record persisted for the preprocessed solution");
+
+    let solution = manifest
+        .solutions
+        .iter()
+        .find(|s| s.id == lc_id())
+        .expect("librarychecker solution present in manifest");
+    let verify = solution
+        .verify
+        .as_ref()
+        .expect("librarychecker solution has [verify] block");
+    let entry_path = format!("{}/{}", solution.root, solution.entry);
+    let entry_bytes = std::fs::read(root.join(&entry_path)).expect("read raw entry bytes");
+    // Sanity: the raw file on disk is exactly what we wrote in `make_repo`;
+    // it must NOT start with the "// bundled\n" preprocess header. If this
+    // ever passes, the fingerprint parity assertion below no longer proves
+    // anything.
+    assert!(
+        !entry_bytes.starts_with(b"// bundled\n"),
+        "raw entry bytes must be preprocess-free for this regression to be meaningful"
+    );
+
+    let mut dep_sources: BTreeMap<LibraryId, FingerprintSource> = BTreeMap::new();
+    for lib in &verify.libraries {
+        let lib_path = manifest
+            .libraries
+            .iter()
+            .find(|l| &l.id == lib)
+            .map(|l| l.source_path.clone())
+            .expect("verify library present in manifest");
+        let bytes = std::fs::read(root.join(&lib_path)).expect("read library bytes");
+        dep_sources.insert(
+            lib.clone(),
+            FingerprintSource {
+                path: lib_path,
+                bytes,
+            },
+        );
+    }
+
+    let descriptor = SubmissionAdapterDescriptor {
+        name: "capture-lc".into(),
+        version: "1".into(),
+        submission_mode: SubmissionMode::UnattendedTrackable,
+        result_detail: ResultDetailLevel::TestcaseDetails,
+        recovery_mode: RecoveryMode::BestEffort,
+    };
+    let material = FingerprintMaterial {
+        solution_id: lc_id(),
+        raw_source: FingerprintSource {
+            path: entry_path,
+            bytes: entry_bytes,
+        },
+        verified_libraries: verify.libraries.iter().cloned().collect(),
+        dependency_library_sources: dep_sources,
+        binding: OjBinding {
+            oj: OJKind::LibraryChecker.as_str().to_string(),
+            problem_id: lc_id().problem_code().to_string(),
+            language_id: solution.language.clone(),
+            oj_language_id: verify.oj_language_id.clone(),
+        },
+        adapter: AdapterIdentity {
+            name: descriptor.name.clone(),
+            version: descriptor.version.clone(),
+            capabilities: capabilities_from_descriptor(&descriptor),
+        },
+        verify_config_hash: hash_verify_config(verify),
+    };
+    let recomputed = calculate_fingerprint(&material).expect("fingerprint recomputes");
+    assert_eq!(
+        record.fingerprint, recomputed,
+        "stored fingerprint must equal fingerprint recomputed from raw source \
+         bytes; preprocess hook must not enter the hash input"
+    );
+
+    drop(tmp);
 }

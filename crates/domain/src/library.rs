@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn library_ids_sort_by_utf8_bytes() {
-        let mut ids = vec![
+        let mut ids = [
             LibraryId::parse("libraries/rust/z.rs").unwrap(),
             LibraryId::parse("libraries/rust/a.rs").unwrap(),
             LibraryId::parse("libraries/cpp/a.hpp").unwrap(),

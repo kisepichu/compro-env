@@ -18,13 +18,9 @@ use anyhow::{Context, Result, anyhow};
 use domain::analysis::{AnalysisSnapshot, DiscoveryManifest};
 use domain::entity::OJKind;
 use domain::library::{LanguageId, LibraryProjectConfig, SolutionId};
-use domain::online_judge::{
-    RecoveryMode as DomRecoveryMode, ResultDetail as DomResultDetail, SubmissionCapabilities,
-    SubmissionMode as DomSubmissionMode,
-};
 use domain::solution::PublishedSolution;
 use domain::verification::{
-    AttemptId, ContentHash, LanguageBinding, VerdictKind, VerificationRecord, VerificationState,
+    AttemptId, LanguageBinding, VerdictKind, VerificationRecord, VerificationState,
     VerifyFingerprint,
 };
 use sha2::{Digest, Sha256};
@@ -35,19 +31,15 @@ use crate::command_runner::{CommandRequest, CommandRunner};
 use crate::id_generator::AttemptIdGenerator;
 use crate::repository::session_repository::SessionRepository;
 use crate::repository::verification_repository::VerificationRepository;
-use crate::submission::{
-    PollerRegistry, RecoveryMode as PortRecoveryMode, RecoveryRegistry,
-    ResultDetailLevel as PortResultDetail, StarterRegistry, SubmissionMode as PortSubmissionMode,
-    SubmissionStarter,
-};
+use crate::submission::{PollerRegistry, RecoveryRegistry, StarterRegistry, SubmissionStarter};
 use crate::submission_lifecycle::{
     PollEvent, PollingPolicy, RetryAfterHint, Sleeper, StartEvent, SubmissionPorts,
     VerificationRepositories, VerifySelection as LifecycleSelection, poll_handle, resume_pending,
-    start_plan,
+    start_plan, submit_prepared_plan,
 };
 use crate::verification::fingerprint::{
     AdapterIdentity, FingerprintMaterial, FingerprintSource, OjBinding, calculate_fingerprint,
-    verification_closure,
+    capabilities_from_descriptor, hash_verify_config, verification_closure,
 };
 use crate::verification::plan::{PrepareVerificationInput, SubmissionPlan, build_submission_plan};
 
@@ -124,6 +116,54 @@ impl VerifyOutcome {
             }
         }
         0
+    }
+}
+
+/// Target state of the long-lived automation PR after a verify record has
+/// been persisted (spec §15.1, §15 PrTarget policy).
+///
+/// A single long-lived PR from `automation/verify` → `main` flips between
+/// these two states over the lifetime of an attempt: mid-flight persists
+/// keep it `Draft`, terminal-mergeable persists flip it to
+/// `ReadyAutoMerge`. Indeterminate terminal verdicts (`Cancelled`, `Other`)
+/// stay `Draft` so a human can decide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrTarget {
+    /// Keep (or restore) the PR as a draft.
+    Draft,
+    /// Mark the PR ready for review and enable auto-merge — the terminal
+    /// merge lets `pages.yml` fire on the follow-up push to `main`.
+    ReadyAutoMerge,
+}
+
+/// Map a persisted [`VerificationState`] to the target state of the
+/// automation PR (spec §15.1, §優先度6).
+///
+/// Terminal-mergeable states — `Completed` with a normalized verdict kind
+/// plus `Unavailable` — flip the PR to ready + auto-merge. `Cancelled` /
+/// `Other` verdicts stay draft (indeterminate: a human should decide).
+/// Every non-terminal state (`Starting`, `AcceptanceUnknown`, `Submitted`,
+/// `Queued`, `Judging`, `InfrastructureFailure`) keeps the PR draft.
+pub fn compute_pr_target(state: &VerificationState) -> PrTarget {
+    match state {
+        VerificationState::Completed(c) => match c.verdict.kind {
+            VerdictKind::Accepted
+            | VerdictKind::WrongAnswer
+            | VerdictKind::TimeLimitExceeded
+            | VerdictKind::MemoryLimitExceeded
+            | VerdictKind::RuntimeError
+            | VerdictKind::CompileError
+            | VerdictKind::OutputLimitExceeded
+            | VerdictKind::JudgeError => PrTarget::ReadyAutoMerge,
+            VerdictKind::Cancelled | VerdictKind::Other => PrTarget::Draft,
+        },
+        VerificationState::Unavailable(_) => PrTarget::ReadyAutoMerge,
+        VerificationState::Starting(_)
+        | VerificationState::AcceptanceUnknown(_)
+        | VerificationState::Submitted(_)
+        | VerificationState::Queued(_)
+        | VerificationState::Judging(_)
+        | VerificationState::InfrastructureFailure(_) => PrTarget::Draft,
     }
 }
 
@@ -597,8 +637,57 @@ pub fn prepare_solution(
     Ok(plan)
 }
 
-/// Drive a previously-prepared plan through `start_plan`. Used by
-/// `internal verify-start`.
+/// Recompute the current [`VerifyFingerprint`] for one published solution
+/// (spec §11, plan 063).
+///
+/// Reuses [`build_plan_context`] so the fingerprint stays byte-identical to
+/// what `verify-prepare` produces for the same tree. The `pick-candidate`
+/// dispatcher calls this for every `VerificationState::Completed` overlay
+/// record to detect input drift; other states never need a fingerprint.
+///
+/// The target is read from `inputs.selection`, which must be
+/// [`VerifySelection::Single`] — the bulk-verify variant has no meaning for
+/// a fingerprint call and is rejected up front.
+pub fn compute_solution_fingerprint(
+    inputs: &VerifyInputs<'_>,
+    ports: &VerifyPorts<'_>,
+) -> Result<VerifyFingerprint> {
+    let solution_id = match &inputs.selection {
+        VerifySelection::Single(id) => id,
+        VerifySelection::All => {
+            return Err(anyhow!(
+                "compute_solution_fingerprint requires VerifySelection::Single; got All"
+            ));
+        }
+    };
+    let all_published = collect_published(inputs.manifest);
+    let published = all_published
+        .get(solution_id)
+        .ok_or_else(|| anyhow!("solution {} is not in the discovery manifest", solution_id))?;
+    let verify = published
+        .verify
+        .as_ref()
+        .ok_or_else(|| anyhow!("solution {} has no [verify] block", solution_id))?;
+    let oj = oj_for_solution(solution_id)?;
+    let starter = ports.starters.get(&oj)?;
+    let ctx = build_plan_context(
+        inputs.repository_root,
+        inputs.submit_preprocess.as_deref(),
+        inputs.snapshot,
+        inputs.manifest,
+        published,
+        verify,
+        starter,
+    )
+    .map_err(|e| anyhow!("fingerprint blocked for {}: {e}", solution_id))?;
+    Ok(ctx.fingerprint)
+}
+
+/// Drive a previously-prepared plan through `submit_prepared_plan`. Used by
+/// `internal verify-start` in the credential-separated worker (spec §15.4):
+/// the `persist_starting` App-only job has already written the `Starting`
+/// record to `automation/verify`, so `verify-start` must skip a second
+/// `Starting` persist and go straight to the OJ starter.
 pub fn start_prepared_plan(
     plan: &SubmissionPlan,
     inputs: &VerifyInputs<'_>,
@@ -626,7 +715,7 @@ pub fn start_prepared_plan(
         records: &normalizer,
         known_solutions: known,
     };
-    start_plan(&repos_bundle, &submission_ports(ports), plan)
+    submit_prepared_plan(&repos_bundle, &submission_ports(ports), plan)
 }
 
 /// Drive the current record for `solution_id` forward via `poll_handle`.
@@ -768,7 +857,12 @@ fn build_plan_context(
         );
     }
 
-    // Read the solution's entry file.
+    // Read the solution's entry file. `entry_bytes_raw` participates in
+    // the fingerprint below; `entry_bytes_post` is the wire content sent
+    // to the OJ (identical to the raw bytes when no preprocess hook is
+    // configured). Splitting them keeps site-data — which is offline and
+    // never runs preprocess — able to recompute the same fingerprint that
+    // the verify pipeline stored on the record.
     let mut entry_rel = published.root.clone();
     if !entry_rel.ends_with('/') {
         entry_rel.push('/');
@@ -777,9 +871,11 @@ fn build_plan_context(
     let entry_bytes_raw = std::fs::read(repository_root.join(&entry_rel))
         .map_err(|e| format!("failed to read solution entry {entry_rel}: {e}"))?;
 
-    // Run the global preprocess hook if configured (Unix only).
+    // Run the global preprocess hook if configured (Unix only). The hook
+    // never influences the fingerprint — its output is the wire content
+    // only.
     #[cfg(unix)]
-    let entry_bytes = match submit_preprocess {
+    let entry_bytes_post = match submit_preprocess {
         Some(cmd) if !cmd.trim().is_empty() => {
             match run_preprocess(
                 cmd,
@@ -794,29 +890,29 @@ fn build_plan_context(
                 Err(e) => return Err(format!("preprocess hook failed: {e}")),
             }
         }
-        _ => entry_bytes_raw,
+        _ => entry_bytes_raw.clone(),
     };
     #[cfg(not(unix))]
-    let entry_bytes = {
+    let entry_bytes_post = {
         let _ = submit_preprocess;
-        entry_bytes_raw
+        entry_bytes_raw.clone()
     };
 
+    let raw_source = FingerprintSource {
+        path: entry_rel.clone(),
+        bytes: entry_bytes_raw,
+    };
     let submitted_source = FingerprintSource {
         path: entry_rel.clone(),
-        bytes: entry_bytes,
+        bytes: entry_bytes_post,
     };
 
     // Adapter identity from the starter's descriptor.
-    let d = starter.descriptor();
+    let descriptor = starter.descriptor();
     let adapter = AdapterIdentity {
-        name: d.name.clone(),
-        version: d.version.clone(),
-        capabilities: SubmissionCapabilities {
-            submission_mode: map_submission_mode(&d.submission_mode),
-            result_detail: map_result_detail(&d.result_detail),
-            recovery_mode: map_recovery_mode(&d.recovery_mode),
-        },
+        name: descriptor.name.clone(),
+        version: descriptor.version.clone(),
+        capabilities: capabilities_from_descriptor(&descriptor),
     };
 
     let binding = LanguageBinding {
@@ -838,7 +934,7 @@ fn build_plan_context(
     }
     let material = FingerprintMaterial {
         solution_id: solution_id.clone(),
-        submitted_source: submitted_source.clone(),
+        raw_source,
         verified_libraries,
         dependency_library_sources,
         binding: ojb,
@@ -860,45 +956,6 @@ fn build_plan_context(
         verify_libraries,
         fingerprint,
     })
-}
-
-fn map_submission_mode(m: &PortSubmissionMode) -> DomSubmissionMode {
-    match m {
-        PortSubmissionMode::UnattendedTrackable => DomSubmissionMode::UnattendedTrackable,
-        PortSubmissionMode::InteractiveTrackable => DomSubmissionMode::InteractiveTrackable,
-        PortSubmissionMode::InteractiveUntrackable => DomSubmissionMode::InteractiveUntrackable,
-        PortSubmissionMode::Unsupported => DomSubmissionMode::Unsupported,
-    }
-}
-
-fn map_result_detail(d: &PortResultDetail) -> DomResultDetail {
-    match d {
-        PortResultDetail::OverallOnly => DomResultDetail::OverallOnly,
-        PortResultDetail::SummaryMetrics => DomResultDetail::SummaryMetrics,
-        PortResultDetail::TestcaseDetails => DomResultDetail::TestcaseDetails,
-    }
-}
-
-fn map_recovery_mode(r: &PortRecoveryMode) -> DomRecoveryMode {
-    match r {
-        PortRecoveryMode::Exact => DomRecoveryMode::Exact,
-        PortRecoveryMode::BestEffort => DomRecoveryMode::BestEffort,
-        PortRecoveryMode::None => DomRecoveryMode::None,
-    }
-}
-
-fn hash_verify_config(verify: &domain::solution::VerifySpec) -> ContentHash {
-    let mut libs: Vec<String> = verify.libraries.iter().map(|l| l.to_string()).collect();
-    libs.sort();
-    let json = serde_json::json!({
-        "libraries": libs,
-        "oj_language_id": verify.oj_language_id,
-    });
-    let text = serde_json::to_string(&json).expect("serializes");
-    let mut hasher = Sha256::new();
-    hasher.update(text.as_bytes());
-    let hex = format!("sha256:{:x}", hasher.finalize());
-    ContentHash::parse(&hex).expect("static hash")
 }
 
 fn classify_start_and_poll(
@@ -1090,6 +1147,8 @@ fn run_preprocess(
         .env("CE_PROBLEM_CODE", solution_id.problem_code())
         .env("CE_SOLUTION_ID", solution_id.as_str())
         .env("CE_SOLUTION_ENTRY", entry_rel)
+        .env("CE_PROJECT_ROOT", repository_root)
+        .env("CE_SOURCE_FILE", repository_root.join(entry_rel))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -1116,4 +1175,173 @@ fn run_preprocess(
         ));
     }
     Ok(stdout)
+}
+
+#[cfg(test)]
+mod pr_target_tests {
+    use super::*;
+    use chrono::{DateTime, FixedOffset};
+    use domain::online_judge::{
+        RecoveryMode, ResultDetail, SubmissionCapabilities, SubmissionMode,
+    };
+    use domain::verification::{
+        AcceptanceUnknownState, CompletedState, ContentHash, ErrorKind, FailureStage,
+        InfrastructureFailure, PendingState, StartingState, SubmissionHandle, SubmissionSummary,
+        SubmittedState, UnavailableReason, UnavailableState, Verdict, VerdictKind,
+    };
+
+    fn ts() -> DateTime<FixedOffset> {
+        DateTime::parse_from_rfc3339("2026-08-10T00:00:00+00:00").unwrap()
+    }
+
+    fn language() -> LanguageBinding {
+        LanguageBinding {
+            language_id: LanguageId::parse("rust").unwrap(),
+            oj_language_id: "rust".into(),
+        }
+    }
+
+    fn hash() -> ContentHash {
+        ContentHash::parse(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap()
+    }
+
+    fn handle() -> SubmissionHandle {
+        SubmissionHandle {
+            oj: "librarychecker".into(),
+            submission_id: "sub".into(),
+            submission_url: "https://example.test/sub".into(),
+            locator: None,
+            submitted_at: ts(),
+        }
+    }
+
+    fn capabilities() -> SubmissionCapabilities {
+        SubmissionCapabilities {
+            submission_mode: SubmissionMode::UnattendedTrackable,
+            result_detail: ResultDetail::TestcaseDetails,
+            recovery_mode: RecoveryMode::BestEffort,
+        }
+    }
+
+    fn completed_with(kind: VerdictKind) -> VerificationState {
+        VerificationState::Completed(CompletedState {
+            verdict: Verdict {
+                kind,
+                raw: "raw".into(),
+            },
+            verified_libraries: Vec::new(),
+            language: language(),
+            verified_at: ts(),
+            capabilities: capabilities(),
+            submitted_source_hash: hash(),
+            input_hashes: BTreeMap::new(),
+            summary: SubmissionSummary {
+                max_execution_time_ms: None,
+                max_memory_bytes: None,
+            },
+            test_cases: None,
+            handle: handle(),
+            extra: BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn terminal_mergeable_verdicts_map_to_ready_auto_merge() {
+        for kind in [
+            VerdictKind::Accepted,
+            VerdictKind::WrongAnswer,
+            VerdictKind::TimeLimitExceeded,
+            VerdictKind::MemoryLimitExceeded,
+            VerdictKind::RuntimeError,
+            VerdictKind::CompileError,
+            VerdictKind::OutputLimitExceeded,
+            VerdictKind::JudgeError,
+        ] {
+            assert_eq!(
+                compute_pr_target(&completed_with(kind)),
+                PrTarget::ReadyAutoMerge,
+                "verdict {kind:?} should be ReadyAutoMerge",
+            );
+        }
+    }
+
+    #[test]
+    fn indeterminate_verdicts_stay_draft() {
+        for kind in [VerdictKind::Cancelled, VerdictKind::Other] {
+            assert_eq!(
+                compute_pr_target(&completed_with(kind)),
+                PrTarget::Draft,
+                "verdict {kind:?} should stay Draft",
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_state_maps_to_ready_auto_merge() {
+        let state = VerificationState::Unavailable(UnavailableState {
+            reason: UnavailableReason::InteractiveUntrackable,
+            capabilities: capabilities(),
+            observed_at: ts(),
+            summary: "n/a".into(),
+        });
+        assert_eq!(compute_pr_target(&state), PrTarget::ReadyAutoMerge);
+    }
+
+    #[test]
+    fn non_terminal_states_map_to_draft() {
+        let starting = VerificationState::Starting(StartingState {
+            plan_hash: hash(),
+            submitted_source_hash: hash(),
+            language: language(),
+            started_at: ts(),
+        });
+        let acceptance_unknown = VerificationState::AcceptanceUnknown(AcceptanceUnknownState {
+            plan_hash: hash(),
+            submitted_source_hash: hash(),
+            language: language(),
+            started_at: ts(),
+            observed_at: ts(),
+            summary: "n/a".into(),
+        });
+        let submitted = VerificationState::Submitted(SubmittedState {
+            handle: handle(),
+            submitted_at: ts(),
+        });
+        let queued = VerificationState::Queued(PendingState {
+            handle: handle(),
+            observed_at: ts(),
+        });
+        let judging = VerificationState::Judging(PendingState {
+            handle: handle(),
+            observed_at: ts(),
+        });
+        let infra = VerificationState::InfrastructureFailure(InfrastructureFailure {
+            stage: FailureStage::Poll,
+            error_kind: ErrorKind::Network,
+            retryable: true,
+            retry_count: 0,
+            next_retry_at: None,
+            updated_at: ts(),
+            summary: "net".into(),
+            plan_hash: None,
+            handle: None,
+        });
+        for state in [
+            starting,
+            acceptance_unknown,
+            submitted,
+            queued,
+            judging,
+            infra,
+        ] {
+            assert_eq!(
+                compute_pr_target(&state),
+                PrTarget::Draft,
+                "non-terminal state {state:?} should map to Draft",
+            );
+        }
+    }
 }

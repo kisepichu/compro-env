@@ -25,11 +25,23 @@ use usecases::library_analyzer::LibraryAnalyzer;
 pub struct ProcessLibraryAnalyzer<R: LibraryAdapterRunner> {
     runner: R,
     config: LibraryProjectConfig,
+    /// One sanitized environment per registered language. `analyze_all`
+    /// looks up the language ID here so Lean picks up `CE_LEAN_ROOT` and
+    /// its bin/lib prepends while Rust/C++ receive the shared allowlist.
+    envs: BTreeMap<LanguageId, BTreeMap<String, String>>,
 }
 
 impl<R: LibraryAdapterRunner> ProcessLibraryAnalyzer<R> {
-    pub fn new(runner: R, config: LibraryProjectConfig) -> Self {
-        Self { runner, config }
+    pub fn new(
+        runner: R,
+        config: LibraryProjectConfig,
+        envs: BTreeMap<LanguageId, BTreeMap<String, String>>,
+    ) -> Self {
+        Self {
+            runner,
+            config,
+            envs,
+        }
     }
 }
 
@@ -47,12 +59,19 @@ impl<R: LibraryAdapterRunner> LibraryAnalyzer for ProcessLibraryAnalyzer<R> {
             let language_cfg = self.config.languages.get(language_id).ok_or_else(|| {
                 anyhow!("no [library.languages.{}] in project config", language_id)
             })?;
+            let env = self.envs.get(language_id).ok_or_else(|| {
+                anyhow!(
+                    "no analyzer environment configured for language `{}`",
+                    language_id.as_str()
+                )
+            })?;
             let response = self
                 .runner
                 .analyze(
                     &executable,
                     &request,
                     Duration::from_secs(u64::from(language_cfg.analyzer.timeout_seconds)),
+                    env,
                 )
                 .map_err(|err| {
                     anyhow!(

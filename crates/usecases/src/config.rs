@@ -1,5 +1,6 @@
 use anyhow::Result;
 use domain::entity::{Language, OJKind};
+use std::path::Path;
 
 pub trait Config {
     fn default_language(&self) -> Result<Language>;
@@ -15,4 +16,9 @@ pub trait Config {
 
     /// Language ID passed to the OJ (e.g. "5054" for Rust on AtCoder).
     fn lang_id(&self, lang: &Language, oj: &OJKind) -> Option<String>;
+
+    /// Repository root — the directory holding the project-local `config.toml`.
+    /// Preprocess hooks receive it via `$CE_PROJECT_ROOT`, and infrastructure
+    /// uses it to absolutise project-local relative paths in `submit_preprocess`.
+    fn project_root(&self) -> &Path;
 }

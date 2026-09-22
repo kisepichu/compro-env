@@ -95,7 +95,12 @@ impl FingerprintSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FingerprintMaterial {
     pub solution_id: SolutionId,
-    pub submitted_source: FingerprintSource,
+    /// Raw solution source bytes as they exist on disk, before any
+    /// `[submit].preprocess` transformation. Hashing the raw file (not the
+    /// OJ-bound "wire content") keeps site-data — which is offline and
+    /// never runs preprocess — able to reproduce the fingerprint that the
+    /// verify pipeline stored on the record.
+    pub raw_source: FingerprintSource,
     pub verified_libraries: BTreeSet<LibraryId>,
     pub dependency_library_sources: BTreeMap<LibraryId, FingerprintSource>,
     pub binding: OjBinding,
@@ -227,7 +232,7 @@ fn find_solution<'a>(
 pub fn calculate_fingerprint(
     material: &FingerprintMaterial,
 ) -> Result<VerifyFingerprint, FingerprintError> {
-    let submitted_hash = material.submitted_source.hash();
+    let raw_source_hash = material.raw_source.hash();
     let mut library_hashes: BTreeMap<String, String> = BTreeMap::new();
     for (id, source) in &material.dependency_library_sources {
         library_hashes.insert(id.to_string(), source.hash().to_string());
@@ -249,7 +254,7 @@ pub fn calculate_fingerprint(
     let payload = serde_json::json!({
         "schema_version": FINGERPRINT_SCHEMA_VERSION,
         "solution_id": material.solution_id.as_str(),
-        "submitted_source_hash": submitted_hash.as_str(),
+        "raw_source_hash": raw_source_hash.as_str(),
         "verified_libraries": material
             .verified_libraries
             .iter()
@@ -272,6 +277,61 @@ pub fn calculate_fingerprint(
     let bytes = canonical_json(&payload);
     let hex = sha256_hex(&bytes);
     Ok(VerifyFingerprint::parse(&hex).expect("sha256_hex emits a valid fingerprint string"))
+}
+
+/// Canonical hash of the resolved `[verify]` block used by
+/// [`FingerprintMaterial::verify_config_hash`] (spec §11).
+///
+/// The hash covers the sorted library IDs plus the resolved
+/// `oj_language_id`. Kept in one place so the verify pipeline (which
+/// persists records) and the site-data generator (which recomputes the
+/// current fingerprint for staleness detection) agree byte-for-byte.
+pub fn hash_verify_config(verify: &domain::solution::VerifySpec) -> ContentHash {
+    let mut libs: Vec<String> = verify.libraries.iter().map(|l| l.to_string()).collect();
+    libs.sort();
+    let json = serde_json::json!({
+        "libraries": libs,
+        "oj_language_id": verify.oj_language_id,
+    });
+    let text = serde_json::to_string(&json).expect("serializes");
+    let hex = sha256_hex(text.as_bytes());
+    ContentHash::parse(&hex).expect("static hash")
+}
+
+/// Convert a submission-port adapter descriptor into the domain-level
+/// [`SubmissionCapabilities`] used inside [`AdapterIdentity`].
+///
+/// Shared between the verify pipeline (`build_plan_context`) and the
+/// site-data current-fingerprint recomputation so both callers reach the
+/// same capability set for the same starter.
+pub fn capabilities_from_descriptor(
+    descriptor: &crate::submission::SubmissionAdapterDescriptor,
+) -> SubmissionCapabilities {
+    use crate::submission::{
+        RecoveryMode as PortRecoveryMode, ResultDetailLevel as PortResultDetail,
+        SubmissionMode as PortMode,
+    };
+    use domain::online_judge::{
+        RecoveryMode as DomRecoveryMode, ResultDetail as DomResultDetail, SubmissionMode as DomMode,
+    };
+    SubmissionCapabilities {
+        submission_mode: match descriptor.submission_mode {
+            PortMode::UnattendedTrackable => DomMode::UnattendedTrackable,
+            PortMode::InteractiveTrackable => DomMode::InteractiveTrackable,
+            PortMode::InteractiveUntrackable => DomMode::InteractiveUntrackable,
+            PortMode::Unsupported => DomMode::Unsupported,
+        },
+        result_detail: match descriptor.result_detail {
+            PortResultDetail::OverallOnly => DomResultDetail::OverallOnly,
+            PortResultDetail::SummaryMetrics => DomResultDetail::SummaryMetrics,
+            PortResultDetail::TestcaseDetails => DomResultDetail::TestcaseDetails,
+        },
+        recovery_mode: match descriptor.recovery_mode {
+            PortRecoveryMode::Exact => DomRecoveryMode::Exact,
+            PortRecoveryMode::BestEffort => DomRecoveryMode::BestEffort,
+            PortRecoveryMode::None => DomRecoveryMode::None,
+        },
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -578,7 +638,7 @@ mod tests {
     // ─── calculate_fingerprint ─────────────────────────────────────────────
 
     fn material(
-        submitted: FingerprintSource,
+        raw: FingerprintSource,
         verified: Vec<&str>,
         deps: Vec<FingerprintSource>,
     ) -> FingerprintMaterial {
@@ -592,7 +652,7 @@ mod tests {
         }
         FingerprintMaterial {
             solution_id: SolutionId::parse("abc999/a/main").unwrap(),
-            submitted_source: submitted,
+            raw_source: raw,
             verified_libraries: verified_libs,
             dependency_library_sources: sources,
             binding: binding(),

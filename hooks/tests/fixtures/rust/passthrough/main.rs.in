@@ -1,0 +1,3 @@
+mod std_only_no_local_file;
+
+fn main() { println!("noop"); }

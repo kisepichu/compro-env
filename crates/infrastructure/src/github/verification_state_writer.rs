@@ -95,6 +95,19 @@ pub enum BotPullRequestState {
     },
 }
 
+/// Handle to the single long-lived automation PR returned by
+/// [`GitHubVerificationStateWriter::find_or_open_bot_pr`].
+///
+/// `is_draft` is captured so callers can skip a no-op state update or
+/// route through the appropriate direction-specific API: REST supports
+/// Draft → Ready via `PATCH {draft: false}` but Ready → Draft requires
+/// the `convertPullRequestToDraft` GraphQL mutation (spec §15.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotPullRequestRef {
+    pub number: u64,
+    pub is_draft: bool,
+}
+
 /// All failure modes surfaced by the writer.
 ///
 /// Non-success HTTP responses are collapsed into `UpstreamStatus`; the raw
@@ -247,6 +260,29 @@ fn split_repository(repo: &str) -> PersistResult<(&str, &str)> {
     Ok((owner, name))
 }
 
+/// GraphQL responses always return HTTP 200 on protocol success, even when the
+/// mutation itself failed. Callers must inspect the top-level `errors` array
+/// and surface a [`PersistError::GraphqlError`] tagged with the mutation `op`.
+/// Only the error count crosses the boundary — the raw body may echo repo or
+/// token metadata and must never leak into error surfaces.
+fn check_graphql_body(text: &str, op: &'static str) -> PersistResult<()> {
+    #[derive(Deserialize)]
+    struct GraphqlBody {
+        #[serde(default)]
+        errors: Option<Vec<serde_json::Value>>,
+    }
+    let parsed: GraphqlBody = serde_json::from_str(text).map_err(PersistError::from)?;
+    if let Some(errs) = parsed.errors
+        && !errs.is_empty()
+    {
+        return Err(PersistError::GraphqlError {
+            op,
+            count: errs.len(),
+        });
+    }
+    Ok(())
+}
+
 // ─── Writer ──────────────────────────────────────────────────────────────────
 
 /// GitHub verification-state writer.
@@ -320,15 +356,21 @@ impl GitHubVerificationStateWriter {
     /// Persist a verification record to `verification/results/<solution_id>.json`
     /// on the sole `automation/verify` branch, using GitHub's Git Data API.
     ///
-    /// The call performs six HTTP requests on the happy path:
-    /// 1. `GET /repos/{owner}/{repo}/contents/{path}?ref={base_sha}` — CAS.
+    /// The call performs seven HTTP requests on the happy path:
+    /// 0. `GET /repos/{owner}/{repo}/git/refs/heads/automation/verify` —
+    ///    resolve the state branch tip. Every subsequent read / write
+    ///    anchors on this SHA, NOT on `request.base_sha`. `base_sha` is a
+    ///    `main@base_sha` tamper-evidence anchor (spec §15.1) but does not
+    ///    point at a tree that carries `verification/results/**`.
+    /// 1. `GET /repos/{owner}/{repo}/contents/{path}?ref={state_head}` — CAS.
     /// 2. `POST /repos/{owner}/{repo}/git/blobs` — write JSON blob.
-    /// 3. `GET /repos/{owner}/{repo}/git/commits/{base_sha}` — resolve the base
-    ///    commit to its tree SHA. GitHub's `POST /git/trees` expects a tree
+    /// 3. `GET /repos/{owner}/{repo}/git/commits/{state_head}` — resolve the
+    ///    tip to its tree SHA. GitHub's `POST /git/trees` expects a tree
     ///    SHA in `base_tree`, not a commit SHA, so we must resolve first.
     /// 4. `POST /repos/{owner}/{repo}/git/trees` — create tree on top of the
     ///    resolved `base_tree`.
-    /// 5. `POST /repos/{owner}/{repo}/git/commits` — commit with `base_sha` parent.
+    /// 5. `POST /repos/{owner}/{repo}/git/commits` — commit with the state
+    ///    branch tip as parent.
     /// 6. `PATCH /repos/{owner}/{repo}/git/refs/heads/automation/verify` —
     ///    fast-forward the branch to the new commit.
     ///
@@ -366,24 +408,36 @@ impl GitHubVerificationStateWriter {
             .expect("bound_repository mutex poisoned") =
             Some((owner.to_string(), repo.to_string()));
 
-        // Step 1: CAS check via the contents API.
+        // Fetch `automation/verify`'s current tip up front. `base_sha` is a
+        // `main@base_sha` anchor for tamper-evidence (spec §15.1) but does
+        // NOT point at a tree that carries `verification/results/**` — that
+        // delta lives only on the state branch. Every subsequent HTTP call
+        // that reads / writes existing records or fast-forwards the branch
+        // must therefore anchor on the state branch tip, not on `base_sha`.
+        // Step 6's retry path already does this on 422; doing it up front
+        // keeps steps 1, 3, and 5 aligned with the same head so the initial
+        // PATCH is a straight fast-forward on the happy path.
+        let state_head_sha = self.get_ref_sha(owner, repo)?;
+
+        // Step 1: CAS check via the contents API, anchored on the state
+        // branch tip.
         self.cas_check(
             owner,
             repo,
             &result_path,
-            &request.base_sha,
+            &state_head_sha,
             &request.candidate,
         )?;
 
         // Step 2: blob.
         let blob_sha = self.create_blob(owner, repo, &serialized, &result_path, &request.branch)?;
 
-        // Step 3: resolve the base commit SHA to its tree SHA. GitHub's
+        // Step 3: resolve the state branch tip to its tree SHA. GitHub's
         // `POST /git/trees` endpoint documents `base_tree` as the SHA of an
         // existing tree object, not a commit — even though the API sometimes
         // tolerates a commit SHA in practice, we do not rely on undocumented
         // behavior.
-        let base_tree_sha = self.resolve_commit_tree(owner, repo, &request.base_sha)?;
+        let base_tree_sha = self.resolve_commit_tree(owner, repo, &state_head_sha)?;
 
         // Step 4: tree on top of the resolved base tree.
         let tree_sha = self.create_tree(
@@ -395,14 +449,15 @@ impl GitHubVerificationStateWriter {
             &request.branch,
         )?;
 
-        // Step 5: commit.
+        // Step 5: commit whose parent is the state branch tip so PATCH
+        // succeeds on the happy path.
         let commit_message = format!("verify: persist {}", request.candidate.solution_id.as_str());
         let commit_sha = self.create_commit(
             owner,
             repo,
             &commit_message,
             &tree_sha,
-            &request.base_sha,
+            &state_head_sha,
             &result_path,
             &request.branch,
         )?;
@@ -432,17 +487,20 @@ impl GitHubVerificationStateWriter {
     /// Toggle the bot PR between draft and ready-for-review, optionally
     /// enabling auto-merge for terminal results (spec §15.1, §15.2).
     ///
-    /// Draft/ready is toggled via `PATCH /repos/{owner}/{repo}/pulls/{n}`
-    /// with a `{ "draft": bool }` body. Auto-merge is enabled by posting
-    /// the `enablePullRequestAutoMerge` GraphQL mutation to
-    /// `{base_url}/graphql`.
+    /// Both transitions go through GraphQL mutations. REST's
+    /// `PATCH /pulls/{n}` does not accept a `draft` field on the request
+    /// body — GitHub silently returns 200 without changing state — so the
+    /// writer routes Draft → Ready through `markPullRequestReadyForReview`
+    /// and Ready → Draft through `convertPullRequestToDraft`. Auto-merge is
+    /// enabled by posting the `enablePullRequestAutoMerge` mutation.
     ///
-    /// GitHub's GraphQL mutation requires the PR's opaque base64-shaped
-    /// **node id** (e.g. `PR_kwDO...`), not the numeric PR number, so when
-    /// `auto_merge` is requested the writer first resolves the number to
-    /// its node id via `GET /repos/{owner}/{repo}/pulls/{n}` (reading the
-    /// `.node_id` field) before performing the PATCH and the mutation. Only
-    /// the auto-merge path incurs the extra REST call.
+    /// GitHub's GraphQL mutations require the PR's opaque base64-shaped
+    /// **node id** (e.g. `PR_kwDO...`), not the numeric PR number. Every
+    /// branch resolves the node id via `GET /repos/{owner}/{repo}/pulls/{n}`
+    /// (reading the `.node_id` field) before issuing the mutation(s), so
+    /// the two-request minimum applies to both `Draft` and `Ready`; the
+    /// `auto_merge: true` sub-case adds a third request for the auto-merge
+    /// mutation.
     ///
     /// The writer must have a bound repository before this call — either
     /// through a prior [`persist`] or an explicit [`bind_repository`]. That
@@ -455,20 +513,18 @@ impl GitHubVerificationStateWriter {
             BotPullRequestState::Draft {
                 pull_request_number,
             } => {
-                self.patch_pr(&owner, &repo, pull_request_number, false)?;
+                self.convert_pr_to_draft(pull_request_number)?;
             }
             BotPullRequestState::Ready {
                 pull_request_number,
                 auto_merge,
             } => {
+                // Resolve the node id BEFORE any mutation so a lookup
+                // failure does not leave the PR half-marked ready.
+                let node_id = self.resolve_pr_node_id(&owner, &repo, pull_request_number)?;
+                self.mark_pr_ready(&node_id)?;
                 if auto_merge {
-                    // Resolve the node id BEFORE we mutate anything so a
-                    // lookup failure does not leave the PR half-marked ready.
-                    let node_id = self.resolve_pr_node_id(&owner, &repo, pull_request_number)?;
-                    self.patch_pr(&owner, &repo, pull_request_number, true)?;
                     self.enable_auto_merge(&node_id)?;
-                } else {
-                    self.patch_pr(&owner, &repo, pull_request_number, true)?;
                 }
             }
         }
@@ -808,21 +864,163 @@ impl GitHubVerificationStateWriter {
         Ok(body.object.sha)
     }
 
-    fn patch_pr(&self, owner: &str, repo: &str, pr: u64, ready: bool) -> PersistResult<()> {
-        let url = format!("{}/repos/{owner}/{repo}/pulls/{pr}", self.base_url);
-        let body = json!({ "draft": !ready });
-        let resp = self.authed(self.http.patch(&url)).json(&body).send()?;
-        let status = resp.status();
-        if status.is_success() {
-            let _ = resp.text();
-            Ok(())
-        } else {
-            let _ = resp.text();
-            Err(PersistError::UpstreamStatus {
-                status: status.as_u16(),
-                op: "PATCH pulls/{n}",
-            })
+    /// Return a handle to the single long-lived bot PR from `head` into
+    /// `base` (spec §15.1 "最大 1 本の automation/verify draft PR"). Opens a
+    /// fresh draft PR when none is open.
+    ///
+    /// The GitHub REST list endpoint returns an array of PR summaries filtered
+    /// by `head=<owner>:<branch>` and `state=open`. Query values are percent-
+    /// encoded via `reqwest::RequestBuilder::query` — passing a branch name
+    /// containing `&` or `=` (which git itself does not forbid) would
+    /// otherwise silently corrupt the query string.
+    ///
+    /// When more than one PR matches the filter (should never happen given
+    /// the "at most one" rule), the caller-observable behaviour is to reuse
+    /// the first entry — the writer will never open a duplicate.
+    ///
+    /// TOCTOU race: two concurrent runs can both observe an empty list and
+    /// both attempt `POST /pulls`; the second POST fails with 422 ("A pull
+    /// request already exists for this head branch"). The writer detects
+    /// that status and refetches the list; if the list is now non-empty the
+    /// existing PR is returned as if it had been observed on the first GET.
+    ///
+    /// The returned [`BotPullRequestRef`] carries the PR's current
+    /// `is_draft` flag so callers can pick the correct direction-specific
+    /// API for a subsequent state change (spec §15.1 — REST cannot convert
+    /// Ready → Draft; that path lives in
+    /// [`convert_pr_to_draft`](Self::convert_pr_to_draft)).
+    pub fn find_or_open_bot_pr(
+        &self,
+        owner: &str,
+        repo: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> PersistResult<BotPullRequestRef> {
+        #[derive(Deserialize)]
+        struct PullSummary {
+            number: Option<u64>,
+            #[serde(default)]
+            draft: Option<bool>,
         }
+
+        let list_url = format!("{}/repos/{owner}/{repo}/pulls", self.base_url);
+        let head_qualified = format!("{owner}:{head}");
+        let query_params = [
+            ("head", head_qualified.as_str()),
+            ("state", "open"),
+            ("base", base),
+        ];
+
+        let list = || -> PersistResult<Vec<PullSummary>> {
+            let resp = self
+                .authed(self.http.get(&list_url))
+                .query(&query_params)
+                .send()?;
+            let status = resp.status();
+            if !status.is_success() {
+                let _ = resp.text();
+                return Err(PersistError::UpstreamStatus {
+                    status: status.as_u16(),
+                    op: "GET pulls?head (find bot pr)",
+                });
+            }
+            resp.json().map_err(PersistError::from)
+        };
+
+        if let Some(first) = list()?.into_iter().next() {
+            let number = first.number.ok_or(PersistError::MalformedResponse {
+                op: "GET pulls?head (find bot pr)",
+                field: "number",
+            })?;
+            return Ok(BotPullRequestRef {
+                number,
+                is_draft: first.draft.unwrap_or(false),
+            });
+        }
+
+        let open_url = format!("{}/repos/{owner}/{repo}/pulls", self.base_url);
+        let payload = json!({
+            "title": title,
+            "body": body,
+            "head": head,
+            "base": base,
+            "draft": true,
+        });
+        let resp = self
+            .authed(self.http.post(&open_url))
+            .json(&payload)
+            .send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            let _ = resp.text();
+            // TOCTOU race: a concurrent run may have opened the PR between
+            // our GET and POST. GitHub returns 422 in that case; refetch
+            // and reuse it before propagating the error.
+            if status == StatusCode::UNPROCESSABLE_ENTITY
+                && let Some(first) = list()?.into_iter().next()
+            {
+                let number = first.number.ok_or(PersistError::MalformedResponse {
+                    op: "GET pulls?head (find bot pr, retry after 422)",
+                    field: "number",
+                })?;
+                return Ok(BotPullRequestRef {
+                    number,
+                    is_draft: first.draft.unwrap_or(false),
+                });
+            }
+            return Err(PersistError::UpstreamStatus {
+                status: status.as_u16(),
+                op: "POST pulls (open bot pr)",
+            });
+        }
+        let created: PullSummary = resp.json().map_err(PersistError::from)?;
+        let number = created.number.ok_or(PersistError::MalformedResponse {
+            op: "POST pulls (open bot pr)",
+            field: "number",
+        })?;
+        Ok(BotPullRequestRef {
+            number,
+            // We asked for `draft: true`; the server echoes the field back.
+            // Fall back to `true` if the server omitted it — matches the
+            // request we just sent.
+            is_draft: created.draft.unwrap_or(true),
+        })
+    }
+
+    /// Convert a currently-open Ready PR back to draft via GitHub's
+    /// `convertPullRequestToDraft` GraphQL mutation (spec §15.1).
+    ///
+    /// REST's `PATCH /pulls/{n}` does not document a `draft` request
+    /// parameter — GitHub silently accepts 200 but ignores it in both
+    /// directions, so the Draft ↔ Ready transitions are routed through
+    /// GraphQL (`markPullRequestReadyForReview` for the forward direction
+    /// via [`mark_pr_ready`], and this mutation for the reverse). Callers
+    /// should pre-check the PR's current draft state via
+    /// [`find_or_open_bot_pr`]'s [`BotPullRequestRef::is_draft`] and skip
+    /// this call when it is already `true`; the mutation may error on
+    /// an already-draft PR depending on GitHub's server-side behaviour.
+    pub fn convert_pr_to_draft(&self, pull_request_number: u64) -> PersistResult<()> {
+        let (owner, repo) = self.bound_owner_repo()?;
+        let node_id = self.resolve_pr_node_id(&owner, &repo, pull_request_number)?;
+        let url = format!("{}/graphql", self.base_url);
+        let mutation = r#"mutation($pullRequestId: ID!) { convertPullRequestToDraft(input: { pullRequestId: $pullRequestId }) { clientMutationId } }"#;
+        let payload = json!({
+            "query": mutation,
+            "variables": { "pullRequestId": node_id },
+        });
+        let resp = self.authed(self.http.post(&url)).json(&payload).send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            let _ = resp.text();
+            return Err(PersistError::UpstreamStatus {
+                status: status.as_u16(),
+                op: "POST graphql (convertPullRequestToDraft)",
+            });
+        }
+        let text = resp.text().map_err(PersistError::from)?;
+        check_graphql_body(&text, "POST graphql (convertPullRequestToDraft)")
     }
 
     /// Resolve a numeric PR number to GitHub's opaque node id.
@@ -853,6 +1051,36 @@ impl GitHubVerificationStateWriter {
         })
     }
 
+    /// Convert a currently-open Draft PR to Ready via GitHub's
+    /// `markPullRequestReadyForReview` GraphQL mutation (spec §15.1).
+    ///
+    /// REST's `PATCH /pulls/{n}` documents no `draft` field on the request
+    /// body — GitHub silently accepts (200) but ignores `{draft: false}`,
+    /// leaving the PR as a Draft. `enablePullRequestAutoMerge` then rejects
+    /// the mutation because auto-merge is not permitted on Draft PRs. The
+    /// GraphQL mutation used here is the only supported path for the
+    /// Draft → Ready transition and mirrors [`convert_pr_to_draft`]'s
+    /// GraphQL wiring for the reverse direction.
+    fn mark_pr_ready(&self, pull_request_node_id: &str) -> PersistResult<()> {
+        let url = format!("{}/graphql", self.base_url);
+        let mutation = r#"mutation($pullRequestId: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) { clientMutationId } }"#;
+        let body = json!({
+            "query": mutation,
+            "variables": { "pullRequestId": pull_request_node_id },
+        });
+        let resp = self.authed(self.http.post(&url)).json(&body).send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            let _ = resp.text();
+            return Err(PersistError::UpstreamStatus {
+                status: status.as_u16(),
+                op: "POST graphql (markPullRequestReadyForReview)",
+            });
+        }
+        let text = resp.text().map_err(PersistError::from)?;
+        check_graphql_body(&text, "POST graphql (markPullRequestReadyForReview)")
+    }
+
     fn enable_auto_merge(&self, pull_request_node_id: &str) -> PersistResult<()> {
         // GitHub's REST API does not expose auto-merge as a plain endpoint;
         // the sanctioned path is the `enablePullRequestAutoMerge` GraphQL
@@ -866,11 +1094,6 @@ impl GitHubVerificationStateWriter {
         });
         let resp = self.authed(self.http.post(&url)).json(&body).send()?;
         let status = resp.status();
-        // GraphQL uniformly returns 200 on protocol success even when the
-        // mutation itself failed; the real signal lives in the response body's
-        // top-level `errors` array. We must NOT surface the raw body — it can
-        // echo internal repo/token metadata — so only the count of errors is
-        // exposed to the caller.
         if !status.is_success() {
             let _ = resp.text();
             return Err(PersistError::UpstreamStatus {
@@ -879,21 +1102,7 @@ impl GitHubVerificationStateWriter {
             });
         }
         let text = resp.text().map_err(PersistError::from)?;
-        #[derive(Deserialize)]
-        struct GraphqlBody {
-            #[serde(default)]
-            errors: Option<Vec<serde_json::Value>>,
-        }
-        let parsed: GraphqlBody = serde_json::from_str(&text).map_err(PersistError::from)?;
-        if let Some(errs) = parsed.errors
-            && !errs.is_empty()
-        {
-            return Err(PersistError::GraphqlError {
-                op: "POST graphql (enablePullRequestAutoMerge)",
-                count: errs.len(),
-            });
-        }
-        Ok(())
+        check_graphql_body(&text, "POST graphql (enablePullRequestAutoMerge)")
     }
 
     fn read_sha(resp: reqwest::blocking::Response, op: &'static str) -> PersistResult<String> {

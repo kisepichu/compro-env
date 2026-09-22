@@ -2,8 +2,8 @@
 //!
 //! `fixture_matches_checked_in_response` loads `rust-symbols-request.json`,
 //! substitutes the fixture tree's absolute path into `repository_root`, runs
-//! `analyze_request` + `analyze_symbols`, and diffs the assembled response
-//! against `rust-symbols-response.json` via `serde_json::Value` equality. Set
+//! `analyze_request`, and diffs the assembled response against
+//! `rust-symbols-response.json` via `serde_json::Value` equality. Set
 //! `UPDATE_EXPECT=1` to rewrite the fixture from a green run.
 
 use std::fs;
@@ -57,13 +57,7 @@ struct ResolvedResponse {
 
 fn resolve(request: &AnalysisRequest) -> ResolvedResponse {
     let workspace = RustWorkspace::from_request(request).expect("workspace builds");
-    let (mut libraries, solutions) = analyze_request(request, &workspace);
-    for lib in &mut libraries {
-        let absolute = workspace.absolute(&lib.path);
-        let source = fs::read_to_string(&absolute)
-            .unwrap_or_else(|e| panic!("read {}: {e}", absolute.display()));
-        lib.symbol_analysis = analyze_symbols(&source, &lib.path, &[]);
-    }
+    let (libraries, solutions) = analyze_request(request, &workspace);
     ResolvedResponse {
         libraries,
         solutions,
@@ -312,4 +306,115 @@ fn locations_are_never_reversed() {
             symbol.name
         );
     }
+}
+
+// ─── Issue #105: analyze_request wire-up ───────────────────────────────────
+
+fn write_library_tree(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for (rel, body) in files {
+        let abs = dir.path().join(rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).expect("mkdir -p");
+        std::fs::write(&abs, body).expect("write library file");
+    }
+    dir
+}
+
+fn request_with_library(repo_root: &std::path::Path, library_path: &str) -> AnalysisRequest {
+    AnalysisRequest {
+        schema_version: library_adapter_protocol::SCHEMA_VERSION,
+        language: "rust".into(),
+        repository_root: repo_root.display().to_string(),
+        libraries: vec![library_adapter_protocol::LibraryTarget {
+            path: library_path.into(),
+        }],
+        solutions: vec![],
+    }
+}
+
+#[test]
+fn analyze_request_emits_partial_with_diagnostic_on_item_level_macro() {
+    // `lazy_static::x!{}` is an item-level macro invocation the syn walker
+    // cannot expand. The walker marks the analysis Partial and the wire-up
+    // must surface a diagnostic so downstream UI can flag the gap.
+    let tree = write_library_tree(&[(
+        "libraries/rust/partial.rs",
+        "lazy_static::x!{}\npub struct Kept;\n",
+    )]);
+    let request = request_with_library(tree.path(), "libraries/rust/partial.rs");
+    let workspace = RustWorkspace::from_request(&request).expect("workspace builds");
+    let (libraries, _solutions) = analyze_request(&request, &workspace);
+
+    let lib = libraries.first().expect("one library analyzed");
+    assert!(
+        matches!(lib.symbol_analysis.state, AnalysisState::Partial),
+        "state was {:?}",
+        lib.symbol_analysis.state
+    );
+    assert!(
+        lib.symbol_analysis.symbols.iter().any(|s| s.name == "Kept"),
+        "walker still emits items it could see: {:?}",
+        lib.symbol_analysis.symbols,
+    );
+    let symbol_diags: Vec<&library_adapter_protocol::Diagnostic> = lib
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "rust.symbols.partial")
+        .collect();
+    assert_eq!(
+        symbol_diags.len(),
+        1,
+        "exactly one rust.symbols.partial diagnostic expected, got {:?}",
+        lib.diagnostics,
+    );
+    assert!(matches!(
+        symbol_diags[0].severity,
+        library_adapter_protocol::Severity::Warning
+    ));
+}
+
+#[test]
+fn analyze_request_emits_failed_with_diagnostic_on_broken_source_without_cascading_into_dependencies()
+ {
+    // An unterminated struct body trips `syn::parse_file`. Both the
+    // dependency pass and the symbol pass see the same failure, but each
+    // reports its own diagnostic — proving the two pipelines are wired
+    // independently rather than sharing one failure state.
+    let tree = write_library_tree(&[("libraries/rust/broken.rs", "pub struct Broken {\n")]);
+    let request = request_with_library(tree.path(), "libraries/rust/broken.rs");
+    let workspace = RustWorkspace::from_request(&request).expect("workspace builds");
+    let (libraries, _solutions) = analyze_request(&request, &workspace);
+
+    let lib = libraries.first().expect("one library analyzed");
+    assert!(
+        matches!(lib.symbol_analysis.state, AnalysisState::Failed),
+        "state was {:?}",
+        lib.symbol_analysis.state
+    );
+    assert!(lib.symbol_analysis.symbols.is_empty());
+
+    let symbol_diag = lib
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "rust.symbols.parse")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected rust.symbols.parse diagnostic, got {:?}",
+                lib.diagnostics
+            )
+        });
+    assert!(matches!(
+        symbol_diag.severity,
+        library_adapter_protocol::Severity::Warning
+    ));
+
+    // The dependency pass already emits its own diagnostic on the same
+    // broken file — assert both codes coexist on the same LibraryAnalysis.
+    assert!(
+        lib.diagnostics
+            .iter()
+            .any(|d| d.code == "rust.parse.entry_file"),
+        "dependency pass still emits its own diagnostic: {:?}",
+        lib.diagnostics,
+    );
 }

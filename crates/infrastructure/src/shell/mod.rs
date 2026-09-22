@@ -66,7 +66,7 @@ pub fn run() -> Result<()> {
                 Some(s) => s
                     .parse::<domain::entity::OJKind>()
                     .map_err(|e| anyhow::anyhow!(e))?,
-                None => ConfigImpl.default_online_judge(),
+                None => ConfigImpl::new(std::path::PathBuf::new()).default_online_judge(),
             };
 
             // Prompt according to the OJ's credential kind.
@@ -122,7 +122,7 @@ pub fn run() -> Result<()> {
                 Some(s) => s
                     .parse::<domain::entity::OJKind>()
                     .map_err(|e| anyhow::anyhow!(e))?,
-                None => ConfigImpl.default_online_judge(),
+                None => ConfigImpl::new(std::path::PathBuf::new()).default_online_judge(),
             };
 
             match whoami_with_io(oj_kind) {
@@ -144,7 +144,7 @@ pub fn run() -> Result<()> {
                 Some(s) => s
                     .parse::<domain::entity::OJKind>()
                     .map_err(|e| anyhow::anyhow!(e))?,
-                None => ConfigImpl.default_online_judge(),
+                None => ConfigImpl::new(std::path::PathBuf::new()).default_online_judge(),
             };
 
             match logout_with_io(oj_kind.clone()) {
@@ -320,13 +320,19 @@ pub fn run() -> Result<()> {
                         std::process::exit(1);
                     }
                 };
-                let runner = crate::library_adapter::process::ProcessLibraryAdapterRunner::new(
-                    root.clone(),
-                    std::collections::BTreeMap::new(),
-                );
+                let envs = match build_analyze_envs(&root, &config) {
+                    Ok(map) => map,
+                    Err(e) => {
+                        eprintln!("{e:#}");
+                        std::process::exit(1);
+                    }
+                };
+                let runner =
+                    crate::library_adapter::process::ProcessLibraryAdapterRunner::new(root.clone());
                 let analyzer = crate::library_analyzer_impl::ProcessLibraryAnalyzer::new(
                     runner,
                     config.clone(),
+                    envs,
                 );
                 let git = crate::git_history::GitHistoryImpl::new(root.clone());
                 let verifications =
@@ -508,6 +514,25 @@ pub fn run() -> Result<()> {
                 println!("{label}");
                 Ok(())
             }
+            commands::InternalSubcommand::PickCandidate { root, state, now } => {
+                let root_path = std::path::PathBuf::from(&root);
+                let state_path = std::path::PathBuf::from(&state);
+                let now = match now.as_deref() {
+                    Some(s) => chrono::DateTime::parse_from_rfc3339(s)
+                        .map_err(|e| anyhow::anyhow!("--now must be an RFC 3339 timestamp: {e}"))?,
+                    None => chrono::Utc::now().fixed_offset(),
+                };
+                let picked = crate::verify_pick_candidate::pick_candidate_with_io(
+                    &root_path,
+                    &state_path,
+                    now,
+                )?;
+                match picked {
+                    Some(id) => println!("{id}"),
+                    None => println!(),
+                }
+                Ok(())
+            }
             commands::InternalSubcommand::VerifyValidateResultPr {
                 before,
                 after,
@@ -550,6 +575,36 @@ pub fn run() -> Result<()> {
                     }
                 }
                 Ok(())
+            }
+            commands::InternalSubcommand::VerifyPrSetState {
+                record_in,
+                repository,
+                base,
+                head,
+                token_env,
+            } => {
+                let token = std::env::var(&token_env).map_err(|_| {
+                    anyhow::anyhow!(
+                        "environment variable {token_env} is not set; refusing to contact GitHub"
+                    )
+                })?;
+                match pr_set_state_with_io(
+                    "https://api.github.com",
+                    &record_in,
+                    &repository,
+                    &head,
+                    &base,
+                    &token,
+                ) {
+                    Ok(number) => {
+                        println!("{number}");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("verify-pr-set-state failed: {e:#}");
+                        std::process::exit(1);
+                    }
+                }
             }
             commands::InternalSubcommand::VerifyPersist {
                 plan_hash_in,
@@ -657,7 +712,7 @@ fn build_controller_no_root() -> Result<Controller> {
         Box::new(ContestRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SolutionRepositoryImpl::new(std::path::PathBuf::new())),
         Box::new(SessionRepositoryImpl),
-        Box::new(ConfigImpl),
+        Box::new(ConfigImpl::new(std::path::PathBuf::new())),
         default_command_runner(),
     );
     Ok(Controller::new(service))
@@ -763,7 +818,7 @@ fn resolve_init_args(
     let language = if let Some(lang) = lang_override {
         domain::entity::Language::new(lang)
     } else {
-        ConfigImpl.default_language()?
+        ConfigImpl::new(root.to_path_buf()).default_language()?
     };
 
     validate_language(&language, root)?;
@@ -853,7 +908,7 @@ pub fn init_with_io(contest_input: &str, lang_override: Option<&str>) -> Result<
         validate_language(&language, &root)?;
         language
     } else {
-        match ConfigImpl.default_language() {
+        match ConfigImpl::new(root.clone()).default_language() {
             Ok(lang) => {
                 validate_language(&lang, &root)?;
                 lang
@@ -952,7 +1007,7 @@ pub fn new_solution_with_io(
 
     let resolved_lang = match lang_override {
         Some(l) => l.to_string(),
-        None => match ConfigImpl.default_language() {
+        None => match ConfigImpl::new(root.clone()).default_language() {
             Ok(l) => l.as_str().to_string(),
             Err(_) => prompt_language(&root)?.as_str().to_string(),
         },
@@ -1008,7 +1063,7 @@ fn resolve_new_solution_args(
         validate_language(&language, root)?;
         language
     } else {
-        let lang = ConfigImpl.default_language()?;
+        let lang = ConfigImpl::new(root.to_path_buf()).default_language()?;
         validate_language(&lang, root)?;
         lang
     };
@@ -1025,7 +1080,7 @@ fn build_controller() -> Result<Controller> {
         Box::new(ContestRepositoryImpl::new(root.clone())),
         Box::new(SolutionRepositoryImpl::new(root.clone())),
         Box::new(SessionRepositoryImpl),
-        Box::new(ConfigImpl),
+        Box::new(ConfigImpl::new(root.clone())),
         default_command_runner(),
     );
 
@@ -1036,7 +1091,7 @@ fn build_controller() -> Result<Controller> {
 /// plus the filesystem verification repo. Kept separate from
 /// [`build_controller`] so login/whoami/... paths do not pay for the extra
 /// pipeline they never use.
-fn build_verify_controller(root: &std::path::Path) -> Result<Controller> {
+pub(crate) fn build_verify_controller(root: &std::path::Path) -> Result<Controller> {
     let verification = usecases::service::VerificationServices {
         pollers: crate::submission_impl::poller::build_poller_registry()?,
         recovery: crate::submission_impl::recovery::build_recovery_registry()?,
@@ -1052,7 +1107,7 @@ fn build_verify_controller(root: &std::path::Path) -> Result<Controller> {
         Box::new(ContestRepositoryImpl::new(root.to_path_buf())),
         Box::new(SolutionRepositoryImpl::new(root.to_path_buf())),
         Box::new(SessionRepositoryImpl),
-        Box::new(ConfigImpl),
+        Box::new(ConfigImpl::new(root.to_path_buf())),
         default_command_runner(),
         verification,
     );
@@ -1062,7 +1117,7 @@ fn build_verify_controller(root: &std::path::Path) -> Result<Controller> {
 /// Runs the discovery + analyzer + normalization pipeline synchronously and
 /// returns a matched (`manifest`, `snapshot`) pair the verify controller can
 /// consume. Errors are surfaced verbatim.
-fn build_analysis(
+pub(crate) fn build_analysis(
     root: &std::path::Path,
     config: &domain::library::LibraryProjectConfig,
 ) -> Result<(
@@ -1073,21 +1128,16 @@ fn build_analysis(
     use usecases::library_analyzer::LibraryAnalyzer;
 
     let manifest = crate::library_project::discovery::LibraryDiscovery::discover(root, config)?;
-    // `ProcessLibraryAdapterRunner` calls `Command::env_clear()` before
-    // running the analyzer, so a stock `BTreeMap::new()` gives the child
-    // an empty PATH. rust-analyzer needs `rustc` on PATH to detect the
-    // toolchain; cpp / lean adapters (when re-enabled) will need their
-    // own per-language additions layered on top. `sanitized_language_env`
-    // is the same allowlisted forward already used by
-    // `library-adapter-build` — it guarantees a non-empty PATH and
-    // forwards CARGO_HOME / RUSTUP_HOME / LD_LIBRARY_PATH etc. so the
-    // pinned Rust toolchain shims still resolve.
-    let runner = crate::library_adapter::process::ProcessLibraryAdapterRunner::new(
-        root.to_path_buf(),
-        crate::library_adapter::language_plans::sanitized_language_env(),
-    );
+    // Each language's analyzer runs under the same sanitized env the build
+    // driver used at handshake time. Rust and C++ share the allowlist;
+    // Lean layers `CE_LEAN_ROOT`, `<lean_root>/bin` on `PATH`, and
+    // `<lean_root>/lib` on `LD_LIBRARY_PATH` so the pinned toolchain is
+    // reachable by `lean --print-libdir` and friends.
+    let envs = build_analyze_envs(root, config)?;
+    let runner =
+        crate::library_adapter::process::ProcessLibraryAdapterRunner::new(root.to_path_buf());
     let analyzer =
-        crate::library_analyzer_impl::ProcessLibraryAnalyzer::new(runner, config.clone());
+        crate::library_analyzer_impl::ProcessLibraryAnalyzer::new(runner, config.clone(), envs);
     let responses = analyzer.analyze_all(root, &manifest)?;
 
     // Collect source bytes for every managed library file plus every
@@ -1117,6 +1167,92 @@ fn build_analysis(
         &source_bytes,
     )?;
     Ok((manifest, snapshot))
+}
+
+/// Build the per-language analyze env map used by both `ce site-data
+/// generate` and `build_analysis`. Locates the single prepared set under
+/// `<repo>/target/library-analyzers/prepared/<dep-id>/` on disk and asks
+/// `analyze_language_env` for the per-language layering.
+///
+/// Fails if the analyzer root has zero or several prepared sets (a
+/// prepared-time invariant), or if the Lean layout under an existing
+/// prepared set is broken.
+pub(crate) fn build_analyze_envs(
+    root: &std::path::Path,
+    config: &domain::library::LibraryProjectConfig,
+) -> Result<
+    std::collections::BTreeMap<
+        domain::library::LanguageId,
+        std::collections::BTreeMap<String, String>,
+    >,
+> {
+    use std::collections::BTreeMap;
+
+    let analyzer_root = root.join("target").join("library-analyzers");
+    let platform = domain::adapter_build::TargetPlatform {
+        os: std::env::consts::OS.into(),
+        arch: std::env::consts::ARCH.into(),
+    };
+    // Skip prepared-set discovery when no language needs it. Right now only
+    // Lean layers extra env on top; Rust / C++ share `sanitized_language_env`.
+    let needs_prepared_root = config
+        .languages
+        .keys()
+        .any(|id| id.as_str() == crate::library_adapter::language_plans::LEAN_LANGUAGE);
+    let prepared_root = if needs_prepared_root {
+        Some(discover_prepared_root(&analyzer_root)?)
+    } else {
+        None
+    };
+    let mut envs: BTreeMap<domain::library::LanguageId, BTreeMap<String, String>> = BTreeMap::new();
+    for language_id in config.languages.keys() {
+        let env = if language_id.as_str() == crate::library_adapter::language_plans::LEAN_LANGUAGE {
+            let root_path = prepared_root.as_ref().expect("prepared_root computed");
+            crate::library_adapter::language_plans::analyze_language_env(
+                root_path,
+                &platform,
+                language_id.as_str(),
+            )
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to build analyze env for `{}`: {e}",
+                    language_id.as_str()
+                )
+            })?
+        } else {
+            crate::library_adapter::language_plans::sanitized_language_env()
+        };
+        envs.insert(language_id.clone(), env);
+    }
+    Ok(envs)
+}
+
+/// Locate the single prepared set directory under
+/// `<analyzer_root>/prepared/`. Skips `staging-*` entries so an
+/// interrupted `prepare` run cannot mask a healthy install. Fails if the
+/// count is not exactly one — the prepare pipeline never writes more than
+/// one, so a mismatch means manual state that needs operator attention.
+fn discover_prepared_root(analyzer_root: &std::path::Path) -> Result<std::path::PathBuf> {
+    let prepared_dir = analyzer_root.join("prepared");
+    let entries: Vec<std::path::PathBuf> = std::fs::read_dir(&prepared_dir)
+        .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", prepared_dir.display()))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_dir())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !name.starts_with("staging-")
+        })
+        .map(|entry| entry.path())
+        .collect();
+    if entries.len() != 1 {
+        anyhow::bail!(
+            "expected exactly one prepared set under {}, found {}",
+            prepared_dir.display(),
+            entries.len()
+        );
+    }
+    Ok(entries.into_iter().next().unwrap())
 }
 
 /// Runs the full `ce verify [solution-id]` pipeline and returns an exit code.
@@ -1246,6 +1382,58 @@ fn list_result_json_paths(
         }
     }
     Ok(paths)
+}
+
+/// Find (or open) the single long-lived automation PR and toggle its state
+/// (Draft ↔ Ready+auto_merge) to match the persisted `VerificationRecord`.
+///
+/// Kept as a free function so integration tests can point the writer at a
+/// scripted server instead of `https://api.github.com`. Returns the PR
+/// number on success.
+pub fn pr_set_state_with_io(
+    base_url: &str,
+    record_in: &str,
+    repository: &str,
+    head: &str,
+    base: &str,
+    token: &str,
+) -> Result<u64> {
+    let record_bytes = std::fs::read(record_in)
+        .map_err(|e| anyhow::anyhow!("failed to read record file {record_in}: {e}"))?;
+    let record: domain::verification::VerificationRecord = serde_json::from_slice(&record_bytes)
+        .map_err(|e| anyhow::anyhow!("failed to parse record: {e}"))?;
+    let (owner, repo) = match repository.split_once('/') {
+        Some((o, r)) if !o.is_empty() && !r.is_empty() && !r.contains('/') => (o, r),
+        _ => anyhow::bail!("repository must be owner/repo (got {repository:?})"),
+    };
+    let writer = crate::github::GitHubVerificationStateWriter::new(
+        base_url,
+        secrecy::SecretString::from(token.to_string()),
+    );
+    writer.bind_repository(repository)?;
+    let title = "Automation: verification results";
+    let body = "Automation-owned PR that carries verification result updates from `automation/verify` → `main`.\n\nSee `docs/operations/verify-automation.md` for operator notes.";
+    let pr = writer.find_or_open_bot_pr(owner, repo, head, base, title, body)?;
+    let target = usecases::service::verify::compute_pr_target(&record.state);
+    match target {
+        usecases::service::verify::PrTarget::Draft => {
+            // REST's PATCH does not support Ready → Draft; a non-draft PR
+            // must be routed through the GraphQL mutation. If the PR is
+            // already draft the state is a no-op — avoid the extra HTTP
+            // call (and the mutation's server-side handling of the
+            // already-draft case).
+            if !pr.is_draft {
+                writer.convert_pr_to_draft(pr.number)?;
+            }
+        }
+        usecases::service::verify::PrTarget::ReadyAutoMerge => {
+            writer.set_pull_request_state(crate::github::BotPullRequestState::Ready {
+                pull_request_number: pr.number,
+                auto_merge: true,
+            })?;
+        }
+    }
+    Ok(pr.number)
 }
 
 /// Validates that the plan-hash artifact exists as a regular file whose

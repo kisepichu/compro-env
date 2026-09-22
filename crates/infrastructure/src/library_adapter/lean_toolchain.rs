@@ -372,8 +372,20 @@ pub fn locate_prepared_lean_root(
     prepared_set: &PreparedSet,
     platform: &TargetPlatform,
 ) -> Result<PathBuf, LeanToolchainError> {
+    locate_prepared_lean_root_from_root(&prepared_set.root, platform)
+}
+
+/// Same as [`locate_prepared_lean_root`] but takes the prepared-set root
+/// directly. Handy for the analyze path where the caller has already
+/// resolved `<analyzer_root>/prepared/<dep-id>/` via disk inspection and
+/// does not need to reconstruct a full [`PreparedSet`] just to derive
+/// `CE_LEAN_ROOT`.
+pub fn locate_prepared_lean_root_from_root(
+    prepared_root: &Path,
+    platform: &TargetPlatform,
+) -> Result<PathBuf, LeanToolchainError> {
     let spec = select_lean_toolchain(platform)?;
-    let archives_dir = prepared_set.root.join("archives").join(&spec.archive_name);
+    let archives_dir = prepared_root.join("archives").join(&spec.archive_name);
     if !archives_dir.is_dir() {
         return Err(LeanToolchainError::PreparedInstallMissing {
             archive_name: spec.archive_name.clone(),

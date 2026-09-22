@@ -12,10 +12,8 @@ use anyhow::{Context, bail};
 use ce_library_rust_analyzer::dependencies::analyze_request;
 use ce_library_rust_analyzer::module_graph::RustWorkspace;
 use ce_library_rust_analyzer::request::parse_request;
-use ce_library_rust_analyzer::symbols::analyze_symbols;
 use library_adapter_protocol::{
-    AdapterIdentity, AnalysisRequest, AnalysisResponse, AnalysisState, Diagnostic, LibraryAnalysis,
-    Location, Position, SCHEMA_VERSION, Severity, SymbolAnalysis, ToolchainIdentity,
+    AdapterIdentity, AnalysisRequest, AnalysisResponse, SCHEMA_VERSION, ToolchainIdentity,
 };
 
 /// Public adapter identity. `library-adapter-build` cross-checks this against
@@ -55,61 +53,13 @@ fn build_response(request: &AnalysisRequest) -> anyhow::Result<AnalysisResponse>
         toolchains: vec![toolchain],
     };
     let workspace = RustWorkspace::from_request(request).context("build workspace model")?;
-    let (mut libraries, solutions) = analyze_request(request, &workspace);
-    for lib in &mut libraries {
-        run_symbol_analysis(&workspace, lib);
-    }
+    let (libraries, solutions) = analyze_request(request, &workspace);
     Ok(AnalysisResponse {
         schema_version: SCHEMA_VERSION,
         adapter,
         libraries,
         solutions,
     })
-}
-
-/// Populate `lib.symbol_analysis` from the on-disk source. Failure to read
-/// the source or parse the file yields `state = failed` plus a diagnostic;
-/// the surrounding dependency analysis stays whatever the dependency pass
-/// produced.
-fn run_symbol_analysis(workspace: &RustWorkspace, lib: &mut LibraryAnalysis) {
-    let absolute = workspace.absolute(&lib.path);
-    let source = match std::fs::read_to_string(&absolute) {
-        Ok(s) => s,
-        Err(err) => {
-            lib.symbol_analysis = SymbolAnalysis {
-                state: AnalysisState::Failed,
-                symbols: vec![],
-            };
-            lib.diagnostics.push(Diagnostic {
-                severity: Severity::Error,
-                code: "rust.symbols.read".into(),
-                message: format!("failed to read {}: {err}", lib.path),
-                location: Some(entry_location(&lib.path)),
-            });
-            return;
-        }
-    };
-    let analysis = analyze_symbols(&source, &lib.path, &[]);
-    if let AnalysisState::Failed = analysis.state {
-        lib.diagnostics.push(Diagnostic {
-            severity: Severity::Warning,
-            code: "rust.symbols.parse".into(),
-            message: format!("failed to parse {}", lib.path),
-            location: Some(entry_location(&lib.path)),
-        });
-    }
-    lib.symbol_analysis = analysis;
-}
-
-fn entry_location(path: &str) -> Location {
-    Location {
-        path: path.to_string(),
-        start: Position {
-            line: 1,
-            column: Some(1),
-        },
-        end: None,
-    }
 }
 
 /// Run `rustc -Vv` and turn it into a normalized `ToolchainIdentity`.

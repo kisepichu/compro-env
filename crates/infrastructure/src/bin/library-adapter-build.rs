@@ -18,7 +18,7 @@ use infrastructure::library_adapter::build_state::{BuildStateError, inspect_buil
 use infrastructure::library_adapter::cpp_toolchain::{CppToolchainError, select_cpp_toolchain};
 use infrastructure::library_adapter::inputs::{calculate_input_digest, load_build_inputs};
 use infrastructure::library_adapter::language_plans::{
-    cpp_build_plan, lean_build_plan, rust_build_plan, sanitized_language_env,
+    cpp_build_plan, lean_build_plan, rust_build_plan,
 };
 use infrastructure::library_adapter::lean_toolchain::{LeanToolchainError, select_lean_toolchain};
 use infrastructure::library_adapter::prepare::{PREPARED_SUBDIR, prepared_dir};
@@ -222,8 +222,7 @@ fn run(args: Args) -> anyhow::Result<()> {
         handshake_timeout: Duration::from_secs(args.handshake_timeout_secs),
     };
 
-    let runner =
-        ProcessLibraryAdapterRunner::new(repository_root.clone(), sanitized_language_env());
+    let runner = ProcessLibraryAdapterRunner::new(repository_root.clone());
     let set = build_adapters(&request, &runner)?;
     println!("published build set: {}", set.root.display());
     println!("build-id: {}", set.build_id);

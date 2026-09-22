@@ -1117,7 +1117,9 @@ check はローカルまたは CI 内で完結する処理である。
 テストや証明の意味を解釈しない。
 
 - `ce check` は全言語の `check_command` を言語 ID 順に 1 回ずつ実行する。
-- `ce check --language <id>` はローカル利用時だけ 1 言語へ限定する。
+- `ce check --language <id>` は 1 言語へ限定する。ローカル利用のほか、CI でも toolchain を
+  用意できている言語に限って filter を使ってよい。filter 付き check の成功だけを
+  repository 全体の公開可否には使わない。
 - `check_command` がない言語は明示的に `skipped` と表示し、失敗にはしない。
 - 通常の公開 solution の `test_command` は `ce check` から一括実行しない。
 - solution を個別に確認する既存の `ce test` の役割は変えない。
@@ -1490,7 +1492,7 @@ fingerprint が stale になった場合だけ通常の自動実行対象へ戻�
 
 fingerprint は最低限、次から作る。
 
-- preprocess 後の実提出ソース
+- 解法の生ソース (`[submit].preprocess` 適用前の on-disk bytes)
 - solution ID
 - 明示的に verify するライブラリの ID とソース
 - その推移的依存先の ID とソース
@@ -2582,6 +2584,19 @@ terminal な最新観測として自動マージする。rejected には WA、TL
 - `AcceptanceUnknown`: draft のまま回復または手動判断を待つ。
 - schema 違反、不正パス、アダプター完全性エラー: マージしない。
 
+#### PrTarget 遷移表 (record.state → PR 目標状態)
+
+CI 実装側 (`compute_pr_target`) はここに記した写像を単一の source of truth と
+する。将来 OJ verdict を追加する際も、まず本表を更新してから実装を追随させる。
+
+| record.state                                  | verdict.kind                                                              | PrTarget         |
+| --------------------------------------------- | ------------------------------------------------------------------------- | ---------------- |
+| `Completed`                                   | `Accepted`                                                                | `ReadyAutoMerge` |
+| `Completed`                                   | `WrongAnswer` / `TimeLimitExceeded` / `MemoryLimitExceeded` / `RuntimeError` / `CompileError` / `OutputLimitExceeded` / `JudgeError` | `ReadyAutoMerge` |
+| `Completed`                                   | `Cancelled` / `Other`                                                     | `Draft`          |
+| `Unavailable`                                 | —                                                                         | `ReadyAutoMerge` |
+| `Starting` / `AcceptanceUnknown` / `Submitted` / `Queued` / `Judging` / `InfrastructureFailure` | — | `Draft`          |
+
 `ce verify` 自体は rejected と unavailable で exit 1 を返す。CI controller はこの終了状態を
 観測結果として受け取り、結果保存と PR 更新を続ける。bot PR の必須 check は verdict の成否
 ではなく、結果 schema、fingerprint、状態遷移、変更範囲の完全性を検証する。
@@ -2672,6 +2687,22 @@ start job は `Starting` の remote branch への保存を確認するまで OJ 
 `Starting` が残った場合は、後続 worker が OJ の回復能力に従って handle の一意な復元または
 未提出の確証を試みる。どちらも得られなければ `AcceptanceUnknown` とし、同じ OJ の queue を
 止めたまま手動修復を待つ。
+
+資格情報分離のもとで `Starting` の永続化を担う job (`persist_starting`) は state writer
+側にあるため、OJ に接続する `verify-start` はローカル `ce verify` の `start_plan` と異なり
+自身では `Starting` を書かない。`submit_prepared_plan` は先行 job が置いた `Starting` を
+`load()` で確認し、attempt ID と `Starting` 状態を検証したうえで OJ starter を呼び、
+結果の遷移だけを CAS 経由で書き戻す。事前に `Starting` が存在しない、attempt ID が plan と
+一致しない、`Starting` 以外の状態、のいずれでも submit は即座に失敗する。
+
+emit 境界での CAS token 契約: `verify-start` / `verify-poll` が stdout へ書き出す
+`VerificationRecord` の `replaces_attempt_id` は、直前に上書きした remote record の
+`attempt_id`（同一 attempt 内の遷移では自分自身の `attempt_id`）と一致させる。後段の
+`persist_handle` / `persist_terminal` は `cas_check(expected = candidate.replaces_attempt_id,
+actual = remote.attempt_id)` を行うため、emit 側と state writer 側で同じ token に揃わないと
+CAS が破綻し、live path が握らずに終了する。`apply_transition` は `replaces_attempt_id` を
+現状の record から継承するだけなので、emit 直前に `Some(current.attempt_id)` へ上書きする
+のは submit / poll layer の責務とする。
 
 ### 15.5 静的サイトの公開
 
@@ -3316,7 +3347,8 @@ OJ capability に応じて `not_configured` または `unavailable` になる。
 - 公開 descendant または `_index.md` があれば directory page を生成する。
 - relation は公開 library 間なら cross-language を許可する。
 - `ce check` は全言語の `check_command` を安定順で実行し、通常 solution は一括 test しない。
-- ローカル用の `--language` filter は許可するが、CI と公開 build は全言語を check する。
+- `--language` filter はローカルと、toolchain を用意できている言語に限る CI で許可する。
+  公開 build は全言語を check し、filter 付き check の成功だけを公開可否には使わない。
 - `check_command` がない言語は `skipped` とし、check 結果は保存も Web 公開もしない。
 - check / test の timeout は既定 600 秒とし、それぞれ config で上書き可能にする。
 - timeout 時は command の process group 全体を終了し、通常の check failure として集約する。

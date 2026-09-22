@@ -6,6 +6,9 @@ Operational reference for `.github/workflows/verify.yml` and
 §15.1–§15.4. This file explains what an operator needs to know to run
 and monitor the two-workflow verify pipeline.
 
+Adding a library or a verify solution (author-facing procedure, Japanese):
+`docs/operations/contributing-content.md`.
+
 ## What the workflows do
 
 The pipeline is split into a lightweight dispatcher and a heavy worker
@@ -29,13 +32,27 @@ group (§15.3):
 **Worker — `verify-worker.yml`**
 
 `workflow_call`-only, with inputs `after` (immutable plan base SHA),
-`mode` (default `dry-run`; only an explicit `workflow_dispatch` with
-`mode: live` picks the OJ path), and `solution` (empty means no work
-this run). All jobs live in the `verify-heavy` concurrency group with
+`mode`, and `solution` (empty means no work this run). The dispatcher
+resolves `mode` as
+`inputs.mode || (vars.VERIFY_LIVE == 'true' && 'live' || 'dry-run')`:
+an explicit `workflow_dispatch` `mode` always wins, otherwise the
+repository variable `VERIFY_LIVE` decides whether unattended `push` /
+`schedule` ticks take the OJ path. `VERIFY_LIVE` unset (or anything
+other than `true`) keeps them on `dry-run`; the worker's own
+`workflow_call` default is `dry-run` as well, so a caller that forgets
+the input cannot submit. `VERIFY_LIVE` is independent of
+`VERIFY_ACTIVATED`: the latter decides whether the pipeline runs at
+all, the former only whether it contacts the OJ.
+All jobs live in the `verify-heavy` concurrency group with
 `cancel-in-progress: false`. The six jobs form a strict `needs:`
 chain:
 
-1. **`prepare`** — secretless. Checks out, builds `ce`, then runs
+1. **`prepare`** — secretless. Checks out `main@base_sha`, then
+   overlays `verification/results/**` from the `automation/verify`
+   state branch so `verify-prepare` can read the current terminal
+   record's attempt id and stamp it as the plan's
+   `previous_attempt_id` (the CAS token consumed by
+   `persist_starting`). Builds `ce`, then runs
    `tools/library-analyzers/prepare` + `tools/library-analyzers/build`
    to materialize the pinned adapter executables under
    `target/library-analyzers/bin/*-analyzer`. Only after those exist
@@ -89,6 +106,44 @@ chain:
    terminal record and releases the automation PR to ready-for-review
    when the verdict is terminal.
 
+### Automation PR
+
+Every `persist_*` job appends a `ce internal verify-pr-set-state` step
+after its `verify-persist` invocation. That step maintains exactly one
+long-lived pull request from `automation/verify` → `main`:
+
+- **Title:** `Automation: verification results`. **Head:**
+  `automation/verify`. **Base:** `main`.
+- The first `persist_starting` on a fresh state branch opens the PR as
+  a **draft**; subsequent `persist_*` calls reuse it (find-or-open is
+  idempotent).
+- `persist_starting` and `persist_handle` keep the PR draft — the
+  attempt is still mid-flight.
+- `persist_terminal` inspects the persisted record and flips the PR to
+  **ready-for-review + auto-merge** when the state is:
+  - `Completed{Accepted | WrongAnswer | TimeLimitExceeded |
+    MemoryLimitExceeded | RuntimeError | CompileError |
+    OutputLimitExceeded | JudgeError}`, or
+  - `Unavailable`.
+- `Completed{Cancelled | Other}` and every non-terminal state
+  (`Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging`,
+  `InfrastructureFailure`) leave the PR draft — the outcome is either
+  indeterminate or still in flight, so a human decides.
+
+A `verify` run whose `persist_terminal` job succeeded triggers
+`pages.yml` through `workflow_run`, so a new record is published
+without waiting for the automation PR to merge and without an operator
+running `gh workflow run pages.yml` by hand. The site build checks out
+`main` and overlays `verification/results/**` from the state branch.
+`pages.yml` deliberately does *not* subscribe to pushes on
+`automation/verify`: a push-triggered run would execute that branch's
+copy of the workflow and would need the `github-pages` environment to
+allow deployments from it, which would let whoever can write the state
+branch publish arbitrary content. Runs that persisted nothing stop at
+`pages.yml`'s `gate` job. When auto-merge later lands the PR, the
+resulting `main` push republishes from the merged tree. See
+`docs/operations/pages.md`.
+
 Triggers allowed: `push` to `main`, `schedule` on the dispatcher, and
 `workflow_dispatch` on the dispatcher. The worker accepts only
 `workflow_call`. `pull_request`, `pull_request_target`, and any other
@@ -132,13 +187,24 @@ Complete every step below before flipping `VERIFY_ACTIVATED` to
    `VERIFY_ACTIVATED = true`. This is the master activation switch;
    setting it back to `false` disables the workflow without needing
    to delete the environments or rotate secrets.
-8. Enable branch protection on `main` with these required status
+8. Decide whether unattended ticks may submit to the OJ. Leave
+   `VERIFY_LIVE` unset for a dry-run-only pipeline (`push` and
+   `schedule` exercise `prepare` + `persist_starting` only); add
+   `VERIFY_LIVE = true` under the same **Settings → Actions →
+   Variables** page to let the 5-minute scheduler and `main` pushes
+   take the OJ path. `gh variable set VERIFY_LIVE -b true -R
+   kisepichu/compro-env` does the same from the CLI; `gh variable
+   delete VERIFY_LIVE` (or setting it to `false`) reverts to dry-run
+   without touching `VERIFY_ACTIVATED`. Rate limiting does not depend
+   on this switch — the picker submits at most one solution per tick
+   and retries follow the backoff ladder below.
+9. Enable branch protection on `main` with these required status
    checks: `CI / Cargo test + clippy + fmt`, `CI / Web build`, and any
    `verify-result-integrity` check that surfaces on the automation
    PRs.
-9. Enable **Settings → General → Allow auto-merge** so the bot's
-   terminal-verdict PRs can auto-merge once all required checks pass.
-10. Record the completion date, the App ID, and the PEM fingerprint in
+10. Enable **Settings → General → Allow auto-merge** so the bot's
+    terminal-verdict PRs can auto-merge once all required checks pass.
+11. Record the completion date, the App ID, and the PEM fingerprint in
     your operator log. Never commit the PEM itself.
 
 Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
@@ -146,31 +212,108 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
 ## Operating the workflow
 
 - **Every `main` push** runs the dispatcher. If classification returns
-  `source-or-config`, the worker is called — but `prepare` still needs
-  a `solution` input to do anything (see below), so today's push
-  effectively short-circuits to `has_work=false` until automatic
-  candidate selection lands.
-- **Every 5 minutes (schedule)** the dispatcher wakes and calls the
-  worker with `solution: ''`. Until automatic candidate selection is
-  implemented, the worker exits at `prepare` with `has_work=false` and
-  every downstream job is skipped. **Scheduled ticks are currently
-  no-ops.** Operators watching the cron will see a green
-  five-minute-interval workflow run doing nothing until either a
-  `workflow_dispatch` supplies a `solution` or the follow-up plan wires
-  in the candidate picker.
+  `source-or-config`, the dispatcher also invokes the automatic picker
+  (`ce internal pick-candidate`) against the `automation/verify`
+  overlay and hands the chosen `SolutionId` to the worker as
+  `solution`. If the picker returns nothing eligible the dispatcher
+  flips `run_worker=false` and the worker is skipped for this push.
+- **Every 5 minutes (schedule)** the dispatcher wakes, overlays the
+  current `automation/verify` state under `state/verification/`, and
+  runs the picker. The picker walks the current publication set,
+  applies the eligibility rules (see below), and prints exactly one
+  `SolutionId` (or an empty line). Non-empty output feeds the worker;
+  an empty line skips the tick, so retryable-failure and drifted
+  `Completed` records converge one solution per tick without operator
+  input.
+- **`VERIFY_LIVE` decides what an unattended tick does.** Unset (or
+  anything but `true`): the picked candidate runs in `dry-run`, which
+  stops after `persist_starting` and never contacts the OJ. `true`:
+  the same tick runs `live` and submits. Flipping the variable takes
+  effect on the next tick — no workflow edit, no re-dispatch. This is
+  also the narrow emergency stop: setting it to `false` halts OJ
+  contact while leaving classification, the picker, and the state
+  branch running.
 - **Manual dispatch** via `workflow_dispatch`: supply a `solution` (e.g.
   `librarychecker-aplusb/aplusb/rust`) plus `mode: dry-run` for a
   no-OJ pass that exercises `prepare` and `persist_starting` only, or
-  `mode: live` for a real Library Checker submission. A blank
-  `solution` is a no-op (same as schedule).
-- **Result-only pushes** (updates under `verification/results/**`)
-  are classified as `result-only`; the dispatcher skips the worker and
-  only `pages.yml` republishes the site.
+  `mode: live` for a real Library Checker submission. The dispatched
+  `mode` overrides `VERIFY_LIVE` in both directions. An explicit
+  `solution:` always wins over the picker; leave it blank to let the
+  picker choose.
+- **Result-only pushes** (updates under `verification/results/**` on
+  `main`) are classified as `result-only`; the dispatcher skips the
+  worker and only `pages.yml` republishes the site. The picker never
+  runs on this path because `decide` already gave `run_worker=false`.
+  Record pushes to `automation/verify` do not reach the dispatcher at
+  all (it only runs on `main`); the site follows them via `pages.yml`'s
+  `workflow_run` trigger on this workflow instead.
 - **Retry backoff** target is `5 → 10 → 20 → 40 → 80` minutes, capped
-  at 6 hours. The record's `next_retry_at` encodes the schedule and
-  the 5-minute cron is dense enough to honor it — but the actual
-  retry consumption path is gated on the same follow-up as automatic
-  candidate selection.
+  at 6 hours. Every retryable `InfrastructureFailure` is persisted with
+  `next_retry_at = updated_at + retry_delay(retry_count)`
+  (`crates/usecases/src/verification/backoff.rs`) and the 5-minute cron
+  is dense enough to honor it. The streak lives on
+  `InfrastructureFailure.retry_count`: transitioning
+  `InfrastructureFailure -> InfrastructureFailure` bumps the counter,
+  and any other predecessor resets it to `1` (spec §8.3 "OJ 接続成功
+  または判定進行で reset する"). The `Retry-After` hint
+  (`sleep_with_hint`) still overrides intra-command sleeps when the OJ
+  asks for a longer wait; it does not affect the cross-workflow
+  `next_retry_at`. Non-retryable failures (`HandleNotFound`,
+  `AuthenticationRejected`, `CredentialsMissing`, `SchemaError`) leave
+  `next_retry_at: None` so an operator has to clear them.
+
+### Picker eligibility rules
+
+`ce internal pick-candidate` runs in the same secretless dispatcher
+job as `classify-changes` and never touches App or OJ credentials.
+Given the current publication set (`config.toml` + published
+`solutions/**/ce.toml`) and the `automation/verify` overlay, a
+solution is eligible when its latest record is:
+
+- absent (no verification has ever run), OR
+- `InfrastructureFailure { retryable: true }` whose `next_retry_at`
+  has elapsed or is `None`, OR
+- `Completed` whose stored `fingerprint` disagrees with the
+  freshly-recomputed fingerprint from the working tree (input drift).
+
+Every other state is excluded. The five in-flight variants
+(`Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging`)
+never advance out of the picker — the worker's CAS is the sole
+race guard, and the picker just avoids wasted OJ hits.
+`InfrastructureFailure { retryable: false }` is excluded permanently.
+
+### `Unavailable` is a permanent dead-letter
+
+`VerificationState::Unavailable` records are terminal and never
+re-enter the picker. `UnavailableReason` variants
+(`interactive_untrackable`, `unsupported_mode`, `oj_unsupported`,
+`problem_mismatch`, `language_mismatch`) are not fed into the
+fingerprint, so the `Completed`-drift path that automatically
+re-enables verified solutions **does not apply**. To reprocess an
+`Unavailable` solution — e.g. after adding a new adapter — an
+operator must clear the overlay record for that solution (usually
+via a `workflow_dispatch` with an explicit `solution:` targeting the
+same id, once the underlying capability changes) and let the picker
+pick it up as a fresh candidate.
+
+### Determinism and concurrency
+
+The picker orders eligible candidates by `(retry_ready first,
+next_retry_at ascending, SolutionId bytes ascending)`, so parallel
+ticks that collide on the `verify-heavy` concurrency group compute
+the same target. That determinism plus the worker's per-`(solution,
+attempt)` CAS keeps `automation/verify` linearizable even when a
+schedule tick and a push tick fire back-to-back.
+
+### Overlay records for solutions that have been unpublished
+
+If a solution used to live at `librarychecker-…/foo/bar` and was
+later removed from the manifest, its `verification/results/<id>.json`
+stays on `automation/verify` until an operator removes it. The
+picker silently ignores such records — they simply do not appear in
+the publication set — so unpublished solutions cannot dominate the
+schedule. Clean them up in a routine sweep; leaving them in place is
+harmless.
 
 ## Debugging failures
 
@@ -213,25 +356,110 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
   `handle.json`, `persist_handle` commits it to `automation/verify`,
   and the downstream `poll` bails on the non-handle state so
   `persist_terminal` skips. The state on `automation/verify` accurately
-  reflects the observed outcome — no infinite retry occurs because the
-  scheduler is a no-op until automatic candidate selection lands. To
-  resume, re-run `workflow_dispatch` with a `solution` argument; the
-  new attempt's `persist_starting` CAS-replaces the failed record.
+  reflects the observed outcome. Retryable outcomes come back
+  automatically through the picker on the next scheduler tick;
+  non-retryable outcomes stay put until an operator re-runs
+  `workflow_dispatch` with an explicit `solution` argument, whose
+  `persist_starting` CAS-replaces the failed record.
 - Secret leakage in a failed job: nothing to remediate inside the
   workflow. Invalidate the affected token (App key or Library Checker
   refresh token) and follow the rotation steps below.
 
 ## Key rotation and revocation
 
-- **`VERIFY_APP_PRIVATE_KEY`**: on the App's settings page, generate a
-  new private key. Update the `verify-state` environment secret with
-  the new PEM. Once a `persist_*` job succeeds against the new key,
-  delete the old key on the App page.
-- **`LIBRARYCHECKER_REFRESH_TOKEN`**: run `ce login` locally against
-  Library Checker, copy the resulting refresh token, and update the
-  `oj-library-checker` environment secret. No cascading changes are
-  required.
-- **Emergency stop**: set `VERIFY_ACTIVATED` to `false` (or delete the
-  variable). No dispatcher or worker job will do OJ or App work until
-  it is re-enabled. Environments and secrets remain in place, so
-  re-activation is a single variable flip.
+Two secrets are in scope. Both live in per-environment secret stores; no
+repository-wide secrets are involved. All rotation happens without
+downtime: `VERIFY_ACTIVATED` can stay `true` throughout, and the
+five-minute scheduler tolerates a single failed tick.
+
+### Cadence
+
+- **`VERIFY_APP_PRIVATE_KEY`** — rotate at least **every 90 days**, and
+  immediately after: any suspected leak, any operator/device rotation,
+  or the first successful live run following a bootstrap (the initial
+  activation key is by nature a "temporary" credential and should be
+  swapped once the pipeline is proven green).
+- **`LIBRARYCHECKER_REFRESH_TOKEN`** — rotate at least **every 30 days**
+  (Firebase refresh tokens don't have a fixed TTL but are revocable, and
+  a fresh capture catches quiet server-side invalidation early), and
+  immediately after: password change on the Library Checker account,
+  the first successful live run following a bootstrap, or any
+  `session expired and token refresh failed` from a worker job.
+
+Record the rotation date, actor, and PEM fingerprint (App key only) in
+your operator log. Do **not** commit the PEM or the refresh token.
+
+### Rotate `VERIFY_APP_PRIVATE_KEY`
+
+1. Open the App's settings page (Developer settings → GitHub Apps →
+   the App scoped to this repo).
+2. Under "Private keys", click **Generate a private key** — GitHub
+   downloads a fresh `<app>.<date>.private-key.pem`.
+3. Load the new PEM into the environment secret. The command reads
+   the file into stdin so the PEM never appears on the shell history:
+
+   ```bash
+   gh secret set VERIFY_APP_PRIVATE_KEY \
+     -R kisepichu/compro-env --env verify-state \
+     < /path/to/<app>.<date>.private-key.pem
+   ```
+
+4. Verify: manually dispatch `verify` with `mode: dry-run` and any
+   valid `solution`. `prepare` + `persist_starting` must complete
+   green. If `persist_starting` fails with an App-auth error, the
+   secret update did not take — re-run step 3.
+5. Only after step 4 succeeds, revoke the old key on the App's
+   settings page. GitHub keeps the previous key active until you
+   delete it explicitly; leaving both keys live indefinitely defeats
+   the rotation.
+6. Delete the downloaded PEM from disk (`shred -u` on Linux) and
+   record the rotation in your operator log.
+
+### Rotate `LIBRARYCHECKER_REFRESH_TOKEN`
+
+1. Locally, run `ce login librarychecker` and enter the account's
+   email + password. On success it writes `session.toml` with a fresh
+   `refresh_token` under `$CE_CONFIG_DIR` (if set) or `~/.config/ce/`
+   otherwise — the same lookup order used by every other `ce`
+   subcommand (`SessionRepositoryImpl::config_dir()` in
+   `crates/infrastructure/src/repository_impl/session_repository_impl.rs`).
+2. Pipe the token directly from the session file into the environment
+   secret. This never writes the token to the terminal, so it cannot
+   leak via scrollback, `tmux`/`screen` session logs, or screen
+   recordings. The snippet honours `CE_CONFIG_DIR` so it stays in sync
+   with step 1 even inside a shell that had it set for integration
+   tests. `end=""` suppresses the trailing newline that `print` would
+   otherwise inject into the stored secret. Requires **Python 3.11+**
+   for `tomllib` — on older systems either upgrade or `pip install
+   tomli` and swap the import:
+
+   ```bash
+   python3 -c 'import os, tomllib, pathlib; \
+     d = os.environ.get("CE_CONFIG_DIR", "").strip() or str(pathlib.Path.home() / ".config" / "ce"); \
+     print(tomllib.loads(pathlib.Path(d, "session.toml").read_text())["librarychecker"]["refresh_token"], end="")' \
+     | gh secret set LIBRARYCHECKER_REFRESH_TOKEN \
+         -R kisepichu/compro-env --env oj-library-checker
+   ```
+
+3. Verify: manually dispatch `verify` with `mode: live` and a cheap
+   `solution` (e.g. `librarychecker-aplusb/aplusb/rust`). All six
+   worker jobs must complete green with a terminal verdict on
+   `automation/verify`.
+4. Optional but recommended: on the Library Checker account, sign out
+   of all other sessions to invalidate the previous refresh token.
+5. Delete the local `session.toml` under the same directory used in
+   step 1 (`$CE_CONFIG_DIR` if set, else `~/.config/ce/`) if it isn't
+   otherwise needed on this machine, and record the rotation in your
+   operator log.
+
+### Emergency stop
+
+Set `VERIFY_ACTIVATED` to `false` (or delete the repo variable). No
+dispatcher or worker job will do OJ or App work until it is
+re-enabled. Environments and secrets remain in place, so re-activation
+is a single variable flip.
+
+To stop only the OJ submissions — keeping classification, the picker,
+and the state branch alive — set `VERIFY_LIVE` to `false` (or delete
+it) instead. Unattended ticks fall back to `dry-run` on the next tick;
+a `workflow_dispatch` with an explicit `mode: live` still submits.

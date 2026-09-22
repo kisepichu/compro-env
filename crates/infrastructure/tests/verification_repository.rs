@@ -474,7 +474,7 @@ fn load_returns_error_on_corrupt_json() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "{ not valid json ").unwrap();
 
-    let err = repo.load(&id).err().expect("must be an error");
+    let err = repo.load(&id).expect_err("must be an error");
     // The parse failure surfaces the anyhow context.
     assert!(
         format!("{err:?}").contains("failed to parse record"),

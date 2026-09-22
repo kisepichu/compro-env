@@ -1,0 +1,6 @@
+#[path = "helper.rs"]
+mod helper;
+
+fn main() {
+    helper::greet();
+}

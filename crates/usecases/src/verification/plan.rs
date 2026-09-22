@@ -208,6 +208,7 @@ impl SubmissionPlan {
             plan_context: Some(domain::verification::PlanContext {
                 language: self.body.language.clone(),
                 submitted_source_hash: self.body.submitted_source_hash.clone(),
+                verify_libraries: self.body.verifies.clone(),
             }),
         }
     }

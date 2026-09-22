@@ -10,6 +10,6 @@
 pub mod verification_state_writer;
 
 pub use verification_state_writer::{
-    BotPullRequestState, GitHubVerificationStateWriter, PersistError, PersistStateRequest,
-    PersistedState, validate_result_path,
+    BotPullRequestRef, BotPullRequestState, GitHubVerificationStateWriter, PersistError,
+    PersistStateRequest, PersistedState, validate_result_path,
 };

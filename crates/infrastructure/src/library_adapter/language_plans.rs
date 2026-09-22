@@ -13,7 +13,9 @@ use domain::adapter_prepare::PreparedSet;
 
 use crate::library_adapter::build::LanguageBuildPlan;
 use crate::library_adapter::cpp_toolchain::{CppToolchainError, locate_prepared_llvm_root};
-use crate::library_adapter::lean_toolchain::{LeanToolchainError, locate_prepared_lean_root};
+use crate::library_adapter::lean_toolchain::{
+    LeanToolchainError, locate_prepared_lean_root, locate_prepared_lean_root_from_root,
+};
 
 /// Language ID under which the Rust adapter is registered.
 pub const RUST_LANGUAGE: &str = "rust";
@@ -217,21 +219,59 @@ pub fn lean_build_plan(
     })
 }
 
-/// Inject `CE_LEAN_ROOT` plus `<lean_root>/lib` on `LD_LIBRARY_PATH` into a
-/// sanitized env map. Any existing `LD_LIBRARY_PATH` is preserved by
-/// appending after the prepared `lib/` — the pinned Lean shared objects
-/// resolve first, and host-provided libraries the loader still needs
-/// (libc, libstdc++, …) continue to resolve through their original
-/// entries.
-fn build_lean_env(lean_root: &Path, mut env: BTreeMap<String, String>) -> BTreeMap<String, String> {
+/// Inject the Lean adapter's runtime env on top of a sanitized base map:
+///
+/// * `CE_LEAN_ROOT` is set to the prepared install root.
+/// * `<lean_root>/bin` is prepended to `PATH` so children spawned by the
+///   analyzer (`lean --print-libdir`, `lake`, …) resolve to the pinned
+///   toolchain instead of an ambient host install.
+/// * `<lean_root>/lib` is prepended to `LD_LIBRARY_PATH` so the dynamic
+///   linker finds `libLean_shared.so` and its siblings shipped in the
+///   tarball. Any existing entry is preserved as the fallback tail so the
+///   loader can still resolve host libc / libstdc++.
+pub(crate) fn build_lean_env(
+    lean_root: &Path,
+    mut env: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
     let root_str = lean_root.to_string_lossy().into_owned();
+    let bin_dir = lean_root.join("bin").to_string_lossy().into_owned();
     let lib_dir = lean_root.join("lib").to_string_lossy().into_owned();
     env.insert("CE_LEAN_ROOT".into(), root_str);
-    let entry = env.entry("LD_LIBRARY_PATH".into()).or_default();
-    if entry.is_empty() {
-        *entry = lib_dir;
-    } else {
-        *entry = format!("{lib_dir}:{entry}");
-    }
+    prepend_path_entry(&mut env, "PATH", &bin_dir);
+    prepend_path_entry(&mut env, "LD_LIBRARY_PATH", &lib_dir);
     env
+}
+
+/// Prepend `head` to a colon-separated path variable, creating the entry
+/// when absent.
+fn prepend_path_entry(env: &mut BTreeMap<String, String>, key: &str, head: &str) {
+    let entry = env.entry(key.into()).or_default();
+    if entry.is_empty() {
+        *entry = head.to_string();
+    } else {
+        *entry = format!("{head}:{entry}");
+    }
+}
+
+/// Build the analyze-time env for one language, mirroring what
+/// `handshake_environment` on the corresponding `LanguageBuildPlan` receives.
+///
+/// `prepared_root` is `<analyzer_root>/prepared/<dep-id>/` — the same
+/// directory `library-adapter-build` writes at prepare time. Rust and C++
+/// only need the shared allowlist; Lean layers `CE_LEAN_ROOT`, `<lean_root>/
+/// bin` on `PATH`, and `<lean_root>/lib` on `LD_LIBRARY_PATH` on top so the
+/// pinned toolchain is on the child's search paths (spec §6.8).
+pub fn analyze_language_env(
+    prepared_root: &Path,
+    platform: &TargetPlatform,
+    language: &str,
+) -> Result<BTreeMap<String, String>, LeanToolchainError> {
+    let base = sanitized_language_env();
+    match language {
+        LEAN_LANGUAGE => {
+            let lean_root = locate_prepared_lean_root_from_root(prepared_root, platform)?;
+            Ok(build_lean_env(&lean_root, base))
+        }
+        _ => Ok(base),
+    }
 }

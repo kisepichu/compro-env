@@ -71,6 +71,45 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Layer automation/verify state onto workspace
+        # `verify-prepare` reads `verification/results/**` via
+        # `ports.verifications.load()` to compute `previous_attempt_id` — the
+        # CAS token the plan (and its `Starting` sidecar) will carry into the
+        # App-only `persist_starting` job. That path only exists on the
+        # `automation/verify` state branch, so overlay its
+        # `verification/results/**` subtree onto the main checkout before
+        # running `verify-prepare`.
+        #
+        # A missing branch (first-ever run before bootstrap) is the ONLY
+        # tolerable failure — detected via `ls-remote` so the fetch itself
+        # runs unmuted and any transient/token error surfaces loudly rather
+        # than leaving `previous_attempt_id` silently unpopulated (which
+        # would produce a confusing CAS mismatch downstream in
+        # `persist_starting`).
+        run: |
+          set -euo pipefail
+          # `set -e` does NOT propagate into command substitutions used
+          # inside `if` conditions, so store the ls-remote output into a
+          # variable first — that way a transient network / auth failure
+          # aborts the step rather than being misread as "branch absent"
+          # (which would silently skip the overlay and produce a confusing
+          # CAS mismatch in `persist_starting`).
+          REMOTE_HEADS="$(git ls-remote --heads origin automation/verify)"
+          if [ -z "$REMOTE_HEADS" ]; then
+            echo "automation/verify branch does not exist yet; skipping state overlay"
+            exit 0
+          fi
+          git fetch --depth=1 origin automation/verify
+          # The results tree may still be absent if the branch was bootstrapped
+          # from a bare main tip and no verification has landed yet. Same
+          # variable-capture pattern to keep `set -e` in force.
+          REMOTE_TREE="$(git ls-tree -r --name-only origin/automation/verify)"
+          if printf '%s\n' "$REMOTE_TREE" | grep -q '^verification/results/'; then
+            git checkout origin/automation/verify -- verification/results
+          else
+            echo "automation/verify has no verification/results/** yet; skipping overlay"
+          fi
+
       - name: Install Rust toolchain (pinned via rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable @ 2026-08
         with:
@@ -150,16 +189,17 @@ jobs:
         # mutating a published build set). A warm cache restore replays
         # a previous completed build, so re-invoking the driver would fail
         # with `build directory already exists`. Use the driver's own
-        # `--check` mode to validate the on-disk state: it returns 0 only
-        # when `bin` is a valid symlink into an already-finalized
-        # `builds/<id>/` with a matching manifest and no in-progress
-        # marker. Any partial / stale / mismatched state exits non-zero,
-        # so a fresh build is invoked in exactly the cases where it is
-        # needed.
+        # `--check` mode to validate the on-disk state — but note that
+        # `--check` is a diagnostic and returns 0 even when nothing is
+        # built yet (see the `build_state` module: `CurrentBinMissing`
+        # is a reportable state, not a gate failure). Testing `-L
+        # target/library-analyzers/bin` first resolves the ambiguity —
+        # without a cache restore the symlink is absent, so we fall
+        # through to a real build.
         if: inputs.solution != ''
         run: |
           set -euo pipefail
-          if ./tools/library-analyzers/build --check; then
+          if [ -L target/library-analyzers/bin ] && ./tools/library-analyzers/build --check; then
             echo "Cache restored a fully-finalized analyzer build set; skipping re-invocation."
             exit 0
           fi
@@ -312,6 +352,26 @@ jobs:
             --candidate-in work/starting.json \
             --repository "$REPOSITORY" \
             --base-sha "$BASE_SHA" \
+            --token-env GH_APP_TOKEN
+
+      - name: Update automation PR state
+        # verify-persist has already committed the record; a transient
+        # failure here should NOT fail the job. Re-running a failed job
+        # would break `verify-persist`'s CAS check (the remote now holds
+        # `candidate.attempt_id`, not `candidate.replaces_attempt_id`), so
+        # the whole attempt would be stuck. Instead let the job succeed
+        # and rely on the next persist_* step in the pipeline (or a
+        # follow-up workflow_dispatch's `persist_starting`) to re-attempt
+        # the PR state update from the current record.
+        continue-on-error: true
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-pr-set-state \
+            --record-in work/starting.json \
+            --repository "$REPOSITORY" \
             --token-env GH_APP_TOKEN
 
   submit:
@@ -522,6 +582,19 @@ jobs:
             --candidate-in work/handle.json \
             --repository "$REPOSITORY" \
             --base-sha "$BASE_SHA" \
+            --token-env GH_APP_TOKEN
+
+      - name: Update automation PR state
+        # See the same-named step in persist_starting: non-fatal by design.
+        continue-on-error: true
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-pr-set-state \
+            --record-in work/handle.json \
+            --repository "$REPOSITORY" \
             --token-env GH_APP_TOKEN
 
   poll:
@@ -778,4 +851,24 @@ jobs:
             --candidate-in work/terminal.json \
             --repository "$REPOSITORY" \
             --base-sha "$BASE_SHA" \
+            --token-env GH_APP_TOKEN
+
+      - name: Update automation PR state
+        # See the same-named step in persist_starting: non-fatal by
+        # design. On persist_terminal specifically, a failure here leaves
+        # the PR draft while the terminal record is on
+        # automation/verify. That is safe: a follow-up workflow_dispatch
+        # or the next attempt's persist_* pipeline will re-attempt the
+        # PR state update, and operators can flip the PR manually if
+        # needed. Failing the job would break re-run recovery via
+        # verify-persist's CAS check.
+        continue-on-error: true
+        env:
+          REPOSITORY: ${{ github.repository }}
+          GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          ./work/ce internal verify-pr-set-state \
+            --record-in work/terminal.json \
+            --repository "$REPOSITORY" \
             --token-env GH_APP_TOKEN

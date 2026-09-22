@@ -1,0 +1,2 @@
+#[path = "no-such-file.rs"]
+mod missing;

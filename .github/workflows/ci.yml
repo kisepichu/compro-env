@@ -2,7 +2,14 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    # The verify pipeline pushes three commits to `automation/verify` per live
+    # attempt (persist_starting/handle/terminal). Those pushes only touch
+    # verification/results/**.json — the Rust code is identical to main — so
+    # running the full CI three times per attempt is wasted CI minutes. Skip
+    # it explicitly; `verify-result-integrity` covers the data-side checks.
+    branches:
+      - "**"
+      - "!automation/verify"
   pull_request:
     branches: [main]
 
@@ -46,6 +53,18 @@ jobs:
 
       - name: cargo fmt check
         run: cargo fmt --all --check
+
+      - name: Verify python3 is present (bundler dependency)
+        run: python3 --version
+
+      - name: hooks/tests/run.sh (rust bundler regression tests)
+        run: bash hooks/tests/run.sh
+
+      # `--language rust` only: the cpp / lean check commands need clang++ and
+      # lake, which this job does not install. A filtered check does not gate
+      # publication (docs/commands/check.md).
+      - name: ce check --language rust (library unit tests)
+        run: cargo run --bin ce -- check --language rust
 
   site:
     name: Static site build (root + /compro-env/)

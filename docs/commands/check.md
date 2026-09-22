@@ -17,7 +17,9 @@ ce check [--language <id>]
 
 - `--language <id>`: 単一言語だけを実行する。省略時は `[library.languages]` に登録された全言語を実行する。
 
-CI の通常 check と公開 build は言語 filter なしで実行する。filter 付き check の成功だけを repository 全体の公開可否には使わない。
+CI では toolchain を用意できている言語に限り `--language` filter 付きで実行してよい
+(`.github/workflows/ci.yml` の rust job は clang++ / lake を install しないため `ce check --language rust` だけを実行する)。
+公開 build は言語 filter なしで実行する。filter 付き check の成功だけを repository 全体の公開可否には使わない。
 
 ## 挙動
 

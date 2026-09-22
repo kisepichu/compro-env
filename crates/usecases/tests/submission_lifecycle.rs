@@ -297,6 +297,11 @@ fn state_label(state: &VerificationState) -> &'static str {
 struct FakeRepo {
     inner: Mutex<HashMap<SolutionId, VerificationRecord>>,
     log: Arc<RecordingLog>,
+    /// Every `InfrastructureFailure` body persisted through
+    /// `compare_and_swap`, in write order. Lets tests assert on scheduled
+    /// `next_retry_at` / `retry_count` values without threading extra
+    /// fields through `CallLog`.
+    infra_writes: Mutex<Vec<InfrastructureFailure>>,
 }
 
 impl FakeRepo {
@@ -304,6 +309,7 @@ impl FakeRepo {
         Self {
             inner: Mutex::new(HashMap::new()),
             log,
+            infra_writes: Mutex::new(Vec::new()),
         }
     }
     fn seed(&self, rec: VerificationRecord) {
@@ -311,6 +317,9 @@ impl FakeRepo {
             .lock()
             .unwrap()
             .insert(rec.solution_id.clone(), rec);
+    }
+    fn infra_writes(&self) -> Vec<InfrastructureFailure> {
+        self.infra_writes.lock().unwrap().clone()
     }
 }
 
@@ -341,6 +350,9 @@ impl VerificationRepository for FakeRepo {
             (None, None) => {}
             (Some(a), Some(existing)) if existing.attempt_id == *a => {}
             _ => anyhow::bail!("compare_and_swap precondition failed for {}", id.as_str()),
+        }
+        if let VerificationState::InfrastructureFailure(failure) = &next.state {
+            self.infra_writes.lock().unwrap().push(failure.clone());
         }
         self.log.push(CallLog::RepoWrite {
             solution: id.as_str().to_string(),
@@ -877,6 +889,289 @@ fn start_plan_on_a_different_oj_is_not_blocked() {
     assert!(matches!(event, StartEvent::Trackable { .. }));
 }
 
+// ─── Tests: submit_prepared_plan ───────────────────────────────────────────
+
+/// Reshape `make_starting_record` to match `plan.body.attempt_id`. The
+/// credential-split flow persists `Starting` from an out-of-band job whose
+/// attempt id already matches the plan; the local orchestrator must accept
+/// that record instead of writing a fresh one.
+fn make_starting_record_for_plan(plan: &SubmissionPlan) -> VerificationRecord {
+    VerificationRecord {
+        schema_version: 1,
+        solution_id: plan.body.solution_id.clone(),
+        attempt_id: plan.body.attempt_id.clone(),
+        replaces_attempt_id: plan.body.replaces_attempt_id.clone(),
+        fingerprint: plan.body.fingerprint.clone(),
+        state: VerificationState::Starting(StartingState {
+            plan_hash: plan.plan_hash.clone(),
+            submitted_source_hash: plan.body.submitted_source_hash.clone(),
+            language: plan.body.language.clone(),
+            started_at: plan.body.started_at,
+        }),
+        plan_context: None,
+    }
+}
+
+#[test]
+fn submit_prepared_plan_starts_from_persisted_starting() {
+    // Spec §15.4: `persist_starting` writes the Starting record; the OJ-only
+    // `submit` job invokes `submit_prepared_plan` which must skip a second
+    // Starting write and proceed straight to the starter.
+    let log = Arc::new(RecordingLog::default());
+    let clock = Arc::new(FakeClock::new(fixed_offset_time(0)));
+    let repo = FakeRepo::new(Arc::clone(&log));
+    let plan = make_plan(
+        &lc_solution(),
+        "attempt-1",
+        "librarychecker",
+        "librarychecker-aplusb",
+        "aplusb",
+    );
+    let seeded = make_starting_record_for_plan(&plan);
+    repo.seed(seeded);
+    let env = make_env(
+        Arc::clone(&log),
+        Arc::clone(&clock),
+        vec![Ok(SubmissionStart::Trackable {
+            handle: PortHandle {
+                online_judge: OJKind::LibraryChecker,
+                submission_id: "42".into(),
+                submission_url: "https://judge/42".into(),
+                locator: None,
+                submitted_at: utc_time(0),
+            },
+        })],
+        vec![],
+        None,
+        usecases::submission::RecoveryMode::BestEffort,
+        PollingPolicy::verify_defaults(),
+    );
+    let repos_bundle = repos(&repo, &[lc_solution()]);
+    let event =
+        usecases::submission_lifecycle::submit_prepared_plan(&repos_bundle, &env.ports(), &plan)
+            .expect("submit_prepared_plan succeeds");
+
+    // No second `Starting` write must appear; the starter is called first
+    // and only the `Submitted` write follows it.
+    let entries = log.snapshot();
+    let starting_writes = entries
+        .iter()
+        .filter(|e| matches!(e, CallLog::RepoWrite { state, .. } if *state == "Starting"))
+        .count();
+    assert_eq!(
+        starting_writes, 0,
+        "submit_prepared_plan must not re-persist Starting"
+    );
+    assert_eq!(entries[0], CallLog::Start);
+    match &entries[1] {
+        CallLog::RepoWrite { state, .. } => assert_eq!(*state, "Submitted"),
+        e => panic!("expected Submitted write after Start, got {e:?}"),
+    }
+
+    match event {
+        StartEvent::Trackable { record } => {
+            assert!(matches!(record.state, VerificationState::Submitted(_)));
+            assert_eq!(record.attempt_id, attempt("attempt-1"));
+            assert_eq!(
+                record.replaces_attempt_id.as_ref(),
+                Some(&attempt("attempt-1")),
+                "emitted record must carry the CAS token (its own attempt id) so \
+                 downstream persist_handle round-trips through cas_check",
+            );
+        }
+        e => panic!("unexpected event {e:?}"),
+    }
+}
+
+#[test]
+fn submit_prepared_plan_errors_when_no_record() {
+    let log = Arc::new(RecordingLog::default());
+    let clock = Arc::new(FakeClock::new(fixed_offset_time(0)));
+    let repo = FakeRepo::new(Arc::clone(&log));
+    let plan = make_plan(
+        &lc_solution(),
+        "attempt-1",
+        "librarychecker",
+        "librarychecker-aplusb",
+        "aplusb",
+    );
+    let env = make_env(
+        Arc::clone(&log),
+        Arc::clone(&clock),
+        vec![],
+        vec![],
+        None,
+        usecases::submission::RecoveryMode::BestEffort,
+        PollingPolicy::verify_defaults(),
+    );
+    let repos_bundle = repos(&repo, &[lc_solution()]);
+    let err =
+        usecases::submission_lifecycle::submit_prepared_plan(&repos_bundle, &env.ports(), &plan)
+            .unwrap_err();
+    assert!(
+        err.to_string().contains("no Starting record"),
+        "message: {err}"
+    );
+}
+
+#[test]
+fn submit_prepared_plan_errors_on_attempt_id_mismatch() {
+    let log = Arc::new(RecordingLog::default());
+    let clock = Arc::new(FakeClock::new(fixed_offset_time(0)));
+    let repo = FakeRepo::new(Arc::clone(&log));
+    let plan = make_plan(
+        &lc_solution(),
+        "attempt-2",
+        "librarychecker",
+        "librarychecker-aplusb",
+        "aplusb",
+    );
+    // Seed a Starting record with a DIFFERENT attempt id.
+    repo.seed(make_starting_record(&lc_solution(), "attempt-1"));
+    let env = make_env(
+        Arc::clone(&log),
+        Arc::clone(&clock),
+        vec![],
+        vec![],
+        None,
+        usecases::submission::RecoveryMode::BestEffort,
+        PollingPolicy::verify_defaults(),
+    );
+    let repos_bundle = repos(&repo, &[lc_solution()]);
+    let err =
+        usecases::submission_lifecycle::submit_prepared_plan(&repos_bundle, &env.ports(), &plan)
+            .unwrap_err();
+    assert!(
+        err.to_string().contains("does not match plan attempt"),
+        "message: {err}"
+    );
+}
+
+#[test]
+fn submit_prepared_plan_errors_when_current_is_past_starting() {
+    let log = Arc::new(RecordingLog::default());
+    let clock = Arc::new(FakeClock::new(fixed_offset_time(0)));
+    let repo = FakeRepo::new(Arc::clone(&log));
+    let plan = make_plan(
+        &lc_solution(),
+        "attempt-1",
+        "librarychecker",
+        "librarychecker-aplusb",
+        "aplusb",
+    );
+    repo.seed(make_submitted(
+        &lc_solution(),
+        "attempt-1",
+        "librarychecker",
+        "42",
+    ));
+    let env = make_env(
+        Arc::clone(&log),
+        Arc::clone(&clock),
+        vec![],
+        vec![],
+        None,
+        usecases::submission::RecoveryMode::BestEffort,
+        PollingPolicy::verify_defaults(),
+    );
+    let repos_bundle = repos(&repo, &[lc_solution()]);
+    let err =
+        usecases::submission_lifecycle::submit_prepared_plan(&repos_bundle, &env.ports(), &plan)
+            .unwrap_err();
+    assert!(
+        err.to_string().contains("not in Starting state"),
+        "message: {err}"
+    );
+}
+
+#[test]
+fn submit_prepared_plan_maps_acceptance_unknown() {
+    let log = Arc::new(RecordingLog::default());
+    let clock = Arc::new(FakeClock::new(fixed_offset_time(0)));
+    let repo = FakeRepo::new(Arc::clone(&log));
+    let plan = make_plan(
+        &lc_solution(),
+        "attempt-1",
+        "librarychecker",
+        "librarychecker-aplusb",
+        "aplusb",
+    );
+    let seeded = make_starting_record_for_plan(&plan);
+    repo.seed(seeded);
+    let env = make_env(
+        Arc::clone(&log),
+        Arc::clone(&clock),
+        vec![Err(StartSubmissionError::AcceptanceUnknown {
+            summary: "network drop".into(),
+        })],
+        vec![],
+        None,
+        usecases::submission::RecoveryMode::BestEffort,
+        PollingPolicy::verify_defaults(),
+    );
+    let repos_bundle = repos(&repo, &[lc_solution()]);
+    let event =
+        usecases::submission_lifecycle::submit_prepared_plan(&repos_bundle, &env.ports(), &plan)
+            .unwrap();
+    match event {
+        StartEvent::AcceptanceUnknown { record } => {
+            assert!(matches!(
+                record.state,
+                VerificationState::AcceptanceUnknown(_)
+            ));
+            assert_eq!(
+                record.replaces_attempt_id.as_ref(),
+                Some(&attempt("attempt-1"))
+            );
+        }
+        e => panic!("unexpected event {e:?}"),
+    }
+}
+
+#[test]
+fn submit_prepared_plan_maps_confirmed_not_accepted() {
+    // Regression: the ConfirmedNotAccepted arm must also emit
+    // `replaces_attempt_id = Some(current.attempt_id)` so `persist_handle`'s
+    // remote CAS matches the pre-persisted Starting record.
+    let log = Arc::new(RecordingLog::default());
+    let clock = Arc::new(FakeClock::new(fixed_offset_time(0)));
+    let repo = FakeRepo::new(Arc::clone(&log));
+    let plan = make_plan(
+        &lc_solution(),
+        "attempt-1",
+        "librarychecker",
+        "librarychecker-aplusb",
+        "aplusb",
+    );
+    let seeded = make_starting_record_for_plan(&plan);
+    repo.seed(seeded);
+    let env = make_env(
+        Arc::clone(&log),
+        Arc::clone(&clock),
+        vec![Err(StartSubmissionError::ConfirmedNotAccepted {
+            summary: "server dropped submission".into(),
+        })],
+        vec![],
+        None,
+        usecases::submission::RecoveryMode::BestEffort,
+        PollingPolicy::verify_defaults(),
+    );
+    let repos_bundle = repos(&repo, &[lc_solution()]);
+    let event =
+        usecases::submission_lifecycle::submit_prepared_plan(&repos_bundle, &env.ports(), &plan)
+            .unwrap();
+    match event {
+        StartEvent::ConfirmedNotAccepted { record } => {
+            assert!(matches!(record.state, VerificationState::Starting(_)));
+            assert_eq!(
+                record.replaces_attempt_id.as_ref(),
+                Some(&attempt("attempt-1"))
+            );
+        }
+        e => panic!("unexpected event {e:?}"),
+    }
+}
+
 // ─── Tests: poll_handle ────────────────────────────────────────────────────
 
 #[test]
@@ -921,10 +1216,12 @@ fn poll_handle_persists_completed_and_refuses_further_polls() {
     );
 }
 
-/// Regression: `CompletedState` must quote the plan's real
-/// `submitted_source_hash` (and `language`) via `PlanContext`, not the zero
-/// fallback (spec §11 "十分な証跡"). Without this the record would silently
-/// persist an all-zero content hash whenever we complete from
+/// Regression: `CompletedState` must quote the plan's frozen
+/// `submitted_source_hash`, `language`, and `verified_libraries` via
+/// `PlanContext`, not zero / empty fallbacks (spec §11 "十分な証跡" and
+/// "result は提出時の direct `verified_libraries` を ID 順で保存する").
+/// Without this the record silently persists an all-zero content hash and
+/// an empty verified_libraries whenever we complete from
 /// Submitted/Queued/Judging (i.e. the normal happy path).
 #[test]
 fn poll_handle_completed_cites_plan_context_hash_and_language() {
@@ -938,9 +1235,11 @@ fn poll_handle_completed_cites_plan_context_hash_and_language() {
     let plan_hash = hash(0xbb);
     let plan_lang = binding();
     let mut seeded = make_submitted(&lc_solution(), "attempt-1", "librarychecker", "42");
+    let plan_verify_libraries = vec![LibraryId::parse("libraries/rust/algebra/monoid.rs").unwrap()];
     seeded.plan_context = Some(domain::verification::PlanContext {
         language: plan_lang.clone(),
         submitted_source_hash: plan_hash.clone(),
+        verify_libraries: plan_verify_libraries.clone(),
     });
     repo.seed(seeded);
 
@@ -969,6 +1268,10 @@ fn poll_handle_completed_cites_plan_context_hash_and_language() {
                 assert_eq!(
                     c.language, plan_lang,
                     "CompletedState.language must come from PlanContext"
+                );
+                assert_eq!(
+                    c.verified_libraries, plan_verify_libraries,
+                    "CompletedState.verified_libraries must come from PlanContext"
                 );
             }
             other => panic!("expected Completed, got {other:?}"),
@@ -1175,6 +1478,79 @@ fn poll_handle_infrastructure_error_backoff_caps_at_thirty_seconds() {
     );
     // The last sleep before recovery should be at the cap.
     assert!(sleeps.contains(&Duration::from_secs(30)));
+}
+
+/// Spec §8.3 cross-workflow backoff: three consecutive retryable poll
+/// failures must persist `retry_count = 1, 2, 3` and the third write's
+/// `next_retry_at` must land at `updated_at + 20 min` (5→10→20 curve).
+#[test]
+fn poll_handle_third_consecutive_failure_schedules_twenty_minute_retry() {
+    let log = Arc::new(RecordingLog::default());
+    let clock = Arc::new(FakeClock::new(fixed_offset_time(0)));
+    let repo = FakeRepo::new(Arc::clone(&log));
+    repo.seed(make_submitted(
+        &lc_solution(),
+        "attempt-1",
+        "librarychecker",
+        "42",
+    ));
+    // Three retryable failures + one non-retryable to break the loop after
+    // the third streak increment. AuthenticationRejected exits with
+    // `PollEvent::InfrastructureError`, so the intermediate retryable
+    // writes stay on disk for the sniffer.
+    let obs: Vec<Result<PollObservation, PollSubmissionError>> = vec![
+        Err(PollSubmissionError::Infrastructure {
+            kind: InfrastructureErrorKind::Network,
+            summary: "flaky-1".into(),
+        }),
+        Err(PollSubmissionError::Infrastructure {
+            kind: InfrastructureErrorKind::Network,
+            summary: "flaky-2".into(),
+        }),
+        Err(PollSubmissionError::Infrastructure {
+            kind: InfrastructureErrorKind::Network,
+            summary: "flaky-3".into(),
+        }),
+        Err(PollSubmissionError::Infrastructure {
+            kind: InfrastructureErrorKind::AuthenticationRejected,
+            summary: "abort-loop".into(),
+        }),
+    ];
+    let env = make_env(
+        Arc::clone(&log),
+        Arc::clone(&clock),
+        vec![],
+        obs,
+        None,
+        usecases::submission::RecoveryMode::BestEffort,
+        PollingPolicy::verify_defaults(),
+    );
+    let repos_bundle = repos(&repo, &[lc_solution()]);
+    let record = repo.load(&lc_solution()).unwrap().unwrap();
+    poll_handle(&repos_bundle, &env.ports(), &record).unwrap();
+
+    let writes = repo.infra_writes();
+    assert_eq!(
+        writes.len(),
+        4,
+        "expected four infra-failure writes, got {}",
+        writes.len()
+    );
+    let retry_counts: Vec<u32> = writes.iter().map(|f| f.retry_count).collect();
+    assert_eq!(retry_counts, vec![1, 2, 3, 4]);
+    let third = &writes[2];
+    assert!(third.retryable, "third failure stays retryable");
+    let deadline = third
+        .next_retry_at
+        .expect("retryable failure must schedule a deadline");
+    assert_eq!(
+        deadline - third.updated_at,
+        chrono::Duration::minutes(20),
+        "3rd consecutive failure must schedule +20 min per spec §8.3"
+    );
+    let fourth = &writes[3];
+    assert!(!fourth.retryable, "non-retryable failure has no deadline");
+    assert!(fourth.next_retry_at.is_none());
 }
 
 /// Regression: a non-retryable poll-time infra failure MUST persist the

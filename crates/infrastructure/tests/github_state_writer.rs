@@ -190,6 +190,7 @@ fn starting_record(attempt: &str, replaces: Option<&str>) -> VerificationRecord 
         plan_context: Some(PlanContext {
             language: language(),
             submitted_source_hash: source_hash(),
+            verify_libraries: Vec::new(),
         }),
     }
 }
@@ -243,17 +244,33 @@ fn base_commit_tree_sha() -> &'static str {
     "cccccccccccccccccccccccccccccccccccccccc"
 }
 
+fn state_head_sha() -> &'static str {
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
+
+fn get_ref_reply(sha: &str) -> Reply {
+    Reply::json(
+        200,
+        serde_json::json!({
+            "ref": "refs/heads/automation/verify",
+            "object": { "sha": sha }
+        }),
+    )
+}
+
 fn happy_script() -> Vec<Reply> {
     vec![
+        // 0. GET ref → state branch tip (anchor for the whole call).
+        get_ref_reply(state_head_sha()),
         // 1. CAS GET → 404 (result absent)
         Reply::empty(404),
         // 2. POST blob
         Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
-        // 3. GET commit → resolve base tree
+        // 3. GET commit → resolve state head's tree
         Reply::json(
             200,
             serde_json::json!({
-                "sha": base_sha(),
+                "sha": state_head_sha(),
                 "tree": { "sha": base_commit_tree_sha() }
             }),
         ),
@@ -343,7 +360,7 @@ fn persist_writes_blob_tree_commit_and_updates_ref_when_result_absent() {
     assert_eq!(out.commit_sha, commit_sha());
 
     let recorded = fx.recorded();
-    assert_eq!(recorded.len(), 6, "expected 6 requests, got {recorded:#?}");
+    assert_eq!(recorded.len(), 7, "expected 7 requests, got {recorded:#?}");
 
     // Every request must have carried the Bearer token.
     for r in &recorded {
@@ -356,38 +373,49 @@ fn persist_writes_blob_tree_commit_and_updates_ref_when_result_absent() {
         );
     }
 
-    // 1. CAS GET.
+    // 0. GET ref → state branch tip.
     assert_eq!(recorded[0].method, "GET");
+    assert_eq!(
+        recorded[0].url,
+        "/repos/owner/repo/git/refs/heads/automation/verify"
+    );
+
+    // 1. CAS GET at state_head.
+    assert_eq!(recorded[1].method, "GET");
     assert!(
-        recorded[0]
+        recorded[1]
             .url
             .starts_with("/repos/owner/repo/contents/verification/results/abc999/a/main.json?ref="),
         "CAS url: {}",
-        recorded[0].url
+        recorded[1].url
     );
-    assert!(recorded[0].url.ends_with(&format!("?ref={}", base_sha())));
+    assert!(
+        recorded[1]
+            .url
+            .ends_with(&format!("?ref={}", state_head_sha()))
+    );
 
     // 2. POST blob.
-    assert_eq!(recorded[1].method, "POST");
-    assert_eq!(recorded[1].url, "/repos/owner/repo/git/blobs");
-    let blob_body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    assert_eq!(recorded[2].method, "POST");
+    assert_eq!(recorded[2].url, "/repos/owner/repo/git/blobs");
+    let blob_body: serde_json::Value = serde_json::from_str(&recorded[2].body).unwrap();
     assert_eq!(blob_body["encoding"], "utf-8");
     let sent_content: &str = blob_body["content"].as_str().unwrap();
     // The blob content must round-trip to the same VerificationRecord.
     let round: VerificationRecord = serde_json::from_str(sent_content).unwrap();
     assert_eq!(round.attempt_id.as_str(), "attempt-1");
 
-    // 3. GET commit → resolve base tree.
-    assert_eq!(recorded[2].method, "GET");
+    // 3. GET commit → resolve state_head's tree.
+    assert_eq!(recorded[3].method, "GET");
     assert_eq!(
-        recorded[2].url,
-        format!("/repos/owner/repo/git/commits/{}", base_sha())
+        recorded[3].url,
+        format!("/repos/owner/repo/git/commits/{}", state_head_sha())
     );
 
     // 4. POST tree — base_tree must be the resolved TREE sha, not the commit sha.
-    assert_eq!(recorded[3].method, "POST");
-    assert_eq!(recorded[3].url, "/repos/owner/repo/git/trees");
-    let tree_body: serde_json::Value = serde_json::from_str(&recorded[3].body).unwrap();
+    assert_eq!(recorded[4].method, "POST");
+    assert_eq!(recorded[4].url, "/repos/owner/repo/git/trees");
+    let tree_body: serde_json::Value = serde_json::from_str(&recorded[4].body).unwrap();
     assert_eq!(tree_body["base_tree"], base_commit_tree_sha());
     let leaves = tree_body["tree"].as_array().unwrap();
     assert_eq!(leaves.len(), 1);
@@ -396,12 +424,12 @@ fn persist_writes_blob_tree_commit_and_updates_ref_when_result_absent() {
     assert_eq!(leaves[0]["type"], "blob");
     assert_eq!(leaves[0]["sha"], blob_sha());
 
-    // 5. POST commit.
-    assert_eq!(recorded[4].method, "POST");
-    assert_eq!(recorded[4].url, "/repos/owner/repo/git/commits");
-    let commit_body: serde_json::Value = serde_json::from_str(&recorded[4].body).unwrap();
+    // 5. POST commit with state_head as parent.
+    assert_eq!(recorded[5].method, "POST");
+    assert_eq!(recorded[5].url, "/repos/owner/repo/git/commits");
+    let commit_body: serde_json::Value = serde_json::from_str(&recorded[5].body).unwrap();
     assert_eq!(commit_body["tree"], tree_sha());
-    assert_eq!(commit_body["parents"][0], base_sha());
+    assert_eq!(commit_body["parents"][0], state_head_sha());
     assert!(
         commit_body["message"]
             .as_str()
@@ -410,12 +438,12 @@ fn persist_writes_blob_tree_commit_and_updates_ref_when_result_absent() {
     );
 
     // 6. PATCH ref.
-    assert_eq!(recorded[5].method, "PATCH");
+    assert_eq!(recorded[6].method, "PATCH");
     assert_eq!(
-        recorded[5].url,
+        recorded[6].url,
         "/repos/owner/repo/git/refs/heads/automation/verify"
     );
-    let patch_body: serde_json::Value = serde_json::from_str(&recorded[5].body).unwrap();
+    let patch_body: serde_json::Value = serde_json::from_str(&recorded[6].body).unwrap();
     assert_eq!(patch_body["sha"], commit_sha());
     assert_eq!(patch_body["force"], false);
 }
@@ -423,9 +451,15 @@ fn persist_writes_blob_tree_commit_and_updates_ref_when_result_absent() {
 #[test]
 fn persist_fails_when_attempt_cas_mismatch() {
     // Server returns a record with a different attempt_id than the candidate
-    // claims to replace. No further requests should be sent.
+    // claims to replace. No further requests should be sent after the CAS
+    // check (which is preceded by the mandatory state-branch head fetch).
     let remote = starting_record("attempt-remote", None);
-    let script = vec![contents_response_for(&remote)];
+    let script = vec![
+        // 0. GET ref → state branch tip.
+        get_ref_reply(state_head_sha()),
+        // 1. CAS GET → existing record with different attempt_id.
+        contents_response_for(&remote),
+    ];
     let fx = Fixture::start(script);
     let w = writer(fx.base_url());
 
@@ -442,10 +476,22 @@ fn persist_fails_when_attempt_cas_mismatch() {
     let recorded = fx.recorded();
     assert_eq!(
         recorded.len(),
-        1,
-        "expected exactly one GET, got {recorded:#?}"
+        2,
+        "expected GET ref + GET contents, got {recorded:#?}"
     );
     assert_eq!(recorded[0].method, "GET");
+    assert_eq!(
+        recorded[0].url,
+        "/repos/owner/repo/git/refs/heads/automation/verify"
+    );
+    assert_eq!(recorded[1].method, "GET");
+    assert!(
+        recorded[1]
+            .url
+            .ends_with(&format!("?ref={}", state_head_sha())),
+        "CAS should target state branch tip, got {}",
+        recorded[1].url,
+    );
 }
 
 /// Helper: SHA of the branch head after a concurrent writer advanced it.
@@ -472,15 +518,17 @@ fn persist_retries_once_on_ref_update_conflict() {
     // expect a predecessor), resolves HEAD's tree, rebuilds the tree +
     // commit on that new parent, and re-PATCHes → 200.
     let script = vec![
-        // 1. CAS GET → 404 (result absent at base_sha)
+        // 0. GET ref → state branch tip (used to anchor steps 1-5).
+        get_ref_reply(state_head_sha()),
+        // 1. CAS GET → 404 (result absent at state_head)
         Reply::empty(404),
         // 2. POST blob
         Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
-        // 3. GET commit → resolve base tree
+        // 3. GET commit → resolve state_head's tree
         Reply::json(
             200,
             serde_json::json!({
-                "sha": base_sha(),
+                "sha": state_head_sha(),
                 "tree": { "sha": base_commit_tree_sha() }
             }),
         ),
@@ -488,12 +536,13 @@ fn persist_retries_once_on_ref_update_conflict() {
         Reply::json(201, serde_json::json!({ "sha": tree_sha() })),
         // 5. POST commit
         Reply::json(201, serde_json::json!({ "sha": commit_sha() })),
-        // 6. PATCH → 422 (non-fast-forward)
+        // 6. PATCH → 422 (non-fast-forward — someone else advanced the branch
+        //    between step 0 and step 6).
         Reply::json(
             422,
             serde_json::json!({ "message": "Update is not a fast-forward" }),
         ),
-        // 7. GET ref → new_head
+        // 7. GET ref → new_head (the actual current tip after the race).
         Reply::json(
             200,
             serde_json::json!({
@@ -539,103 +588,119 @@ fn persist_retries_once_on_ref_update_conflict() {
     let recorded = fx.recorded();
     assert_eq!(
         recorded.len(),
-        12,
-        "expected 12 requests, got {recorded:#?}"
+        13,
+        "expected 13 requests (step 0 anchor + 6 initial + 6 retry), got {recorded:#?}"
     );
 
-    // Initial 6-request sequence (same as happy path).
+    // 0. GET ref → state branch tip.
     assert_eq!(recorded[0].method, "GET");
+    assert_eq!(
+        recorded[0].url,
+        "/repos/owner/repo/git/refs/heads/automation/verify"
+    );
+
+    // 1. CAS at state_head.
+    assert_eq!(recorded[1].method, "GET");
     assert!(
-        recorded[0]
+        recorded[1]
             .url
             .starts_with("/repos/owner/repo/contents/verification/results/abc999/a/main.json?ref=")
     );
-    assert!(recorded[0].url.ends_with(&format!("?ref={}", base_sha())));
-
-    assert_eq!(recorded[1].method, "POST");
-    assert_eq!(recorded[1].url, "/repos/owner/repo/git/blobs");
-
-    assert_eq!(recorded[2].method, "GET");
-    assert_eq!(
-        recorded[2].url,
-        format!("/repos/owner/repo/git/commits/{}", base_sha())
+    assert!(
+        recorded[1]
+            .url
+            .ends_with(&format!("?ref={}", state_head_sha()))
     );
 
-    assert_eq!(recorded[3].method, "POST");
-    assert_eq!(recorded[3].url, "/repos/owner/repo/git/trees");
-    let tree1_body: serde_json::Value = serde_json::from_str(&recorded[3].body).unwrap();
+    // 2. POST blob.
+    assert_eq!(recorded[2].method, "POST");
+    assert_eq!(recorded[2].url, "/repos/owner/repo/git/blobs");
+
+    // 3. GET commit at state_head to resolve base tree.
+    assert_eq!(recorded[3].method, "GET");
+    assert_eq!(
+        recorded[3].url,
+        format!("/repos/owner/repo/git/commits/{}", state_head_sha())
+    );
+
+    // 4. POST tree.
+    assert_eq!(recorded[4].method, "POST");
+    assert_eq!(recorded[4].url, "/repos/owner/repo/git/trees");
+    let tree1_body: serde_json::Value = serde_json::from_str(&recorded[4].body).unwrap();
     assert_eq!(tree1_body["base_tree"], base_commit_tree_sha());
 
-    assert_eq!(recorded[4].method, "POST");
-    assert_eq!(recorded[4].url, "/repos/owner/repo/git/commits");
-    let commit1_body: serde_json::Value = serde_json::from_str(&recorded[4].body).unwrap();
+    // 5. POST commit with state_head as parent.
+    assert_eq!(recorded[5].method, "POST");
+    assert_eq!(recorded[5].url, "/repos/owner/repo/git/commits");
+    let commit1_body: serde_json::Value = serde_json::from_str(&recorded[5].body).unwrap();
     assert_eq!(commit1_body["tree"], tree_sha());
-    assert_eq!(commit1_body["parents"][0], base_sha());
+    assert_eq!(commit1_body["parents"][0], state_head_sha());
 
-    assert_eq!(recorded[5].method, "PATCH");
-    assert_eq!(
-        recorded[5].url,
-        "/repos/owner/repo/git/refs/heads/automation/verify"
-    );
-    let patch1_body: serde_json::Value = serde_json::from_str(&recorded[5].body).unwrap();
-    assert_eq!(patch1_body["sha"], commit_sha());
-
-    // Rebuild sequence.
-    // 7. GET ref
-    assert_eq!(recorded[6].method, "GET");
+    // 6. PATCH → 422.
+    assert_eq!(recorded[6].method, "PATCH");
     assert_eq!(
         recorded[6].url,
         "/repos/owner/repo/git/refs/heads/automation/verify"
     );
+    let patch1_body: serde_json::Value = serde_json::from_str(&recorded[6].body).unwrap();
+    assert_eq!(patch1_body["sha"], commit_sha());
 
-    // 8. CAS re-check at new_head
+    // Rebuild sequence.
+    // 7. GET ref → new_head.
     assert_eq!(recorded[7].method, "GET");
+    assert_eq!(
+        recorded[7].url,
+        "/repos/owner/repo/git/refs/heads/automation/verify"
+    );
+
+    // 8. CAS re-check at new_head.
+    assert_eq!(recorded[8].method, "GET");
     assert!(
-        recorded[7]
+        recorded[8]
             .url
             .starts_with("/repos/owner/repo/contents/verification/results/abc999/a/main.json?ref="),
         "CAS refetch url: {}",
-        recorded[7].url,
+        recorded[8].url,
     );
     assert!(
-        recorded[7]
+        recorded[8]
             .url
             .ends_with(&format!("?ref={}", new_head_sha())),
         "CAS refetch should be at new_head, got: {}",
-        recorded[7].url,
+        recorded[8].url,
     );
 
-    // 9. GET commit for new_head
-    assert_eq!(recorded[8].method, "GET");
+    // 9. GET commit for new_head.
+    assert_eq!(recorded[9].method, "GET");
     assert_eq!(
-        recorded[8].url,
+        recorded[9].url,
         format!("/repos/owner/repo/git/commits/{}", new_head_sha())
     );
 
-    // 10. POST tree with new base_tree
-    assert_eq!(recorded[9].method, "POST");
-    assert_eq!(recorded[9].url, "/repos/owner/repo/git/trees");
-    let tree2_body: serde_json::Value = serde_json::from_str(&recorded[9].body).unwrap();
+    // 10. POST tree with new base_tree.
+    assert_eq!(recorded[10].method, "POST");
+    assert_eq!(recorded[10].url, "/repos/owner/repo/git/trees");
+    let tree2_body: serde_json::Value = serde_json::from_str(&recorded[10].body).unwrap();
     assert_eq!(tree2_body["base_tree"], new_head_tree_sha());
     let leaves = tree2_body["tree"].as_array().unwrap();
     assert_eq!(leaves.len(), 1);
     // Same blob is reused — no new blob was created.
     assert_eq!(leaves[0]["sha"], blob_sha());
 
-    // 11. POST commit with new_head as parent
-    assert_eq!(recorded[10].method, "POST");
-    assert_eq!(recorded[10].url, "/repos/owner/repo/git/commits");
-    let commit2_body: serde_json::Value = serde_json::from_str(&recorded[10].body).unwrap();
+    // 11. POST commit with new_head as parent.
+    assert_eq!(recorded[11].method, "POST");
+    assert_eq!(recorded[11].url, "/repos/owner/repo/git/commits");
+    let commit2_body: serde_json::Value = serde_json::from_str(&recorded[11].body).unwrap();
     assert_eq!(commit2_body["tree"], rebuilt_tree_sha());
     assert_eq!(commit2_body["parents"][0], new_head_sha());
 
-    // 12. PATCH with rebuilt commit sha
-    assert_eq!(recorded[11].method, "PATCH");
+    // 12. PATCH with rebuilt commit sha.
+    assert_eq!(recorded[12].method, "PATCH");
     assert_eq!(
-        recorded[11].url,
+        recorded[12].url,
         "/repos/owner/repo/git/refs/heads/automation/verify"
     );
-    let patch2_body: serde_json::Value = serde_json::from_str(&recorded[11].body).unwrap();
+    let patch2_body: serde_json::Value = serde_json::from_str(&recorded[12].body).unwrap();
     assert_eq!(patch2_body["sha"], rebuilt_commit_sha());
     assert_eq!(patch2_body["force"], false);
 
@@ -659,15 +724,17 @@ fn persist_conflict_becomes_cas_mismatch_when_new_head_holds_different_attempt()
     let base_record = starting_record("attempt-original", None);
     let new_head_record = starting_record("attempt-conflicting", None);
     let script = vec![
-        // 1. CAS GET at base_sha → matches expected predecessor
+        // 0. GET ref → state branch tip.
+        get_ref_reply(state_head_sha()),
+        // 1. CAS GET at state_head → matches expected predecessor.
         contents_response_for(&base_record),
         // 2. POST blob
         Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
-        // 3. GET commit → resolve base tree
+        // 3. GET commit → resolve state_head's tree
         Reply::json(
             200,
             serde_json::json!({
-                "sha": base_sha(),
+                "sha": state_head_sha(),
                 "tree": { "sha": base_commit_tree_sha() }
             }),
         ),
@@ -703,9 +770,9 @@ fn persist_conflict_becomes_cas_mismatch_when_new_head_holds_different_attempt()
     }
 
     let recorded = fx.recorded();
-    // Exactly 8: initial 6 through the first 422, then GET ref + CAS re-check.
-    // No second PATCH, no tree/commit rebuild.
-    assert_eq!(recorded.len(), 8, "expected 8 requests, got {recorded:#?}");
+    // Exactly 9: initial GET ref + 6 through the first 422, then GET ref +
+    // CAS re-check. No second PATCH, no tree/commit rebuild.
+    assert_eq!(recorded.len(), 9, "expected 9 requests, got {recorded:#?}");
     let patch_count = recorded
         .iter()
         .filter(|r| {
@@ -713,13 +780,13 @@ fn persist_conflict_becomes_cas_mismatch_when_new_head_holds_different_attempt()
         })
         .count();
     assert_eq!(patch_count, 1, "no rebuild PATCH should occur");
-    // The refetch CAS must have queried at new_head (not base_sha).
+    // The refetch CAS must have queried at new_head (not state_head).
     assert!(
-        recorded[7]
+        recorded[8]
             .url
             .ends_with(&format!("?ref={}", new_head_sha())),
         "CAS refetch url: {}",
-        recorded[7].url,
+        recorded[8].url,
     );
 }
 
@@ -730,15 +797,17 @@ fn persist_fails_after_second_ref_conflict() {
     // Total 12 requests, terminal error is RefUpdateConflict — no further
     // retry.
     let script = vec![
+        // 0. GET ref → state_head anchor.
+        get_ref_reply(state_head_sha()),
         // 1. CAS GET → 404
         Reply::empty(404),
         // 2. POST blob
         Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
-        // 3. GET commit → base tree
+        // 3. GET commit → base tree at state_head
         Reply::json(
             200,
             serde_json::json!({
-                "sha": base_sha(),
+                "sha": state_head_sha(),
                 "tree": { "sha": base_commit_tree_sha() }
             }),
         ),
@@ -786,8 +855,8 @@ fn persist_fails_after_second_ref_conflict() {
     let recorded = fx.recorded();
     assert_eq!(
         recorded.len(),
-        12,
-        "expected 12 requests, got {recorded:#?}"
+        13,
+        "expected 13 requests (anchor + 6 initial + 6 retry), got {recorded:#?}"
     );
     // Exactly two PATCH attempts — no third retry.
     let patch_count = recorded
@@ -801,10 +870,26 @@ fn persist_fails_after_second_ref_conflict() {
 
 #[test]
 fn set_pull_request_state_marks_draft() {
-    let script = vec![Reply::json(
-        200,
-        serde_json::json!({ "number": 42, "draft": true }),
-    )];
+    // Ready → Draft routes through `convert_pr_to_draft`: GET pulls/{n} to
+    // resolve the node id, then POST /graphql with the
+    // `convertPullRequestToDraft` mutation. REST PATCH does not accept a
+    // `draft` field, so the writer never touches it here.
+    let script = vec![
+        Reply::json(
+            200,
+            serde_json::json!({
+                "number": 42,
+                "node_id": "PR_kwDOTEST",
+                "draft": false,
+            }),
+        ),
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": { "convertPullRequestToDraft": { "clientMutationId": "ok" } }
+            }),
+        ),
+    ];
     let fx = Fixture::start(script);
     let w = writer(fx.base_url());
     w.bind_repository("owner/repo").expect("bind repo");
@@ -815,19 +900,31 @@ fn set_pull_request_state_marks_draft() {
     .expect("mark draft");
 
     let recorded = fx.recorded();
-    assert_eq!(recorded.len(), 1);
-    assert_eq!(recorded[0].method, "PATCH");
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded[0].method, "GET");
     assert_eq!(recorded[0].url, "/repos/owner/repo/pulls/42");
-    let body: serde_json::Value = serde_json::from_str(&recorded[0].body).unwrap();
-    assert_eq!(body["draft"], true);
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/graphql");
+    let body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    assert!(
+        body["query"]
+            .as_str()
+            .unwrap()
+            .contains("convertPullRequestToDraft"),
+        "graphql body missing mutation: {body}"
+    );
+    assert_eq!(body["variables"]["pullRequestId"], "PR_kwDOTEST");
 }
 
 #[test]
 fn set_pull_request_state_ready_resolves_node_id_then_enables_auto_merge() {
-    // GraphQL requires the PR's opaque base64-shaped node id, not the numeric
-    // number. The writer must fetch `.node_id` from the REST endpoint first,
-    // then PATCH `draft: false`, then POST the GraphQL mutation with the
-    // resolved node id as the `pullRequestId` variable.
+    // GraphQL requires the PR's opaque base64-shaped node id. The writer
+    // fetches `.node_id` from the REST endpoint first, then POSTs the
+    // `markPullRequestReadyForReview` mutation (Draft → Ready), and finally
+    // the `enablePullRequestAutoMerge` mutation. REST's `PATCH /pulls/{n}`
+    // silently ignores `{draft: false}`, so the Draft transition must go
+    // through GraphQL — otherwise the subsequent auto-merge call is
+    // rejected because auto-merge is not permitted on Draft PRs.
     let script = vec![
         // 1. GET /pulls/{n} → { node_id: "PR_kwDOTEST" }
         Reply::json(
@@ -838,8 +935,15 @@ fn set_pull_request_state_ready_resolves_node_id_then_enables_auto_merge() {
                 "draft": true
             }),
         ),
-        // 2. PATCH /pulls/{n} { draft: false }
-        Reply::json(200, serde_json::json!({ "number": 7, "draft": false })),
+        // 2. POST /graphql (markPullRequestReadyForReview)
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": {
+                    "markPullRequestReadyForReview": { "clientMutationId": "ok" }
+                }
+            }),
+        ),
         // 3. POST /graphql (enablePullRequestAutoMerge)
         Reply::json(
             200,
@@ -867,20 +971,25 @@ fn set_pull_request_state_ready_resolves_node_id_then_enables_auto_merge() {
     assert_eq!(recorded[0].method, "GET");
     assert_eq!(recorded[0].url, "/repos/owner/repo/pulls/7");
 
-    // Second: PATCH pulls/7 with { draft: false }
-    assert_eq!(recorded[1].method, "PATCH");
-    assert_eq!(recorded[1].url, "/repos/owner/repo/pulls/7");
+    // Second: POST /graphql with markPullRequestReadyForReview.
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/graphql");
     let body1: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
-    assert_eq!(body1["draft"], false);
+    let query1 = body1["query"].as_str().unwrap();
+    assert!(
+        query1.contains("markPullRequestReadyForReview"),
+        "graphql body missing mutation: {query1}"
+    );
+    assert_eq!(body1["variables"]["pullRequestId"], "PR_kwDOTEST");
 
     // Third: POST /graphql with enablePullRequestAutoMerge, node id in vars.
     assert_eq!(recorded[2].method, "POST");
     assert_eq!(recorded[2].url, "/graphql");
     let body2: serde_json::Value = serde_json::from_str(&recorded[2].body).unwrap();
-    let query = body2["query"].as_str().unwrap();
+    let query2 = body2["query"].as_str().unwrap();
     assert!(
-        query.contains("enablePullRequestAutoMerge"),
-        "graphql body missing mutation: {query}"
+        query2.contains("enablePullRequestAutoMerge"),
+        "graphql body missing mutation: {query2}"
     );
     // The mutation body must reference the resolved base64-shaped node id,
     // NOT the numeric PR number.
@@ -892,6 +1001,62 @@ fn set_pull_request_state_ready_resolves_node_id_then_enables_auto_merge() {
     assert!(
         !sent_id.chars().all(|c| c.is_ascii_digit()),
         "pullRequestId variable must not be the raw numeric PR number (was: {sent_id})"
+    );
+}
+
+#[test]
+fn set_pull_request_state_ready_without_auto_merge_skips_auto_merge_mutation() {
+    // `Ready { auto_merge: false }` must run the Draft → Ready flip via
+    // GraphQL and stop there. It must not send `enablePullRequestAutoMerge`
+    // and must not send any REST PATCH (which GitHub silently ignores).
+    let script = vec![
+        Reply::json(
+            200,
+            serde_json::json!({
+                "number": 7,
+                "node_id": "PR_kwDOTEST",
+                "draft": true,
+            }),
+        ),
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": {
+                    "markPullRequestReadyForReview": { "clientMutationId": "ok" }
+                }
+            }),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+    w.bind_repository("owner/repo").expect("bind repo");
+
+    w.set_pull_request_state(BotPullRequestState::Ready {
+        pull_request_number: 7,
+        auto_merge: false,
+    })
+    .expect("mark ready without auto-merge");
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 2, "expected 2 requests, got {recorded:#?}");
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(recorded[0].url, "/repos/owner/repo/pulls/7");
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/graphql");
+    let body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    let query = body["query"].as_str().unwrap();
+    assert!(
+        query.contains("markPullRequestReadyForReview"),
+        "graphql body missing markReady mutation: {query}"
+    );
+    assert!(
+        !query.contains("enablePullRequestAutoMerge"),
+        "auto_merge: false must not enable auto-merge, got: {query}"
+    );
+    assert_eq!(body["variables"]["pullRequestId"], "PR_kwDOTEST");
+    assert!(
+        !recorded.iter().any(|r| r.method == "PATCH"),
+        "no PATCH must be issued for Draft → Ready, got {recorded:#?}"
     );
 }
 
@@ -911,9 +1076,16 @@ fn set_pull_request_state_ready_errors_when_graphql_returns_errors() {
                 "draft": true
             }),
         ),
-        // 2. PATCH /pulls/{n}
-        Reply::json(200, serde_json::json!({ "number": 7, "draft": false })),
-        // 3. POST /graphql — HTTP 200 but errors present in body
+        // 2. POST /graphql (markPullRequestReadyForReview) — succeeds
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": {
+                    "markPullRequestReadyForReview": { "clientMutationId": "ok" }
+                }
+            }),
+        ),
+        // 3. POST /graphql (enablePullRequestAutoMerge) — HTTP 200 with errors
         Reply::json(
             200,
             serde_json::json!({
@@ -968,12 +1140,17 @@ fn set_pull_request_state_ready_errors_when_graphql_returns_errors() {
 #[test]
 fn sanitized_errors_hide_response_body() {
     // Force the CAS GET to fail with a body containing a fake token; the
-    // returned error must never surface the body.
+    // returned error must never surface the body. The step-0 GET ref reply
+    // succeeds so the 500 lands on step 1 (the CAS GET) as intended — this
+    // test targets the sanitisation on the contents-API path.
     let bad_body = "the internal error mentioned secret_token_abc in the trace".to_string();
-    let script = vec![Reply {
-        status: 500,
-        body: bad_body.clone(),
-    }];
+    let script = vec![
+        get_ref_reply(state_head_sha()),
+        Reply {
+            status: 500,
+            body: bad_body.clone(),
+        },
+    ];
     let fx = Fixture::start(script);
     let w = writer(fx.base_url());
 
@@ -992,7 +1169,11 @@ fn sanitized_errors_hide_response_body() {
     // The status code is fine to surface.
     assert!(display.contains("500"), "Display: {display}");
     match err {
-        PersistError::UpstreamStatus { status, .. } => assert_eq!(status, 500),
+        PersistError::UpstreamStatus { status, op } => {
+            assert_eq!(status, 500);
+            // Assert the failure targeted the CAS GET, not step 0.
+            assert_eq!(op, "GET contents (cas)", "unexpected op: {op}");
+        }
         other => panic!("expected UpstreamStatus, got {other:?}"),
     }
 }
@@ -1006,5 +1187,333 @@ fn token_is_never_logged_via_debug() {
     assert!(
         debug.contains("REDACTED"),
         "Debug missing redaction marker: {debug}"
+    );
+}
+
+/// Expected URL for a list-open-PRs call: query values are percent-encoded
+/// by reqwest's `.query()` builder so a branch name containing `&`/`=`/`/`
+/// (which git does not forbid) cannot corrupt the query string.
+const LIST_PULLS_URL: &str =
+    "/repos/owner/repo/pulls?head=owner%3Aautomation%2Fverify&state=open&base=main";
+
+#[test]
+fn find_or_open_bot_pr_returns_existing_when_list_non_empty() {
+    let script = vec![Reply::json(
+        200,
+        serde_json::json!([{ "number": 42, "state": "open", "draft": true }]),
+    )];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let pr = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "Automation: verification results",
+            "body",
+        )
+        .expect("find existing PR");
+    assert_eq!(pr.number, 42);
+    assert!(pr.is_draft);
+
+    let recorded = fx.recorded();
+    assert_eq!(
+        recorded.len(),
+        1,
+        "expected only the list GET, got {recorded:#?}"
+    );
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(recorded[0].url, LIST_PULLS_URL);
+}
+
+#[test]
+fn find_or_open_bot_pr_captures_ready_state_from_list() {
+    // When an existing open PR is already Ready (non-draft), that must be
+    // reflected in the returned handle so a Draft-target caller can route
+    // through the GraphQL `convertPullRequestToDraft` path instead of a
+    // PATCH that GitHub would reject with 422.
+    let script = vec![Reply::json(
+        200,
+        serde_json::json!([{ "number": 7, "state": "open", "draft": false }]),
+    )];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let pr = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .expect("find existing ready PR");
+    assert_eq!(pr.number, 7);
+    assert!(
+        !pr.is_draft,
+        "PR is currently Ready and must surface as such"
+    );
+}
+
+#[test]
+fn find_or_open_bot_pr_opens_new_when_list_empty() {
+    let script = vec![
+        Reply::json(200, serde_json::json!([])),
+        Reply::json(201, serde_json::json!({ "number": 99, "draft": true })),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let pr = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "Automation: verification results",
+            "body",
+        )
+        .expect("open new PR");
+    assert_eq!(pr.number, 99);
+    assert!(pr.is_draft);
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 2, "expected 2 requests, got {recorded:#?}");
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(recorded[0].url, LIST_PULLS_URL);
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/repos/owner/repo/pulls");
+    let body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    assert_eq!(body["draft"], true);
+    assert_eq!(body["head"], "automation/verify");
+    assert_eq!(body["base"], "main");
+    assert_eq!(body["title"], "Automation: verification results");
+}
+
+#[test]
+fn find_or_open_bot_pr_recovers_from_toctou_422_race() {
+    // Two concurrent runs both observe an empty list and both attempt to
+    // POST /pulls. The second POST fails with 422 ("A pull request already
+    // exists for this head branch"). The writer must refetch the list and
+    // return the PR the concurrent run created, NOT surface the 422.
+    let script = vec![
+        // 0. GET list → empty (the race window)
+        Reply::json(200, serde_json::json!([])),
+        // 1. POST /pulls → 422 (concurrent creator won)
+        Reply::json(
+            422,
+            serde_json::json!({ "message": "A pull request already exists for owner:automation/verify" }),
+        ),
+        // 2. Retry GET list → now finds the concurrently-created PR
+        Reply::json(
+            200,
+            serde_json::json!([{ "number": 55, "draft": true, "state": "open" }]),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let pr = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .expect("422 race must be transparent to caller");
+    assert_eq!(pr.number, 55);
+    assert!(pr.is_draft);
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 3, "expected 3 requests, got {recorded:#?}");
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[2].method, "GET");
+    // Both list GETs must target the same URL (percent-encoded).
+    assert_eq!(recorded[0].url, LIST_PULLS_URL);
+    assert_eq!(recorded[2].url, LIST_PULLS_URL);
+}
+
+#[test]
+fn find_or_open_bot_pr_surfaces_422_when_retry_still_finds_nothing() {
+    // Same 422 path as the race recovery, but the retry GET is also empty
+    // — the 422 was NOT a race, so surface the original POST error.
+    let script = vec![
+        Reply::json(200, serde_json::json!([])),
+        Reply::json(422, serde_json::json!({ "message": "some other 422" })),
+        Reply::json(200, serde_json::json!([])),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let err = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .unwrap_err();
+    match err {
+        PersistError::UpstreamStatus { status, op } => {
+            assert_eq!(status, 422);
+            assert_eq!(op, "POST pulls (open bot pr)");
+        }
+        other => panic!("expected UpstreamStatus for POST, got {other:?}"),
+    }
+}
+
+#[test]
+fn find_or_open_bot_pr_maps_non_2xx_to_upstream_status() {
+    let script = vec![Reply::json(
+        502,
+        serde_json::json!({ "message": "bad gateway" }),
+    )];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let err = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .unwrap_err();
+    match err {
+        PersistError::UpstreamStatus { status, op } => {
+            assert_eq!(status, 502);
+            assert_eq!(op, "GET pulls?head (find bot pr)");
+        }
+        other => panic!("expected UpstreamStatus, got {other:?}"),
+    }
+}
+
+#[test]
+fn find_or_open_bot_pr_missing_number_maps_to_malformed_response() {
+    // POST /pulls returns a body without `number`. The writer must surface
+    // MalformedResponse rather than pretending everything succeeded.
+    let script = vec![
+        Reply::json(200, serde_json::json!([])),
+        Reply::json(201, serde_json::json!({ "id": 1 })),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let err = w
+        .find_or_open_bot_pr(
+            "owner",
+            "repo",
+            "automation/verify",
+            "main",
+            "title",
+            "body",
+        )
+        .unwrap_err();
+    match err {
+        PersistError::MalformedResponse { op, field } => {
+            assert_eq!(op, "POST pulls (open bot pr)");
+            assert_eq!(field, "number");
+        }
+        other => panic!("expected MalformedResponse, got {other:?}"),
+    }
+}
+
+#[test]
+fn convert_pr_to_draft_resolves_node_id_then_posts_graphql_mutation() {
+    // Ready → Draft is not supported by REST PATCH; the writer must
+    // resolve the numeric PR to its opaque node id and issue the
+    // `convertPullRequestToDraft` GraphQL mutation.
+    let script = vec![
+        // 1. GET /pulls/{n} → node_id
+        Reply::json(
+            200,
+            serde_json::json!({
+                "number": 7,
+                "node_id": "PR_kwDOTEST",
+                "draft": false
+            }),
+        ),
+        // 2. POST /graphql (convertPullRequestToDraft)
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": { "convertPullRequestToDraft": { "clientMutationId": "ok" } }
+            }),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+    w.bind_repository("owner/repo").expect("bind repo");
+
+    w.convert_pr_to_draft(7).expect("convert to draft succeeds");
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 2, "expected 2 requests, got {recorded:#?}");
+    assert_eq!(recorded[0].method, "GET");
+    assert_eq!(recorded[0].url, "/repos/owner/repo/pulls/7");
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/graphql");
+    let body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    let query = body["query"].as_str().unwrap();
+    assert!(
+        query.contains("convertPullRequestToDraft"),
+        "graphql body missing mutation: {query}"
+    );
+    assert_eq!(body["variables"]["pullRequestId"], "PR_kwDOTEST");
+}
+
+#[test]
+fn convert_pr_to_draft_surfaces_graphql_errors() {
+    let script = vec![
+        Reply::json(
+            200,
+            serde_json::json!({
+                "number": 7,
+                "node_id": "PR_kwDOTEST",
+                "draft": false
+            }),
+        ),
+        Reply::json(
+            200,
+            serde_json::json!({
+                "data": null,
+                "errors": [{ "message": "internal repo secret_token_abc" }]
+            }),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+    w.bind_repository("owner/repo").expect("bind repo");
+
+    let err = w.convert_pr_to_draft(7).unwrap_err();
+    let display = format!("{err}");
+    let debug = format!("{err:?}");
+    match &err {
+        PersistError::GraphqlError { op, count } => {
+            assert_eq!(*count, 1);
+            assert!(
+                op.contains("convertPullRequestToDraft"),
+                "expected op to reference the mutation, got {op:?}"
+            );
+        }
+        other => panic!("expected GraphqlError, got {other:?}"),
+    }
+    assert!(
+        !display.contains("secret_token_abc"),
+        "Display leaked GraphQL body: {display}"
+    );
+    assert!(
+        !debug.contains("secret_token_abc"),
+        "Debug leaked GraphQL body: {debug}"
     );
 }
