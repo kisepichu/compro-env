@@ -1472,6 +1472,39 @@ fn dispatcher_worker_call_is_correctly_gated() {
     );
 }
 
+/// An explicit `workflow_dispatch` `mode` must keep precedence over the
+/// `VERIFY_LIVE` repository variable, and an unset / non-`true`
+/// `VERIFY_LIVE` must fall back to `dry-run`. Dropping either half turns
+/// unattended ticks into unconditional OJ submissions, or makes a manual
+/// `mode: dry-run` silently submit.
+#[test]
+fn dispatcher_mode_prefers_dispatch_input_then_verify_live() {
+    let doc = load_dispatcher();
+    let jobs_map = jobs(&doc);
+    let worker = get(jobs_map, "worker").expect("verify.yml missing worker job");
+    let with = get(as_map(worker, "worker job"), "with")
+        .and_then(Value::as_mapping)
+        .expect("worker call must pass `with:`");
+    let mode = get(with, "mode")
+        .and_then(Value::as_str)
+        .expect("worker call must pass `mode`");
+
+    let dispatch_at = mode
+        .find("inputs.mode")
+        .unwrap_or_else(|| panic!("mode must consider `inputs.mode` (got {mode:?})"));
+    let live_at = mode
+        .find("vars.VERIFY_LIVE == 'true'")
+        .unwrap_or_else(|| panic!("mode must gate the OJ path on `VERIFY_LIVE` (got {mode:?})"));
+    assert!(
+        dispatch_at < live_at,
+        "an explicit dispatch `mode` must win over `VERIFY_LIVE` (got {mode:?})"
+    );
+    assert!(
+        mode.contains("'dry-run'"),
+        "mode must fall back to `dry-run` when `VERIFY_LIVE` is unset (got {mode:?})"
+    );
+}
+
 /// #062.6: The worker's concurrency group is `verify-heavy` with
 /// `cancel-in-progress: false` (spec §15.1: 実行中 worker は新しい push で cancel しない).
 #[test]
