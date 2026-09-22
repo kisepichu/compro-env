@@ -126,6 +126,7 @@ CI が **やらないこと**: `CI / Static site build` は fixture に対して
 `npm run site:build --fixture=target/ce-site-data/site-data.json`) なので、
 frontmatter を壊すと **merge 後に pages build が失敗する**。
 事前に確認したい場合は 5 章「つまずきやすい点」のローカルプレビュー手順を踏む。
+追跡: [issue #125](https://github.com/kisepichu/compro-env/issues/125)。
 
 ### 2.6 cpp / lean の注意
 
@@ -187,8 +188,7 @@ libraries = [
 language_id = "rust"
 ```
 
-実在の解法: `solutions/librarychecker-aplusb/aplusb/rust/ce.toml` (ただし `test_command` は
-3.6 の注意を参照)。
+実在の解法: `solutions/librarychecker-aplusb/aplusb/rust/ce.toml`。
 
 必須:
 
@@ -254,11 +254,6 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
 ```
 
 `ce verify` は実際に OJ へ提出するので、ローカルでは通常実行しない (`docs/commands/verify.md`)。
-
-> 注意: 現在の `solutions/librarychecker-aplusb/aplusb/rust/ce.toml` の `test_command` は
-> リポジトリルート相対の `--manifest-path` を持つため、上記の CWD 規則に反しており
-> `ce test` / `ce verify` のどちらからも `manifest path ... does not exist` で失敗する。
-> 新しい解法ではこれを真似しないこと。
 
 ## 4. マージした後に起きること
 
