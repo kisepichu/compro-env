@@ -6,6 +6,9 @@ Operational reference for `.github/workflows/verify.yml` and
 §15.1–§15.4. This file explains what an operator needs to know to run
 and monitor the two-workflow verify pipeline.
 
+Adding a library or a verify solution (author-facing procedure, Japanese):
+`docs/operations/contributing-content.md`.
+
 ## What the workflows do
 
 The pipeline is split into a lightweight dispatcher and a heavy worker
