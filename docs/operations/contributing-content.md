@@ -20,7 +20,7 @@
    **ライブラリの move / rename は参照更新と同じ PR に入れる** (設計文書 §4.1)。
 4. CI が緑になってからマージする。コンテンツ PR に出る check は `.github/workflows/ci.yml` の 2 job:
    - `CI / Cargo test + clippy + fmt` — `cargo test --all` / `clippy -D warnings` / `fmt --check` /
-     `hooks/tests/run.sh` / `ce check --language rust`
+     `hooks/tests/run.sh` / `ce check` (3 言語のライブラリ検査)
    - `CI / Static site build (root + /compro-env/)` — schema 検証、link チェック、CSP、
      `/` と `/compro-env/` 両 base の build、サイズ summary。
      **入力は fixture (`web/tests/fixtures/site-data.json`) で、リポジトリの実ライブラリではない**
@@ -105,20 +105,26 @@ CI が同じことをやるので必須ではない。手元で先に見たい�
 
 ```bash
 bash scripts/check-rust-libraries.sh
+bash scripts/check-cpp-libraries.sh
+bash scripts/check-lean-libraries.sh
 ```
 
 ```bash
-cargo run --bin ce -- check --language rust
+cargo run --bin ce -- check
 ```
 
-`scripts/check-rust-libraries.sh` は `libraries/rust/**/*.rs` を 1 ファイルずつ
-`rustc --edition 2024 --test` でコンパイル・実行する。**ファイルを置くだけでテストが走る。**
+3 スクリプトはいずれも言語 root を再帰列挙し、1 ファイルずつ処理する。
+**ファイルを置くだけで検査対象になる。** 処理内容と規約は `docs/commands/check.md`
+「言語別の check 内容」。必要な toolchain は rust = `rustc`、cpp = PATH 上の `clang++`、
+lean = PATH 上の `lean` で、未 install の言語だけ `--language` で外す。
 
 ### 2.5 push する
 
 CI が自動でやること:
 
-- `CI / Cargo test + clippy + fmt` の `ce check --language rust` → 2.2 の unit test を実行
+- `CI / Cargo test + clippy + fmt` の `ce check` → 3 言語すべてのライブラリを検査
+  (rust は 2.2 の unit test を実行、cpp は syntax check、lean は elaboration)。
+  cpp の `clang++` は runner image 同梱、lean は pin 済み toolchain を install する step がある。
 
 CI が **やらないこと**: `CI / Static site build` は fixture に対して web パイプラインを検証するだけで、
 追加したライブラリの frontmatter・`h1` 禁止・サイズ境界は検査しない。
@@ -130,10 +136,19 @@ frontmatter を壊すと **merge 後に pages build が失敗する**。
 
 ### 2.6 cpp / lean の注意
 
-**cpp / lean は現状 `check_command` がファイルをハードコードしており、新規ライブラリが検査されない。**
-cpp は `libraries/cpp/algebra/monoid.hpp` 単体指定、lean は `lake build`。追加したファイルは
-`ce check` で検査されないので、当面は手元でコンパイル・テストを確認する。
-追跡: [issue #122](https://github.com/kisepichu/compro-env/issues/122)。
+`ce check` はどの言語でもファイルを置くだけで検査する (2.4) が、1 ファイルを単独で処理するため
+言語ごとに前提がある。
+
+**cpp**: ヘッダは単独の translation unit としてコンパイルされるので、**self-contained** でなければ
+ならない (使う `#include` を自分で書く)。`-Wall -Wextra -Werror` なので警告も失敗になる。
+他の cpp ライブラリを参照するときは `libraries/cpp` 相対で書く (`#include "algebra/monoid.hpp"`)。
+`clang++` は PATH 上のものを使うため、ローカルと CI でバージョンが異なりうる。
+新しい警告でローカルだけ落ちることがある。
+
+**lean**: 各ファイルは toolchain 同梱のモジュールだけを `import` できる。`libraries/lean` に
+lakefile が無く `.olean` を作らないので、兄弟ライブラリを `import` すると unknown module で失敗する。
+cross-file import が必要になった時点で lakefile の導入から考える。
+`-DwarningAsError=true` を付けているので、`sorry` の残った証明は error になる。
 
 ## 3. verify 用の解法を 1 本追加する
 
@@ -296,7 +311,8 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
   source を書き換える preprocess hook を足しても fingerprint はずれない。
 - **`Unavailable` は永久 dead-letter。** fingerprint drift では復活しないので、
   運用者が overlay record を消す必要がある (`docs/operations/verify-automation.md`)。
-- **cpp / lean のライブラリは `ce check` で検査されない** ([issue #122](https://github.com/kisepichu/compro-env/issues/122))。
+- **cpp のヘッダは self-contained でないと `ce check` が落ちる。lean は兄弟ライブラリを `import` できない**
+  (2.6 参照)。
 - **ローカルでサイトをプレビューする**のは、frontmatter や `h1` の違反を merge 前に検出する唯一の方法
   (CI は fixture しか見ない。2.5 参照)。analyzer バイナリが必要:
 
