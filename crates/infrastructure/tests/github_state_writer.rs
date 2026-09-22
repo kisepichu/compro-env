@@ -1640,3 +1640,104 @@ fn convert_pr_to_draft_surfaces_graphql_errors() {
         "Debug leaked GraphQL body: {debug}"
     );
 }
+
+// ─── Dry run (issue #130) ───────────────────────────────────────────────────
+
+/// The worker's `dry-run` mode must rehearse the App path without leaving a
+/// record behind. Spec §15.1 pushes the record and only then POSTs to the OJ;
+/// a dry run never POSTs, so any record it pushed would be an orphan that
+/// blocks the solution from ever being verified again.
+#[test]
+fn check_persist_reads_but_never_mutates() {
+    let fx = Fixture::start(vec![
+        // 0. GET ref → state branch tip.
+        get_ref_reply(state_head_sha()),
+        // 1. CAS GET → no existing record, and the candidate replaces none.
+        Reply::empty(404),
+    ]);
+    let w = writer(fx.base_url());
+
+    w.check_persist(&valid_request(starting_record("attempt-1", None)))
+        .expect("dry run passes its guards and CAS");
+
+    let recorded = fx.recorded();
+    assert_eq!(
+        recorded.len(),
+        2,
+        "dry run must issue exactly the ref lookup and the CAS read, got {recorded:#?}"
+    );
+    for req in &recorded {
+        assert_eq!(
+            req.method, "GET",
+            "dry run issued a mutating request: {req:#?}"
+        );
+    }
+}
+
+/// A missing state branch is the normal post-merge state. The dry run must
+/// still not create it — that alone would be a write — and instead reads the
+/// CAS anchor from the commit the real persist would have branched from.
+#[test]
+fn check_persist_does_not_create_a_missing_state_branch() {
+    let fx = Fixture::start(vec![
+        // 0. GET ref → branch absent.
+        Reply::empty(404),
+        // 1. CAS GET against `base_sha` → no record there either.
+        Reply::empty(404),
+    ]);
+    let w = writer(fx.base_url());
+
+    w.check_persist(&valid_request(starting_record("attempt-1", None)))
+        .expect("dry run tolerates an absent state branch");
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 2, "got {recorded:#?}");
+    assert!(
+        recorded.iter().all(|r| r.method == "GET"),
+        "dry run must not POST git/refs to recreate the branch: {recorded:#?}"
+    );
+    assert!(
+        recorded[1].url.ends_with(&format!("?ref={}", base_sha())),
+        "CAS must anchor on base_sha when the branch is absent, got {}",
+        recorded[1].url
+    );
+}
+
+/// The dry run is a real rehearsal: a diverged attempt id fails it, exactly
+/// as the live persist would.
+#[test]
+fn check_persist_reports_a_cas_mismatch() {
+    let fx = Fixture::start(vec![
+        get_ref_reply(state_head_sha()),
+        contents_response_for(&starting_record("attempt-other", None)),
+    ]);
+    let w = writer(fx.base_url());
+
+    let err = w
+        .check_persist(&valid_request(starting_record(
+            "attempt-2",
+            Some("attempt-1"),
+        )))
+        .unwrap_err();
+    match err {
+        PersistError::AttemptCasMismatch { expected, actual } => {
+            assert_eq!(expected.as_deref(), Some("attempt-1"));
+            assert_eq!(actual.as_deref(), Some("attempt-other"));
+        }
+        other => panic!("expected AttemptCasMismatch, got {other:?}"),
+    }
+}
+
+/// Guard clauses run before any HTTP contact, same as `persist`.
+#[test]
+fn check_persist_rejects_wrong_branch_without_contacting_github() {
+    let w = writer("http://127.0.0.1:1".into());
+    let mut req = valid_request(starting_record("attempt-1", None));
+    req.branch = "main".into();
+
+    let err = w.check_persist(&req).unwrap_err();
+    match err {
+        PersistError::WrongBranch { branch } => assert_eq!(branch, "main"),
+        other => panic!("expected WrongBranch, got {other:?}"),
+    }
+}

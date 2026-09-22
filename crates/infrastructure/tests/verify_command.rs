@@ -35,8 +35,8 @@ use infrastructure::repository_impl::{
     contest_repository_impl::ContestRepositoryImpl, session_repository_impl::SessionRepositoryImpl,
     solution_repository_impl::SolutionRepositoryImpl,
 };
-use interfaces::controller::Controller;
 use interfaces::controller::input::VerifyInput;
+use interfaces::controller::{Controller, PreparedOutcome};
 use usecases::clock::Clock;
 use usecases::config::Config;
 use usecases::id_generator::SequenceIdGenerator;
@@ -1163,7 +1163,7 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
     use interfaces::controller::input::{
         InternalVerifyPollInput, InternalVerifyPrepareInput, InternalVerifyStartInput,
     };
-    struct PrepIn(String, String, Option<String>);
+    struct PrepIn(String, String, Option<String>, Option<String>);
     impl InternalVerifyPrepareInput for PrepIn {
         fn solution(&self) -> String {
             self.0.clone()
@@ -1173,6 +1173,9 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
         }
         fn starting_out(&self) -> Option<String> {
             self.2.clone()
+        }
+        fn action_out(&self) -> Option<String> {
+            self.3.clone()
         }
     }
     struct StartIn(String);
@@ -1191,13 +1194,15 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
     let starting_path = env.root.join("starting.json");
     let ids = SequenceIdGenerator::new("internal");
     let sleeper = NoopSleeper::new();
-    let path = env
+    let action_path = env.root.join("action");
+    let outcome = env
         .controller
         .internal_verify_prepare(
             &PrepIn(
                 LC_SOLUTION.into(),
                 plan_path.display().to_string(),
                 Some(starting_path.display().to_string()),
+                Some(action_path.display().to_string()),
             ),
             &env.root,
             &env.config,
@@ -1215,7 +1220,15 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
             },
         )
         .expect("prepare succeeds");
+    let path = match outcome {
+        PreparedOutcome::Fresh { plan_out } => plan_out,
+        other => panic!("expected a fresh plan, got {other:?}"),
+    };
     assert!(std::fs::metadata(&path).is_ok(), "plan file should exist");
+    assert_eq!(
+        std::fs::read_to_string(&action_path).expect("action file should exist"),
+        "fresh"
+    );
 
     // Round-trip parse.
     let bytes = std::fs::read(&path).unwrap();
@@ -1311,7 +1324,7 @@ fn internal_verify_prepare_start_and_poll_round_trip() {
 fn internal_verify_start_accepts_pre_persisted_starting_record() {
     let env = build_env(BuildEnv::default_lc_only());
     use interfaces::controller::input::{InternalVerifyPrepareInput, InternalVerifyStartInput};
-    struct PrepIn(String, String, Option<String>);
+    struct PrepIn(String, String, Option<String>, Option<String>);
     impl InternalVerifyPrepareInput for PrepIn {
         fn solution(&self) -> String {
             self.0.clone()
@@ -1321,6 +1334,9 @@ fn internal_verify_start_accepts_pre_persisted_starting_record() {
         }
         fn starting_out(&self) -> Option<String> {
             self.2.clone()
+        }
+        fn action_out(&self) -> Option<String> {
+            self.3.clone()
         }
     }
     struct StartIn(String);
@@ -1339,6 +1355,7 @@ fn internal_verify_start_accepts_pre_persisted_starting_record() {
                 LC_SOLUTION.into(),
                 plan_path.display().to_string(),
                 Some(starting_path.display().to_string()),
+                None,
             ),
             &env.root,
             &env.config,
@@ -1414,6 +1431,265 @@ fn internal_verify_start_accepts_pre_persisted_starting_record() {
     assert_eq!(
         stored.replaces_attempt_id.as_ref(),
         Some(&stored.attempt_id),
+    );
+}
+
+// ─── CI resume path (issue #130, spec §8.2, §8.3, §15.1 step 7) ───────────
+
+struct PrepareIn {
+    solution: String,
+    plan_out: String,
+    action_out: Option<String>,
+}
+impl interfaces::controller::input::InternalVerifyPrepareInput for PrepareIn {
+    fn solution(&self) -> String {
+        self.solution.clone()
+    }
+    fn plan_out(&self) -> String {
+        self.plan_out.clone()
+    }
+    fn starting_out(&self) -> Option<String> {
+        None
+    }
+    fn action_out(&self) -> Option<String> {
+        self.action_out.clone()
+    }
+}
+
+struct ResumeIn(String);
+impl interfaces::controller::input::InternalVerifyResumeInput for ResumeIn {
+    fn solution(&self) -> String {
+        self.0.clone()
+    }
+}
+
+fn fast_policy() -> PollingPolicy {
+    PollingPolicy {
+        initial_interval: Duration::from_millis(1),
+        max_interval: Duration::from_millis(1),
+        max_error_backoff: Duration::from_millis(1),
+        total_budget: Duration::from_millis(50),
+    }
+}
+
+fn seed(env: &TestEnv, record: &VerificationRecord) {
+    use usecases::repository::verification_repository::VerificationRepository;
+    VerificationRepositoryImpl::new(env.root.clone())
+        .compare_and_swap(&record.solution_id, None, record)
+        .expect("seed record via CAS");
+}
+
+fn stored_record(env: &TestEnv) -> VerificationRecord {
+    use usecases::repository::verification_repository::VerificationRepository;
+    VerificationRepositoryImpl::new(env.root.clone())
+        .load(&lc_id())
+        .unwrap()
+        .expect("record present")
+}
+
+fn run_prepare(env: &TestEnv, action_out: Option<&std::path::Path>) -> PreparedOutcome {
+    env.controller
+        .internal_verify_prepare(
+            &PrepareIn {
+                solution: LC_SOLUTION.into(),
+                plan_out: env.root.join("plan.json").display().to_string(),
+                action_out: action_out.map(|p| p.display().to_string()),
+            },
+            &env.root,
+            &env.config,
+            &env.manifest,
+            &env.snapshot,
+            &TestClock::new(),
+            &SequenceIdGenerator::new("prep"),
+            &NoopSleeper::new(),
+            &NoRetryHint,
+            fast_policy(),
+        )
+        .expect("prepare succeeds")
+}
+
+fn run_resume(
+    env: &TestEnv,
+) -> (
+    VerificationRecord,
+    usecases::submission_lifecycle::ResumeSummary,
+) {
+    env.controller
+        .internal_verify_resume(
+            &ResumeIn(LC_SOLUTION.into()),
+            &env.root,
+            &env.config,
+            &env.manifest,
+            &env.snapshot,
+            &TestClock::new(),
+            &SequenceIdGenerator::new("resume"),
+            &NoopSleeper::new(),
+            &NoRetryHint,
+            fast_policy(),
+        )
+        .expect("resume succeeds")
+}
+
+/// The dangling-record bug (issue #130): the worker is handed a solution
+/// whose stored record is still in-flight. `verify-prepare` must answer
+/// `resume` and freeze nothing — a fresh plan here would submit the same
+/// source a second time for an attempt the OJ may already hold (spec §8.2).
+#[test]
+fn internal_verify_prepare_refuses_to_replan_an_in_flight_record() {
+    let env = build_env(BuildEnv::default_lc_only());
+    seed(&env, &seed_queued_record(&lc_id()));
+    let action_path = env.root.join("action");
+
+    let outcome = run_prepare(&env, Some(&action_path));
+
+    match outcome {
+        PreparedOutcome::Resume { attempt_id } => {
+            assert_eq!(attempt_id.as_str(), "queued-seed");
+        }
+        other => panic!("expected Resume, got {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(&action_path).expect("action file written"),
+        "resume"
+    );
+    assert!(
+        !env.root.join("plan.json").exists(),
+        "no plan may be frozen for an in-flight record"
+    );
+    assert_eq!(*env.starter_calls["lc"].lock().unwrap(), 0);
+}
+
+/// The poll-budget case that spec §15.1 step 7 promises will resume: the
+/// record carries a handle, so `verify-resume` polls it to terminal without
+/// ever calling the starter. The emitted record must carry the CAS token the
+/// state branch expects, otherwise `verify-persist` rejects it.
+#[test]
+fn internal_verify_resume_polls_a_stored_handle_to_terminal() {
+    let env = build_env(BuildEnv::default_lc_only());
+    seed(&env, &seed_queued_record(&lc_id()));
+
+    let (record, _summary) = run_resume(&env);
+
+    match &record.state {
+        VerificationState::Completed(c) => assert_eq!(c.verdict.kind, VerdictKind::Accepted),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert_eq!(record.attempt_id.as_str(), "queued-seed");
+    assert_eq!(
+        record.replaces_attempt_id.as_ref(),
+        Some(&record.attempt_id),
+        "the emitted record must carry its own attempt id as the CAS token"
+    );
+    assert_eq!(
+        *env.starter_calls["lc"].lock().unwrap(),
+        0,
+        "a resume must never submit"
+    );
+}
+
+/// Spec §8.2: a `Starting` record whose submission the OJ can identify is
+/// recovered and tracked to terminal — no re-submission.
+#[test]
+fn internal_verify_resume_recovers_a_starting_record_instead_of_resubmitting() {
+    let env = build_env(BuildEnv {
+        lc_recovery: Some(FakeRecovery::always(RecoveryOutcome::Recovered {
+            handle: PortHandle {
+                online_judge: OJKind::LibraryChecker,
+                submission_id: "4242".into(),
+                submission_url: "https://judge/4242".into(),
+                locator: None,
+                submitted_at: Utc::now(),
+            },
+        })),
+        ..BuildEnv::default_lc_only()
+    });
+    seed(&env, &seed_starting_record(&lc_id()));
+
+    let (record, _summary) = run_resume(&env);
+
+    match &record.state {
+        VerificationState::Completed(c) => assert_eq!(c.verdict.kind, VerdictKind::Accepted),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert_eq!(record.attempt_id.as_str(), "attempt-seed");
+    assert_eq!(
+        *env.starter_calls["lc"].lock().unwrap(),
+        0,
+        "recovery must reuse the OJ's existing submission, never start a new one"
+    );
+}
+
+/// Spec §8.2 item 3: when recovery cannot prove what happened, the attempt
+/// stays `AcceptanceUnknown` and nothing is auto-resubmitted. This is the
+/// safety boundary — getting it wrong double-submits in production.
+#[test]
+fn internal_verify_resume_of_an_unprovable_start_never_resubmits() {
+    let env = build_env(BuildEnv {
+        lc_recovery: Some(FakeRecovery::always(RecoveryOutcome::AcceptanceUnknown)),
+        ..BuildEnv::default_lc_only()
+    });
+    seed(&env, &seed_starting_record(&lc_id()));
+
+    let (record, summary) = run_resume(&env);
+
+    assert!(
+        matches!(record.state, VerificationState::AcceptanceUnknown(_)),
+        "got {:?}",
+        record.state
+    );
+    assert_eq!(
+        *env.starter_calls["lc"].lock().unwrap(),
+        0,
+        "an unprovable start must never be resubmitted"
+    );
+    assert!(
+        !summary.operator_actions.is_empty(),
+        "the operator must be told an unprovable start needs a human"
+    );
+    // Resuming again keeps it there and still does not submit.
+    let (again, _) = run_resume(&env);
+    assert!(matches!(
+        again.state,
+        VerificationState::AcceptanceUnknown(_)
+    ));
+    assert_eq!(*env.starter_calls["lc"].lock().unwrap(), 0);
+    assert_eq!(
+        stored_record(&env).attempt_id.as_str(),
+        "attempt-seed",
+        "resume must not mint a new attempt"
+    );
+}
+
+/// `verify-resume` is only for in-flight records. Handing it a terminal one
+/// is a worker wiring bug, and it must say so instead of quietly polling a
+/// finished attempt.
+#[test]
+fn internal_verify_resume_rejects_a_record_that_needs_a_fresh_plan() {
+    let env = build_env(BuildEnv::default_lc_only());
+    run_verify(&env, Some(LC_SOLUTION)).expect("initial verify completes");
+    assert!(matches!(
+        stored_record(&env).state,
+        VerificationState::Completed(_)
+    ));
+
+    let err = env
+        .controller
+        .internal_verify_resume(
+            &ResumeIn(LC_SOLUTION.into()),
+            &env.root,
+            &env.config,
+            &env.manifest,
+            &env.snapshot,
+            &TestClock::new(),
+            &SequenceIdGenerator::new("resume"),
+            &NoopSleeper::new(),
+            &NoRetryHint,
+            fast_policy(),
+        )
+        .expect_err("a terminal record is not resumable");
+    assert!(
+        err.to_string().contains("not resumable"),
+        "unexpected error: {err}"
     );
 }
 

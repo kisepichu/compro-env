@@ -83,7 +83,9 @@ $ echo $?
 
 ## 内部コマンド
 
-`ce internal verify-prepare` / `ce internal verify-start` / `ce internal verify-poll` は CI が prepare / start / poll を独立 job で実行するための hidden entrypoint。`ce --help` には出さない。使い方は CI パイプラインの仕様書側にまとめる。
+`ce internal verify-prepare` / `ce internal verify-start` / `ce internal verify-poll` / `ce internal verify-resume` は CI が prepare / start / poll / resume を独立 job で実行するための hidden entrypoint。`ce --help` には出さない。使い方は CI パイプラインの仕様書側にまとめる。
+
+`verify-prepare` は保存済み record を先に読み、in-flight (`Starting` / `AcceptanceUnknown` / `Submitted` / `Queued` / `Judging`、および handle を持つ `InfrastructureFailure`) なら plan を作らず `--action-out` に `resume` を書く。この場合 CI は `verify-resume` を呼ぶ。`verify-resume` は starter を呼ばないため、OJ が既に受け付けている可能性のある attempt を二重提出しない (spec §8.2)。
 
 ## 関連
 

@@ -58,6 +58,9 @@ pub trait InternalVerifyPrepareInput {
     /// `VerificationRecord` JSON so the App-only persist job can push it
     /// without contacting the OJ (spec §15.4, dry-run path).
     fn starting_out(&self) -> Option<String>;
+    /// Optional `--action-out FILE`: receives `fresh` or `resume`, the
+    /// decision the CI worker branches its job chain on (spec §15.1 step 7).
+    fn action_out(&self) -> Option<String>;
 }
 
 pub trait InternalVerifyStartInput {
@@ -65,6 +68,10 @@ pub trait InternalVerifyStartInput {
 }
 
 pub trait InternalVerifyPollInput {
+    fn solution(&self) -> String;
+}
+
+pub trait InternalVerifyResumeInput {
     fn solution(&self) -> String;
 }
 

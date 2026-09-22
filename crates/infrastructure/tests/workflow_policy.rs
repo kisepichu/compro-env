@@ -1388,6 +1388,9 @@ fn pages_default_permissions_are_read_only() {
 
 // ─── Plan 062: verify activation policy (spec §15.1–§15.4) ───────────────────
 
+/// The fresh-attempt chain, in `needs:` order. The resume chain
+/// (`prepare → resume → persist_resume`) is asserted separately by
+/// `worker_resume_chain_is_ordered_and_never_starts_a_submission`.
 const WORKER_JOB_ORDER: [&str; 6] = [
     "prepare",
     "persist_starting",
@@ -1397,9 +1400,21 @@ const WORKER_JOB_ORDER: [&str; 6] = [
     "persist_terminal",
 ];
 
-const APP_ONLY_JOBS: [&str; 3] = ["persist_starting", "persist_handle", "persist_terminal"];
-const OJ_ONLY_JOBS: [&str; 2] = ["submit", "poll"];
-const LIVE_ONLY_JOBS: [&str; 4] = ["submit", "persist_handle", "poll", "persist_terminal"];
+const APP_ONLY_JOBS: [&str; 4] = [
+    "persist_starting",
+    "persist_handle",
+    "persist_terminal",
+    "persist_resume",
+];
+const OJ_ONLY_JOBS: [&str; 3] = ["submit", "poll", "resume"];
+const LIVE_ONLY_JOBS: [&str; 6] = [
+    "submit",
+    "persist_handle",
+    "poll",
+    "persist_terminal",
+    "resume",
+    "persist_resume",
+];
 
 fn seq_str_values(v: &Value) -> Vec<&str> {
     v.as_sequence()
@@ -1751,18 +1766,33 @@ fn worker_live_only_jobs_are_mode_gated() {
     }
 }
 
-/// #062.10: Every job that downloads a `verify-*` artifact must re-validate
-/// its SHA256 against `needs.prepare.outputs.plan_sha` (and companion outputs
-/// for `ce`, `handle`, `terminal`). This is the "secret jobs download only
-/// reviewed pinned artifacts" invariant from plan 062 Task 1.
+/// #062.10: Every secret-bearing job must re-validate the SHA256 of *every*
+/// `verify-*` artifact it downloads against the digest baked into the
+/// workflow run by `prepare` (or by the producing job). This is the "secret
+/// jobs download only reviewed pinned artifacts" invariant from plan 062
+/// Task 1, generalized so a newly-added job cannot quietly skip a check.
 #[test]
 fn worker_secret_jobs_validate_artifact_digests() {
+    // Artifact name prefix → the env var the validating step must compare.
+    const EXPECTED_ENV: [(&str, &str); 6] = [
+        ("verify-plan-", "EXPECTED_PLAN_SHA"),
+        ("verify-ce-", "EXPECTED_CE_SHA"),
+        ("verify-analyzers-", "EXPECTED_ANALYZERS_SHA"),
+        ("verify-handle-", "EXPECTED_HANDLE_SHA"),
+        ("verify-terminal-", "EXPECTED_TERMINAL_SHA"),
+        ("verify-resumed-", "EXPECTED_RESUMED_SHA"),
+    ];
+
     let doc = load_worker();
     let jobs_map = jobs(&doc);
-    for name in WORKER_JOB_ORDER.iter().skip(1) {
-        let job = get(jobs_map, name).unwrap();
-        let mut has_download = false;
-        let mut has_plan_sha_check = false;
+    let mut checked_jobs = 0;
+    for (name, job) in jobs_map {
+        let name = name.as_str().expect("job name must be a string");
+        if !is_secret_job(job) {
+            continue;
+        }
+        let mut downloaded: Vec<&str> = vec![];
+        let mut validating_runs: Vec<&str> = vec![];
         for step in steps(job) {
             let map = match step.as_mapping() {
                 Some(m) => m,
@@ -1770,26 +1800,156 @@ fn worker_secret_jobs_validate_artifact_digests() {
             };
             if let Some(uses) = get(map, "uses").and_then(Value::as_str)
                 && uses.starts_with("actions/download-artifact@")
+                && let Some(with) = get(map, "with").and_then(Value::as_mapping)
+                && let Some(artifact) = get(with, "name").and_then(Value::as_str)
             {
-                has_download = true;
+                downloaded.push(artifact);
             }
             if let Some(run) = get(map, "run").and_then(Value::as_str)
                 && run.contains("sha256sum")
-                && run.contains("EXPECTED_PLAN_SHA")
             {
-                has_plan_sha_check = true;
+                validating_runs.push(run);
             }
         }
         assert!(
-            has_download,
-            "job {name:?} must download at least one pinned artifact"
+            !downloaded.is_empty(),
+            "secret job {name:?} must download at least one pinned artifact"
         );
+        for artifact in downloaded {
+            let (_, env_var) = EXPECTED_ENV
+                .iter()
+                .find(|(prefix, _)| artifact.starts_with(prefix))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "job {name:?} downloads {artifact:?}, which has no known digest env var; \
+                         add it to EXPECTED_ENV together with its validation step"
+                    )
+                });
+            assert!(
+                validating_runs.iter().any(|run| run.contains(env_var)),
+                "job {name:?} downloads {artifact:?} but never compares sha256sum against \
+                 {env_var} before running ./ce"
+            );
+        }
+        checked_jobs += 1;
+    }
+    assert_eq!(
+        checked_jobs,
+        APP_ONLY_JOBS.len() + OJ_ONLY_JOBS.len(),
+        "every credential-bearing worker job must be covered by the digest check"
+    );
+}
+
+/// Issue #130: the resume chain exists, is ordered, and can never re-plan.
+///
+/// `prepare → resume → persist_resume` is what spec §15.1 step 7 needs to
+/// reach CI: the dispatcher hands the worker a solution whose record is
+/// in-flight, `verify-prepare` answers `resume`, and the fresh chain
+/// (`persist_starting` / `submit` / …) is gated off. Without that gate the
+/// worker would freeze a second plan for an attempt the OJ may already hold
+/// — the double submission spec §8.2 forbids.
+#[test]
+fn worker_resume_chain_is_ordered_and_never_starts_a_submission() {
+    let doc = load_worker();
+    let jobs_map = jobs(&doc);
+
+    let resume = get(jobs_map, "resume").expect("verify-worker.yml missing `resume` job");
+    assert_eq!(needs_of(resume), vec!["prepare"]);
+    let persist_resume =
+        get(jobs_map, "persist_resume").expect("verify-worker.yml missing `persist_resume` job");
+    let mut needs = needs_of(persist_resume);
+    needs.sort_unstable();
+    assert_eq!(needs, vec!["prepare", "resume"]);
+
+    // The resume chain runs only on `action == 'resume'`; the fresh chain
+    // only on `action == 'fresh'`. Neither may be unconditional.
+    for (name, expected) in [
+        ("resume", "resume"),
+        ("persist_resume", "resume"),
+        ("persist_starting", "fresh"),
+        ("submit", "fresh"),
+        ("persist_handle", "fresh"),
+        ("poll", "fresh"),
+        ("persist_terminal", "fresh"),
+    ] {
+        let job = get(jobs_map, name).unwrap();
+        let if_expr = get(as_map(job, name), "if")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("job {name:?} must gate on needs.prepare.outputs.action"));
         assert!(
-            has_plan_sha_check,
-            "job {name:?} must re-validate plan SHA256 against needs.prepare.outputs.plan_sha \
-             before running ./ce"
+            if_expr.contains(&format!("needs.prepare.outputs.action == '{expected}'")),
+            "job {name:?} `if:` must require action == {expected:?} (got {if_expr:?})"
         );
     }
+
+    // The resume job drives the stored attempt forward and must never
+    // invoke the starter.
+    let resume_runs: Vec<&str> = steps(resume)
+        .iter()
+        .filter_map(|s| s.as_mapping().and_then(|m| get(m, "run")))
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        resume_runs
+            .iter()
+            .any(|run| run.contains("verify-resume --solution")),
+        "`resume` must run `ce internal verify-resume`"
+    );
+    for forbidden in ["verify-start", "verify-prepare"] {
+        assert!(
+            !resume_runs.iter().any(|run| run.contains(forbidden)),
+            "`resume` must never run `{forbidden}` — that would re-plan or re-submit an \
+             attempt the OJ may already hold (spec §8.2)"
+        );
+    }
+}
+
+/// Issue #130: a `dry-run` tick must not write to `automation/verify`.
+///
+/// `persist_starting` is the only App job a dry run reaches. It has to keep
+/// exercising the token, the repository access, and the CAS read (the
+/// key-rotation procedure in `docs/operations/verify-automation.md` depends
+/// on that), but spec §15.1 orders "push the record, THEN POST to the OJ" —
+/// a dry run never POSTs, so a pushed `Starting` record is guaranteed to be
+/// an orphan that blocks the solution forever.
+#[test]
+fn worker_dry_run_persist_writes_nothing() {
+    let doc = load_worker();
+    let jobs_map = jobs(&doc);
+    let job = get(jobs_map, "persist_starting").expect("missing persist_starting job");
+
+    let persist_step = steps(&job.clone())
+        .into_iter()
+        .find_map(|s| {
+            let m = s.as_mapping()?;
+            let run = get(m, "run").and_then(Value::as_str)?;
+            run.contains("verify-persist").then_some(run.to_string())
+        })
+        .expect("persist_starting must run verify-persist");
+    assert!(
+        persist_step.contains("--dry-run"),
+        "persist_starting must pass --dry-run when the worker is not live (got {persist_step:?})"
+    );
+    assert!(
+        persist_step.contains("$MODE") && persist_step.contains("live"),
+        "the --dry-run switch must be driven by the `mode` input, not hardcoded"
+    );
+
+    let pr_step = steps(job)
+        .into_iter()
+        .find(|s| {
+            s.as_mapping()
+                .and_then(|m| get(m, "run"))
+                .and_then(Value::as_str)
+                .is_some_and(|run| run.contains("verify-pr-set-state"))
+        })
+        .expect("persist_starting must have a PR state step");
+    let if_expr = get(as_map(pr_step, "pr step"), "if").and_then(Value::as_str);
+    assert_eq!(
+        if_expr,
+        Some("inputs.mode == 'live'"),
+        "the PR state update opens a real pull request, so it must be live-only"
+    );
 }
 
 /// #062.11: OJ-bearing jobs (`submit`, `poll`) never reference App secrets;

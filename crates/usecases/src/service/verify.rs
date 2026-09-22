@@ -33,10 +33,11 @@ use crate::repository::session_repository::SessionRepository;
 use crate::repository::verification_repository::VerificationRepository;
 use crate::submission::{PollerRegistry, RecoveryRegistry, StarterRegistry, SubmissionStarter};
 use crate::submission_lifecycle::{
-    PollEvent, PollingPolicy, RetryAfterHint, Sleeper, StartEvent, SubmissionPorts,
+    PollEvent, PollingPolicy, ResumeSummary, RetryAfterHint, Sleeper, StartEvent, SubmissionPorts,
     VerificationRepositories, VerifySelection as LifecycleSelection, poll_handle, resume_pending,
     start_plan, submit_prepared_plan,
 };
+use crate::verification::candidate::{VerifyAction, verify_action};
 use crate::verification::fingerprint::{
     AdapterIdentity, FingerprintMaterial, FingerprintSource, OjBinding, calculate_fingerprint,
     capabilities_from_descriptor, hash_verify_config, verification_closure,
@@ -576,14 +577,39 @@ pub fn run_verify(inputs: VerifyInputs<'_>, ports: VerifyPorts<'_>) -> Result<Ve
     })
 }
 
-/// Freeze the submission plan for a single solution and return it. Used by
-/// `internal verify-prepare`. This does NOT persist the `Starting` record;
-/// `start_plan` owns the Starting-before-OJ-contact invariant (spec §8.2).
+/// Outcome of [`prepare_solution`] (spec §8.2, §15.1 step 7).
+#[derive(Debug, Clone)]
+pub enum PreparedAction {
+    /// A new immutable plan was frozen. The caller runs the full
+    /// start → poll chain against it.
+    Fresh(Box<SubmissionPlan>),
+    /// The stored record is in-flight, so no plan was frozen and nothing was
+    /// fingerprinted. The caller must drive the stored attempt forward with
+    /// [`resume_solution`] instead.
+    Resume {
+        /// Attempt the worker will resume. Carried for log output only.
+        attempt_id: AttemptId,
+    },
+}
+
+/// Decide what to do about a single solution, freezing a submission plan when
+/// (and only when) a new attempt is warranted. Used by
+/// `internal verify-prepare`.
+///
+/// This does NOT persist the `Starting` record; `start_plan` owns the
+/// Starting-before-OJ-contact invariant (spec §8.2).
+///
+/// The stored record is consulted **before** any fingerprinting: an in-flight
+/// record must be resumed regardless of how the working tree moved (spec §8.2
+/// "main の更新や fingerprint の変化も、この回復手順を迂回する理由にはしない"),
+/// and `build_plan_context` runs the project's preprocess hook, so computing
+/// it for an attempt we are not going to submit is both wasted work and an
+/// extra way to fail.
 pub fn prepare_solution(
     inputs: &VerifyInputs<'_>,
     ports: &VerifyPorts<'_>,
     solution_id: &SolutionId,
-) -> Result<SubmissionPlan> {
+) -> Result<PreparedAction> {
     let all_published = collect_published(inputs.manifest);
     let published = all_published
         .get(solution_id)
@@ -592,6 +618,17 @@ pub fn prepare_solution(
         .verify
         .as_ref()
         .ok_or_else(|| anyhow!("solution {} has no [verify] block", solution_id))?;
+
+    let previous = ports.verifications.load(solution_id)?;
+    if let Some(record) = &previous
+        && verify_action(&record.state) == VerifyAction::Resume
+    {
+        return Ok(PreparedAction::Resume {
+            attempt_id: record.attempt_id.clone(),
+        });
+    }
+    let previous_attempt_id = previous.map(|r| r.attempt_id);
+
     let oj = oj_for_solution(solution_id)?;
     let starter = ports.starters.get(&oj)?;
     let ctx = build_plan_context(
@@ -605,16 +642,6 @@ pub fn prepare_solution(
     )
     .map_err(|e| anyhow!("fingerprint blocked for {}: {e}", solution_id))?;
 
-    let known: BTreeSet<SolutionId> = all_published.keys().cloned().collect();
-    let normalizer = RepoNormalizer {
-        inner: ports.verifications,
-    };
-    let repos_bundle = VerificationRepositories {
-        records: &normalizer,
-        known_solutions: known,
-    };
-    let previous = ports.verifications.load(solution_id)?;
-    let previous_attempt_id = previous.map(|r| r.attempt_id);
     let plan_input = PrepareVerificationInput {
         solution_id,
         oj: ctx.oj.as_str().to_string(),
@@ -624,17 +651,68 @@ pub fn prepare_solution(
         submitted_source: ctx.submitted_source.clone(),
         fingerprint: ctx.fingerprint.clone(),
         verifies: ctx.verify_libraries.clone(),
-        previous_attempt_id: previous_attempt_id.clone(),
+        previous_attempt_id,
     };
     let plan = build_submission_plan(plan_input, ports.clock, ports.ids)
         .map_err(|e| anyhow!("planning failed for {}: {e}", solution_id))?;
 
-    // Intentionally do NOT persist a Starting record here — `start_plan`
-    // owns the Starting-before-OJ-contact invariant end-to-end (spec §8.2).
-    // Writing Starting from both prepare and start would trip the
-    // duplicate-start guard inside `start_plan`.
-    let _ = repos_bundle; // keep the binding so reviewers see the intent
-    Ok(plan)
+    Ok(PreparedAction::Fresh(Box::new(plan)))
+}
+
+/// Drive the stored in-flight record for `solution_id` forward without
+/// planning a new attempt (spec §8.2, §8.3, §15.1 step 7).
+///
+/// This is the CI counterpart of the resume pass [`run_verify`] performs
+/// locally: `Starting` / `AcceptanceUnknown` go through the OJ's recovery
+/// adapter, handle-bearing states go straight to `poll_handle`. The starter
+/// is never called, so a resume cannot double-submit.
+///
+/// Returns the post-resume record with `replaces_attempt_id` normalized to
+/// the attempt it updates, which is the compare-and-swap token the state
+/// branch expects (spec §11) — exactly what `finalize_after_starter` does for
+/// the fresh path. Without that normalization the record would still carry
+/// the *predecessor* attempt inherited by `apply_transition`, and
+/// `verify-persist`'s CAS would reject it.
+pub fn resume_solution(
+    solution_id: &SolutionId,
+    inputs: &VerifyInputs<'_>,
+    ports: &VerifyPorts<'_>,
+) -> Result<(VerificationRecord, ResumeSummary)> {
+    let all_published = collect_published(inputs.manifest);
+    let known: BTreeSet<SolutionId> = all_published.keys().cloned().collect();
+    let stored = ports
+        .verifications
+        .load(solution_id)?
+        .ok_or_else(|| anyhow!("no verification record stored for {}", solution_id))?;
+    if verify_action(&stored.state) != VerifyAction::Resume {
+        return Err(anyhow!(
+            "record for {} is not resumable (attempt {}); it needs a fresh plan, not a resume",
+            solution_id,
+            stored.attempt_id
+        ));
+    }
+
+    let normalizer = RepoNormalizer {
+        inner: ports.verifications,
+    };
+    let repos_bundle = VerificationRepositories {
+        records: &normalizer,
+        known_solutions: known,
+    };
+    let summary = resume_pending(
+        &repos_bundle,
+        &submission_ports(ports),
+        &LifecycleSelection {
+            solutions: vec![solution_id.clone()],
+        },
+    )?;
+
+    let mut record = ports
+        .verifications
+        .load(solution_id)?
+        .ok_or_else(|| anyhow!("record for {} disappeared during resume", solution_id))?;
+    record.replaces_attempt_id = Some(record.attempt_id.clone());
+    Ok((record, summary))
 }
 
 /// Recompute the current [`VerifyFingerprint`] for one published solution

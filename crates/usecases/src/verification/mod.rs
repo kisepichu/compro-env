@@ -17,7 +17,7 @@ pub mod status;
 pub mod transition;
 
 pub use backoff::retry_delay;
-pub use candidate::select_next_candidate;
+pub use candidate::{VerifyAction, select_next_candidate, verify_action};
 pub use fingerprint::{
     FINGERPRINT_SCHEMA_VERSION, FingerprintError, FingerprintMaterial, FingerprintSource,
     OjBinding, calculate_fingerprint, capabilities_from_descriptor, hash_verify_config,

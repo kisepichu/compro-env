@@ -17,20 +17,21 @@ use usecases::site_data_generator::{
 };
 
 pub mod input;
-use domain::verification::VerifyFingerprint;
+use domain::verification::{AttemptId, VerificationRecord, VerifyFingerprint};
 use input::{
-    InitInput, InternalVerifyPollInput, InternalVerifyPrepareInput, InternalVerifyStartInput,
-    LoginInput, LogoutInput, NewInput, SiteDataBuildMode, SiteDataGenerateInput, SubmitInput,
-    TestInput, VerifyInput, WhoamiInput,
+    InitInput, InternalVerifyPollInput, InternalVerifyPrepareInput, InternalVerifyResumeInput,
+    InternalVerifyStartInput, LoginInput, LogoutInput, NewInput, SiteDataBuildMode,
+    SiteDataGenerateInput, SubmitInput, TestInput, VerifyInput, WhoamiInput,
 };
 use usecases::clock::Clock;
 use usecases::id_generator::AttemptIdGenerator;
 use usecases::service::verify::{
-    VerifyInputs, VerifyOutcome, VerifyPorts, VerifySelection, compute_solution_fingerprint,
-    poll_current, prepare_solution, run_verify, start_prepared_plan,
+    PreparedAction, VerifyInputs, VerifyOutcome, VerifyPorts, VerifySelection,
+    compute_solution_fingerprint, poll_current, prepare_solution, resume_solution, run_verify,
+    start_prepared_plan,
 };
 use usecases::submission_lifecycle::{
-    PollEvent, PollingPolicy, RetryAfterHint, Sleeper, StartEvent,
+    PollEvent, PollingPolicy, ResumeSummary, RetryAfterHint, Sleeper, StartEvent,
 };
 use usecases::verification::plan::SubmissionPlan;
 
@@ -195,10 +196,44 @@ impl Controller {
         };
         run_verify(inputs, ports)
     }
+}
 
-    /// Hidden `internal verify-prepare`: freeze a submission plan and write the
-    /// canonical plan JSON to `--plan-out`. The `Starting` record is persisted
-    /// by `verify-start` before OJ contact, not here.
+/// What `internal verify-prepare` decided for the requested solution.
+///
+/// The CI worker branches on this: `Fresh` runs the
+/// `persist_starting → submit → persist_handle → poll → persist_terminal`
+/// chain, `Resume` runs `verify-resume` + a single persist instead
+/// (spec §8.2, §15.1 step 7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreparedOutcome {
+    /// A plan was frozen and written to `--plan-out` (plus `--starting-out`
+    /// when requested).
+    Fresh { plan_out: std::path::PathBuf },
+    /// The stored record is in-flight. No plan was frozen, no file written.
+    Resume { attempt_id: AttemptId },
+}
+
+impl PreparedOutcome {
+    /// Stable lowercase token written to `--action-out` and consumed by the
+    /// worker's job conditions.
+    pub fn action_token(&self) -> &'static str {
+        match self {
+            Self::Fresh { .. } => "fresh",
+            Self::Resume { .. } => "resume",
+        }
+    }
+}
+
+impl Controller {
+    /// Hidden `internal verify-prepare`: decide whether the solution needs a
+    /// new attempt and, if so, freeze a submission plan and write the
+    /// canonical plan JSON to `--plan-out`. The `Starting` record is
+    /// persisted by `verify-start` before OJ contact, not here.
+    ///
+    /// When the stored record is still in-flight, nothing is frozen and
+    /// nothing is written except `--action-out`: re-planning an attempt that
+    /// may already exist at the OJ is exactly the double submission spec §8.2
+    /// forbids.
     #[allow(clippy::too_many_arguments)]
     pub fn internal_verify_prepare(
         &self,
@@ -212,7 +247,7 @@ impl Controller {
         sleeper: &dyn Sleeper,
         retry_hint: &dyn RetryAfterHint,
         policy: PollingPolicy,
-    ) -> Result<std::path::PathBuf> {
+    ) -> Result<PreparedOutcome> {
         let solution_id = SolutionId::parse(&args.solution())
             .map_err(|e| anyhow::anyhow!("invalid --solution: {e}"))?;
         let ports = self.verify_ports(clock, ids, sleeper, retry_hint, policy)?;
@@ -224,23 +259,67 @@ impl Controller {
             selection: VerifySelection::Single(solution_id.clone()),
             submit_preprocess: self.service.config().submit_preprocess(),
         };
-        let plan = prepare_solution(&inputs, &ports, &solution_id)?;
-        let out_path = std::path::PathBuf::from(args.plan_out());
-        std::fs::write(&out_path, plan.to_canonical_json_bytes())
-            .map_err(|e| anyhow::anyhow!("failed to write plan to {}: {e}", out_path.display()))?;
-        if let Some(starting_out) = args.starting_out() {
-            let starting = plan.as_starting_record();
-            let starting_path = std::path::PathBuf::from(&starting_out);
-            let bytes = serde_json::to_vec_pretty(&starting)
-                .map_err(|e| anyhow::anyhow!("failed to serialize starting record: {e}"))?;
-            std::fs::write(&starting_path, bytes).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to write starting record to {}: {e}",
-                    starting_path.display()
-                )
+        let outcome = match prepare_solution(&inputs, &ports, &solution_id)? {
+            PreparedAction::Resume { attempt_id } => PreparedOutcome::Resume { attempt_id },
+            PreparedAction::Fresh(plan) => {
+                let out_path = std::path::PathBuf::from(args.plan_out());
+                std::fs::write(&out_path, plan.to_canonical_json_bytes()).map_err(|e| {
+                    anyhow::anyhow!("failed to write plan to {}: {e}", out_path.display())
+                })?;
+                if let Some(starting_out) = args.starting_out() {
+                    let starting = plan.as_starting_record();
+                    let starting_path = std::path::PathBuf::from(&starting_out);
+                    let bytes = serde_json::to_vec_pretty(&starting)
+                        .map_err(|e| anyhow::anyhow!("failed to serialize starting record: {e}"))?;
+                    std::fs::write(&starting_path, bytes).map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to write starting record to {}: {e}",
+                            starting_path.display()
+                        )
+                    })?;
+                }
+                PreparedOutcome::Fresh { plan_out: out_path }
+            }
+        };
+        if let Some(action_out) = args.action_out() {
+            let action_path = std::path::PathBuf::from(&action_out);
+            std::fs::write(&action_path, outcome.action_token()).map_err(|e| {
+                anyhow::anyhow!("failed to write action to {}: {e}", action_path.display())
             })?;
         }
-        Ok(out_path)
+        Ok(outcome)
+    }
+
+    /// Hidden `internal verify-resume`: drive the stored in-flight record for
+    /// `--solution` forward without planning a new attempt (spec §8.2, §8.3,
+    /// §15.1 step 7). Returns the post-resume record for the App-only persist
+    /// job plus the lifecycle summary for log output.
+    #[allow(clippy::too_many_arguments)]
+    pub fn internal_verify_resume(
+        &self,
+        args: &dyn InternalVerifyResumeInput,
+        repository_root: &Path,
+        library_config: &LibraryProjectConfig,
+        manifest: &DiscoveryManifest,
+        snapshot: &domain::analysis::AnalysisSnapshot,
+        clock: &dyn Clock,
+        ids: &dyn AttemptIdGenerator,
+        sleeper: &dyn Sleeper,
+        retry_hint: &dyn RetryAfterHint,
+        policy: PollingPolicy,
+    ) -> Result<(VerificationRecord, ResumeSummary)> {
+        let solution_id = SolutionId::parse(&args.solution())
+            .map_err(|e| anyhow::anyhow!("invalid --solution: {e}"))?;
+        let ports = self.verify_ports(clock, ids, sleeper, retry_hint, policy)?;
+        let inputs = VerifyInputs {
+            repository_root,
+            library_config,
+            manifest,
+            snapshot,
+            selection: VerifySelection::Single(solution_id.clone()),
+            submit_preprocess: self.service.config().submit_preprocess(),
+        };
+        resume_solution(&solution_id, &inputs, &ports)
     }
 
     /// Hidden `internal verify-start`: read a prepared plan JSON and dispatch

@@ -353,6 +353,48 @@ impl GitHubVerificationStateWriter {
             })
     }
 
+    /// Rehearse [`persist`] without writing anything: run every guard clause
+    /// and the compare-and-swap read, then stop before the first mutating
+    /// API call.
+    ///
+    /// This is what the worker's `dry-run` mode calls. Spec §15.1 orders the
+    /// pipeline as "record push, *then* OJ POST" (step 2 → step 3); a dry run
+    /// never POSTs, so pushing the record would strand a `Starting` state
+    /// that no submission corresponds to, and the picker would keep resuming
+    /// an attempt that never existed. Checking without writing keeps the
+    /// App-token, repository-access, and CAS coverage the dry run exists for
+    /// (see the key-rotation procedure in
+    /// `docs/operations/verify-automation.md`) while leaving the state
+    /// branch untouched.
+    ///
+    /// Two HTTP requests on the happy path, both `GET`:
+    /// 0. resolve `automation/verify`'s tip, falling back to
+    ///    `request.base_sha` when the branch does not exist — that is the
+    ///    commit the real `persist` would have created it from, so the CAS
+    ///    reads the same tree either way. The branch itself is **not**
+    ///    created.
+    /// 1. the CAS read against that anchor.
+    pub fn check_persist(&self, request: &PersistStateRequest) -> PersistResult<()> {
+        validate_branch(&request.branch)?;
+        validate_base_sha(&request.base_sha)?;
+        let (owner, repo) = split_repository(&request.repository)?;
+
+        let result_path = compute_result_path(&request.candidate);
+        validate_result_path(&result_path)?;
+
+        *self
+            .bound_repository
+            .lock()
+            .expect("bound_repository mutex poisoned") =
+            Some((owner.to_string(), repo.to_string()));
+
+        let anchor = self
+            .get_ref_sha_opt(owner, repo)?
+            .unwrap_or_else(|| request.base_sha.clone());
+
+        self.cas_check(owner, repo, &result_path, &anchor, &request.candidate)
+    }
+
     /// Persist a verification record to `verification/results/<solution_id>.json`
     /// on the sole `automation/verify` branch, using GitHub's Git Data API.
     ///
