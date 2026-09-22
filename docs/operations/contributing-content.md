@@ -194,13 +194,18 @@ language_id = "rust"
 
 - `publish = true` — 既定は非公開。公開しない解法は verify 対象にならない。
 - `solved_at` — **timezone 付き RFC 3339**。filesystem / Git / OJ 日時への暗黙 fallback はない。
-- `test_command` — verify 解法では必須 (check + test barrier で実行される)。
+- `test_command` — 実行内容は任意だが、キー自体は verify 解法では必須
+  (check + test barrier で実行される)。
   **CWD は解法ディレクトリ** なので、パスは解法ディレクトリ相対で書く
   (`ce test`: `docs/commands/test.md` 手順 3 / `ce verify`:
   `crates/usecases/src/service/verify.rs` の `repository_root.join(&published.root)`)。
 - `[verify].libraries` — この解法が保証するライブラリ ID (リポジトリ相対パス) を列挙する。
   推移依存は自動で closure に入るので、直接保証するものだけ書く。
-- `[verify].language_id` — 任意。OJ 側の提出言語 ID を上書きしたいときだけ。`[verify]` 外には置かない。
+
+任意:
+
+- `[verify].language_id` — OJ 側の提出言語 ID を上書きしたいときだけ書く。`[verify]` 外には置かない。
+- `test_timeout_seconds` — 既定 600 秒。正の整数のみ。
 
 config error になるケース (設計文書 §7.2):
 
