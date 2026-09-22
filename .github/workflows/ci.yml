@@ -60,11 +60,37 @@ jobs:
       - name: hooks/tests/run.sh (rust bundler regression tests)
         run: bash hooks/tests/run.sh
 
-      # `--language rust` only: the cpp / lean check commands need clang++ and
-      # lake, which this job does not install. A filtered check does not gate
-      # publication (docs/commands/check.md).
-      - name: ce check --language rust (library unit tests)
-        run: cargo run --bin ce -- check --language rust
+      - name: Verify clang++ is present (cpp library check dependency)
+        run: clang++ --version
+
+      - name: Install pinned Lean toolchain (lean library check dependency)
+        # `scripts/check-lean-libraries.sh` only needs `lean` on PATH. The
+        # pin mirrors `tools/library-analyzers/dependencies.toml`
+        # (`lean-linux-x64`); `./tools/library-analyzers/prepare` is not
+        # reused because it also downloads LLVM (~700MB) and `ce check` runs
+        # with a sanitized environment (docs/commands/check.md) that carries
+        # no path into the prepared set. The release tarball resolves
+        # `libLean_shared.so` through its own RPATH, so unlike the analyzer
+        # build this needs no `LD_LIBRARY_PATH` plumbing.
+        #
+        # Deliberately uncached: the extracted toolchain is 2.6GB, so an
+        # actions/cache round-trip costs more than refetching the 529MB
+        # archive from GitHub's CDN.
+        run: |
+          set -euo pipefail
+          url="https://github.com/leanprover/lean4/releases/download/v4.30.0/lean-4.30.0-linux.tar.zst"
+          sha256="4dad74141c2c119ca1aa626656be83b8e14238afba97271fd7bf1eb3f081b319"
+          curl -sSfL --retry 3 --retry-connrefused -o "$RUNNER_TEMP/lean.tar.zst" "$url"
+          echo "$sha256  $RUNNER_TEMP/lean.tar.zst" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/lean"
+          tar --zstd -xf "$RUNNER_TEMP/lean.tar.zst" -C "$RUNNER_TEMP/lean" --strip-components=1
+          echo "$RUNNER_TEMP/lean/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/lean/bin/lean" --version
+
+      # No `--language` filter: clang++ ships with the runner image and the
+      # step above installs Lean, so all three languages are checkable here.
+      - name: ce check (library checks for every language)
+        run: cargo run --bin ce -- check
 
   site:
     name: Static site build (root + /compro-env/)
