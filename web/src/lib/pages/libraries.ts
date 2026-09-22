@@ -18,7 +18,7 @@ import type {
   SymbolAnalysisPublic,
   VerificationEvidence,
 } from "../site-data-types.ts";
-import { renderDocumentation } from "../markdown.ts";
+import { markdownToMetaDescription, renderDocumentation } from "../markdown.ts";
 import { sanitizeExternalUrl } from "../safe-url.ts";
 import { renderSource } from "../source.ts";
 import {
@@ -770,9 +770,12 @@ export async function renderLibraryDetailPage(
     lib.language,
     ...splitSourcePath(lib.source_path),
   ];
+  // The sidecar body is Markdown; `<meta>` needs collapsed plain text, not
+  // the raw source with its heading markers, backticks and newlines.
+  const summary = markdownToMetaDescription(lib.description ?? "");
   const description =
-    lib.description && lib.description.trim().length > 0
-      ? lib.description
+    summary.length > 0
+      ? summary
       : `${lib.title} — ${lib.language} library in ${siteData.site.title}.`;
   const mainInnerHtml = await renderLibraryDetailMainInner(config, siteData, lib);
   return renderDocument({

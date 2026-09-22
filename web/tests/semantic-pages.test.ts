@@ -491,6 +491,52 @@ describe("Library detail (/libraries/{lang}/{source-path}/)", () => {
     const doc = parse(html2);
     expect(doc.getElementById("documentation")).toBeNull();
   });
+
+  it("meta description is collapsed plain text capped at 160 scalars", async () => {
+    const data = buildFixtureSiteData();
+    data.libraries[0].description = [
+      "## Overview",
+      "",
+      "`Monoid` describes an **associative** binary operation with a two-sided",
+      "identity. It is the smallest shared abstraction used by segment tree,",
+      "prefix-sum, and similar structures across the [Rust](https://x.test/) set.",
+      "",
+      "## Laws",
+      "",
+      "- Identity",
+      "- Associativity",
+    ].join("\n");
+    const doc = parse(
+      await renderLibraryDetailPage(rootConfig, data, data.libraries[0]),
+    );
+    const content = doc
+      .querySelector('meta[name="description"]')!
+      .getAttribute("content")!;
+    expect(content).toBe(
+      "Overview Monoid describes an associative binary operation with a " +
+        "two-sided identity. It is the smallest shared abstraction used by " +
+        "segment tree, prefix-sum, and",
+    );
+    expect([...content].length).toBe(160);
+    expect(
+      doc
+        .querySelector('meta[property="og:description"]')!
+        .getAttribute("content"),
+    ).toBe(content);
+  });
+
+  it("falls back when the description Markdown carries no text", async () => {
+    const data = buildFixtureSiteData();
+    // Parses to a heading with an empty child and a thematic break: valid
+    // Markdown, zero text content.
+    data.libraries[0].description = "##\n\n---\n";
+    const doc = parse(
+      await renderLibraryDetailPage(rootConfig, data, data.libraries[0]),
+    );
+    expect(
+      doc.querySelector('meta[name="description"]')!.getAttribute("content"),
+    ).toBe("Dijkstra — rust library in compro-env fixture.");
+  });
 });
 
 // ---- Solutions root, contest, problem, detail ----
