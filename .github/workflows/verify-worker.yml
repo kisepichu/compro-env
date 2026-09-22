@@ -14,12 +14,6 @@ name: verify-worker
 on:
   workflow_call:
     inputs:
-      after:
-        # Immutable commit SHA the plan is frozen against; forwarded from the
-        # dispatcher's `Resolve BEFORE and AFTER` step. Consumed as the CAS
-        # `base_sha` in every `persist_*` job.
-        required: true
-        type: string
       mode:
         # `dry-run` runs prepare → persist_starting only (no OJ contact). `live`
         # runs the full six-job chain, gating `submit` / `persist_handle` /
@@ -70,7 +64,6 @@ jobs:
       starting_sha: ${{ steps.hash_plan.outputs.starting_sha }}
       ce_sha: ${{ steps.hash.outputs.ce_sha }}
       analyzers_sha: ${{ steps.hash.outputs.analyzers_sha }}
-      base_sha: ${{ inputs.after }}
       artifact_suffix: ${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout with full history
@@ -172,7 +165,7 @@ jobs:
         # protocol crate the adapters compile against, plus the Rust
         # toolchain / lockfile pins. Missing any of these lets a change to
         # build orchestration silently ship a stale cached binary that no
-        # longer matches the source at `inputs.after`.
+        # longer matches the checked-out source.
         if: inputs.solution != ''
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -379,8 +372,14 @@ jobs:
         # here would strand an in-flight record that no submission
         # corresponds to and the picker would keep resuming a phantom
         # attempt (issue #130).
+        #
+        # No base commit is passed in: when `automation/verify` is absent the
+        # writer recreates it from `main`'s tip as observed at that moment.
+        # This job runs minutes after `prepare` froze the plan, and merging an
+        # automation PR always rewrites `verification/results/**`, so a base
+        # frozen at plan time reliably produced a `CONFLICTING` automation PR
+        # (issue #130 problem 2).
         env:
-          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           REPOSITORY: ${{ github.repository }}
           GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
           MODE: ${{ inputs.mode }}
@@ -394,7 +393,6 @@ jobs:
             --plan-hash-in work/plan.sha256 \
             --candidate-in work/starting.json \
             --repository "$REPOSITORY" \
-            --base-sha "$BASE_SHA" \
             --token-env GH_APP_TOKEN \
             "${DRY_RUN[@]}"
 
@@ -442,11 +440,14 @@ jobs:
       # SolutionRepository at run time. `verify-start` reads the
       # `Starting` record `persist_starting` just committed to the
       # `automation/verify` state branch, so checkout targets that branch
-      # instead of main. Its tree is (main@base_sha) + the single
+      # instead of main. Its tree is a `main` commit plus the single
       # `verification/results/{solution}.json` delta, so config.toml,
-      # templates/, solutions/, and libraries/ still match the SHA the
-      # plan was frozen against. This checkout is read-only source data —
-      # the executable is still the pinned `ce` binary artifact.
+      # templates/, solutions/, and libraries/ are all present. That `main`
+      # commit is whichever tip the state branch was last recreated from, not
+      # necessarily the one the plan was frozen against — `verify-start`
+      # submits the frozen `plan.json` bytes and only uses this tree to boot
+      # the project, so the two need not match. This checkout is read-only
+      # source data — the executable is still the pinned `ce` binary artifact.
       - name: Checkout automation/verify state branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
@@ -455,7 +456,7 @@ jobs:
 
       - name: Sanity-check state branch invariants
         # `verify-start` / `verify-poll` assume the state branch is
-        # `main@base_sha` + a `verification/results/**` delta, so its tree
+        # a `main` commit plus a `verification/results/**` delta, so its tree
         # still contains `templates/`, `config.toml`, `libraries/`, and
         # `solutions/`. A stray force-push to `automation/verify` (or a
         # tree-construction bug in `verify-persist`) would surface here
@@ -471,7 +472,7 @@ jobs:
           done
           if [ ${#missing[@]} -gt 0 ]; then
             echo "automation/verify state branch is missing expected entries: ${missing[*]}" >&2
-            echo "This branch must mirror main@base_sha except for verification/results/**." >&2
+            echo "This branch must mirror main except for verification/results/**." >&2
             exit 1
           fi
 
@@ -626,8 +627,8 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       - name: Persist handle record
+        # See the base-commit note on persist_starting's same-named step.
         env:
-          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           REPOSITORY: ${{ github.repository }}
           GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
@@ -636,7 +637,6 @@ jobs:
             --plan-hash-in work/plan.sha256 \
             --candidate-in work/handle.json \
             --repository "$REPOSITORY" \
-            --base-sha "$BASE_SHA" \
             --token-env GH_APP_TOKEN
 
       - name: Update automation PR state
@@ -669,8 +669,8 @@ jobs:
     steps:
       # See the note on the submit job's Checkout step. `verify-poll` reads
       # the `Trackable` record `persist_handle` committed to
-      # `automation/verify`; the base project tree there matches the plan
-      # base SHA.
+      # `automation/verify`; the project tree there is a `main` commit plus
+      # the record delta.
       - name: Checkout automation/verify state branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
@@ -679,7 +679,7 @@ jobs:
 
       - name: Sanity-check state branch invariants
         # `verify-start` / `verify-poll` assume the state branch is
-        # `main@base_sha` + a `verification/results/**` delta, so its tree
+        # a `main` commit plus a `verification/results/**` delta, so its tree
         # still contains `templates/`, `config.toml`, `libraries/`, and
         # `solutions/`. A stray force-push to `automation/verify` (or a
         # tree-construction bug in `verify-persist`) would surface here
@@ -695,7 +695,7 @@ jobs:
           done
           if [ ${#missing[@]} -gt 0 ]; then
             echo "automation/verify state branch is missing expected entries: ${missing[*]}" >&2
-            echo "This branch must mirror main@base_sha except for verification/results/**." >&2
+            echo "This branch must mirror main except for verification/results/**." >&2
             exit 1
           fi
 
@@ -899,8 +899,8 @@ jobs:
           repositories: ${{ github.event.repository.name }}
 
       - name: Persist terminal record
+        # See the base-commit note on persist_starting's same-named step.
         env:
-          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           REPOSITORY: ${{ github.repository }}
           GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
@@ -909,7 +909,6 @@ jobs:
             --plan-hash-in work/plan.sha256 \
             --candidate-in work/terminal.json \
             --repository "$REPOSITORY" \
-            --base-sha "$BASE_SHA" \
             --token-env GH_APP_TOKEN
 
       - name: Update automation PR state
@@ -1140,8 +1139,8 @@ jobs:
         # No `--plan-hash-in`: a resume freezes no plan, so there is no plan
         # artifact to pin. The record itself arrives through the same
         # digest-validated artifact channel as every other persist input.
+        # See the base-commit note on persist_starting's same-named step.
         env:
-          BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
           REPOSITORY: ${{ github.repository }}
           GH_APP_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
@@ -1149,7 +1148,6 @@ jobs:
           ./work/ce internal verify-persist \
             --candidate-in work/resumed.json \
             --repository "$REPOSITORY" \
-            --base-sha "$BASE_SHA" \
             --token-env GH_APP_TOKEN
 
       - name: Update automation PR state

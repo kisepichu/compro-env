@@ -682,7 +682,6 @@ pub fn run() -> Result<()> {
                 plan_hash_in,
                 candidate_in,
                 repository,
-                base_sha,
                 token_env,
                 dry_run,
             } => {
@@ -706,7 +705,6 @@ pub fn run() -> Result<()> {
                 );
                 let request = crate::github::PersistStateRequest {
                     repository,
-                    base_sha,
                     branch: "automation/verify".into(),
                     candidate,
                 };

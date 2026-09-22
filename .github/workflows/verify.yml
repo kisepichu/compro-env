@@ -46,6 +46,11 @@ jobs:
     permissions:
       contents: read
     outputs:
+      # `before` / `after` / `class` are diagnostics: they record what this
+      # tick classified so a run page explains its own decision. Nothing
+      # consumes them. The worker in particular takes no base commit — it
+      # resolves `main`'s tip itself when it has to recreate
+      # `automation/verify` (issue #130 problem 2).
       before: ${{ steps.resolve.outputs.before }}
       after: ${{ steps.resolve.outputs.after }}
       class: ${{ steps.classify.outputs.class }}
@@ -344,7 +349,6 @@ jobs:
       && github.ref == 'refs/heads/main'
     uses: ./.github/workflows/verify-worker.yml
     with:
-      after: ${{ needs.dispatch.outputs.after }}
       # Mode precedence: an explicit `workflow_dispatch` `mode` always wins.
       # Otherwise the repository variable `VERIFY_LIVE` decides whether
       # unattended `push` / `schedule` ticks may hit the OJ; unset or

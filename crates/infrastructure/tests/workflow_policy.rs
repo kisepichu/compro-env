@@ -290,18 +290,16 @@ fn environment_names_are_from_allowlist() {
 /// jobs execute only the pinned `ce` binary artifact — cargo would compile
 /// arbitrary post-merge code with secrets in scope.
 ///
-/// Secret jobs may `actions/checkout` a fixed, immutable ref so `ce`'s
-/// runtime helpers (`find_project_root`, `SolutionRepository`) can operate.
-/// The allowed refs are:
-///   - `${{ inputs.after }}`: the immutable SHA `prepare` planned against.
-///   - `automation/verify`: the App-managed state branch, which `submit`
-///     and `poll` read so `ce internal verify-{start,poll}` can see the
-///     record `persist_starting` / `persist_handle` just committed.
-///     The `actions/checkout` SHA pin is covered by test #3.
+/// Secret jobs may `actions/checkout` a fixed ref so `ce`'s runtime helpers
+/// (`find_project_root`, `SolutionRepository`) can operate. The only allowed
+/// ref is `automation/verify`, the App-managed state branch, which `submit`,
+/// `poll` and `resume` read so `ce internal verify-{start,poll,resume}` can
+/// see the record the preceding `persist_*` job committed. The
+/// `actions/checkout` SHA pin is covered by test #3.
 #[test]
 fn no_build_or_unpinned_checkout_in_secret_jobs() {
     let banned_cargo_verbs = ["cargo build", "cargo test", "cargo run"];
-    let allowed_ref_needles = ["inputs.after", "automation/verify"];
+    let allowed_ref_needles = ["automation/verify"];
     for (label, doc) in [
         ("verify-worker", load_worker()),
         ("verify-result-integrity", load_integrity()),
@@ -332,7 +330,7 @@ fn no_build_or_unpinned_checkout_in_secret_jobs() {
                     assert!(
                         matches,
                         "{label}: job {job_name:?} step[{idx}] actions/checkout `ref:` must \
-                         be one of `${{{{ inputs.after }}}}` or `automation/verify`, got {refv:?}"
+                         be `automation/verify`, got {refv:?}"
                     );
                 }
                 if let Some(run) = get(map, "run").and_then(Value::as_str) {
@@ -499,33 +497,6 @@ fn verify_dispatcher_wires_before_after_through_env() {
         after.is_some_and(|s| s.contains("steps.resolve.outputs.after")),
         "classify step env.AFTER must derive from steps.resolve.outputs.after (got {after:?})"
     );
-
-    // The worker consumes `after` (it needs the plan base SHA); the dispatcher
-    // resolves both `before` and `after` for its own classification but only
-    // forwards `after`. Assert the worker's `after` input is still
-    // `required: true` and `type: string`.
-    let worker = load_worker();
-    let on = get(as_map(&worker, "verify-worker"), "on").expect("missing `on:`");
-    let workflow_call = get(as_map(on, "on"), "workflow_call").expect("missing workflow_call");
-    let inputs = get(as_map(workflow_call, "workflow_call"), "inputs")
-        .expect("workflow_call missing `inputs:`");
-    let inputs_map = as_map(inputs, "inputs");
-    {
-        let name = "after";
-        let input = get(inputs_map, name)
-            .unwrap_or_else(|| panic!("workflow_call.inputs missing {name:?}"));
-        let input_map = as_map(input, name);
-        assert_eq!(
-            get(input_map, "required").and_then(Value::as_bool),
-            Some(true),
-            "workflow_call.inputs.{name} must be required: true"
-        );
-        assert_eq!(
-            get(input_map, "type").and_then(Value::as_str),
-            Some("string"),
-            "workflow_call.inputs.{name} must be type: string"
-        );
-    }
 }
 
 /// #10 (plan 062): The dispatcher `verify.yml` is the sole caller of
@@ -2114,10 +2085,13 @@ fn worker_is_workflow_call_only() {
 }
 
 /// #062.15: The worker exposes `mode` as a `workflow_call` input (accepting
-/// `live` or `dry-run`) and `solution` as an optional string. `after` carries
-/// the plan base SHA. `before` deliberately does NOT appear on the worker —
-/// classification lives in the dispatcher (§15.3) and nothing inside the
-/// worker consumes it. `mode` must default to `dry-run` for defense-in-depth.
+/// `live` or `dry-run`) and `solution` as an optional string, and nothing
+/// else. `before` never appeared — classification lives in the dispatcher
+/// (§15.3). `after` was removed with issue #130 problem 2: a commit frozen
+/// at plan time is stale by the time an App-only `persist_*` job runs, so
+/// the state writer resolves `main`'s tip itself when it has to recreate
+/// `automation/verify`. `mode` must default to `dry-run` for
+/// defense-in-depth.
 #[test]
 fn worker_declares_mode_and_solution_inputs() {
     let doc = load_worker();
@@ -2128,7 +2102,7 @@ fn worker_declares_mode_and_solution_inputs() {
     let inputs = get(as_map(wc, "workflow_call"), "inputs")
         .and_then(Value::as_mapping)
         .expect("workflow_call must declare inputs");
-    for name in ["after", "mode", "solution"] {
+    for name in ["mode", "solution"] {
         let input =
             get(inputs, name).unwrap_or_else(|| panic!("workflow_call.inputs missing {name:?}"));
         let m = as_map(input, name);
@@ -2153,12 +2127,15 @@ fn worker_declares_mode_and_solution_inputs() {
         "workflow_call.inputs.mode default must be `dry-run`"
     );
 
-    // `before` was removed once classification moved to the dispatcher; any
-    // future accidental re-add would signal a stale contract.
-    assert!(
-        get(inputs, "before").is_none(),
-        "workflow_call.inputs.before must not exist — classification lives in the dispatcher"
-    );
+    // Neither a classification input nor a frozen base commit may come back:
+    // both would re-create a contract the pipeline deliberately dropped.
+    for name in ["before", "after"] {
+        assert!(
+            get(inputs, name).is_none(),
+            "workflow_call.inputs.{name} must not exist — the worker takes neither a \
+             classification result nor a base commit"
+        );
+    }
 }
 
 /// #062.17: The library-analyzer executables that `verify-prepare` /

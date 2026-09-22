@@ -195,7 +195,10 @@ fn starting_record(attempt: &str, replaces: Option<&str>) -> VerificationRecord 
     }
 }
 
-fn base_sha() -> &'static str {
+/// Tip of `main` at the moment the writer asks for it. Deliberately distinct
+/// from every other SHA in this file: the recreated state branch must start
+/// here and nowhere else (issue #130 problem 2).
+fn main_tip_sha() -> &'static str {
     "0123456789abcdef0123456789abcdef01234567"
 }
 
@@ -214,7 +217,6 @@ fn blob_sha() -> &'static str {
 fn valid_request(record: VerificationRecord) -> PersistStateRequest {
     PersistStateRequest {
         repository: "owner/repo".into(),
-        base_sha: base_sha().into(),
         branch: "automation/verify".into(),
         candidate: record,
     }
@@ -254,6 +256,16 @@ fn get_ref_reply(sha: &str) -> Reply {
         serde_json::json!({
             "ref": "refs/heads/automation/verify",
             "object": { "sha": sha }
+        }),
+    )
+}
+
+fn main_ref_reply() -> Reply {
+    Reply::json(
+        200,
+        serde_json::json!({
+            "ref": "refs/heads/main",
+            "object": { "sha": main_tip_sha() }
         }),
     )
 }
@@ -308,13 +320,26 @@ fn persist_rejects_wrong_branch() {
 }
 
 #[test]
-fn persist_rejects_invalid_base_sha() {
-    let w = writer("http://127.0.0.1:1".into());
-    let mut req = valid_request(starting_record("attempt-1", None));
-    req.base_sha = "not-hex".into();
+fn persist_refuses_a_malformed_sha_handed_back_by_the_refs_api() {
+    // The base commit is no longer caller-supplied, so the only way a
+    // non-canonical SHA can reach a URL or a request body is through a
+    // GitHub response. `validate_object_sha` is the defense-in-depth guard
+    // that stops it before it gets interpolated.
+    let fx = Fixture::start(vec![get_ref_reply("../../evil")]);
+    let w = writer(fx.base_url());
 
-    let err = w.persist(&req).unwrap_err();
-    assert!(matches!(err, PersistError::InvalidBaseSha), "got {err:?}");
+    let err = w
+        .persist(&valid_request(starting_record("attempt-1", None)))
+        .unwrap_err();
+    match err {
+        PersistError::InvalidObjectSha { value } => assert_eq!(value, "../../evil"),
+        other => panic!("expected InvalidObjectSha, got {other:?}"),
+    }
+    assert_eq!(
+        fx.recorded().len(),
+        1,
+        "the writer must stop at the ref lookup"
+    );
 }
 
 #[test]
@@ -495,42 +520,45 @@ fn persist_fails_when_attempt_cas_mismatch() {
 }
 
 #[test]
-fn persist_recreates_the_state_branch_from_base_sha_when_it_was_deleted() {
+fn persist_recreates_the_state_branch_from_the_current_main_tip() {
     // Merging the bot PR deletes `automation/verify` (repository setting
     // `delete_branch_on_merge`), which is what stops the PR's merge base from
     // freezing at the branch point. The next attempt must recreate the branch
-    // from the `main@base_sha` plan anchor and anchor the whole call on it —
-    // including the CAS, which then reads the record the merge landed on
-    // `main`.
+    // from `main`'s tip **as it is now**, not from any commit the run froze
+    // earlier: that merge moved `main` and rewrote the very record file this
+    // attempt is about to touch, so branching from a pre-merge commit opens a
+    // `CONFLICTING` automation PR (issue #130 problem 2).
     let merged = starting_record("attempt-merged", None);
     let script = vec![
-        // 0. GET ref → branch absent.
+        // 0. GET automation/verify → branch absent.
         Reply::empty(404),
-        // 1. POST git/refs → branch created at base_sha.
+        // 1. GET main → current tip.
+        main_ref_reply(),
+        // 2. POST git/refs → branch created at main's tip.
         Reply::json(
             201,
             serde_json::json!({
                 "ref": "refs/heads/automation/verify",
-                "object": { "sha": base_sha() }
+                "object": { "sha": main_tip_sha() }
             }),
         ),
-        // 2. CAS GET → the record that came from main.
+        // 3. CAS GET → the record that came from main.
         contents_response_for(&merged),
-        // 3. POST blob
+        // 4. POST blob
         Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
-        // 4. GET commit → resolve base_sha's tree
+        // 5. GET commit → resolve the created tip's tree
         Reply::json(
             200,
             serde_json::json!({
-                "sha": base_sha(),
+                "sha": main_tip_sha(),
                 "tree": { "sha": base_commit_tree_sha() }
             }),
         ),
-        // 5. POST tree
+        // 6. POST tree
         Reply::json(201, serde_json::json!({ "sha": tree_sha() })),
-        // 6. POST commit
+        // 7. POST commit
         Reply::json(201, serde_json::json!({ "sha": commit_sha() })),
-        // 7. PATCH ref
+        // 8. PATCH ref
         Reply::json(
             200,
             serde_json::json!({
@@ -549,27 +577,77 @@ fn persist_recreates_the_state_branch_from_base_sha_when_it_was_deleted() {
     assert_eq!(out.commit_sha, commit_sha());
 
     let recorded = fx.recorded();
-    assert_eq!(recorded.len(), 8, "expected 8 requests, got {recorded:#?}");
+    assert_eq!(recorded.len(), 9, "expected 9 requests, got {recorded:#?}");
 
-    assert_eq!(recorded[1].method, "POST");
-    assert_eq!(recorded[1].url, "/repos/owner/repo/git/refs");
-    let create_body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    // The base is read from `main`, not supplied by the caller.
+    assert_eq!(recorded[1].method, "GET");
+    assert_eq!(recorded[1].url, "/repos/owner/repo/git/refs/heads/main");
+
+    assert_eq!(recorded[2].method, "POST");
+    assert_eq!(recorded[2].url, "/repos/owner/repo/git/refs");
+    let create_body: serde_json::Value = serde_json::from_str(&recorded[2].body).unwrap();
     assert_eq!(create_body["ref"], "refs/heads/automation/verify");
-    assert_eq!(create_body["sha"], base_sha());
+    assert_eq!(create_body["sha"], main_tip_sha());
 
     // The created tip becomes the anchor for the CAS, the tree resolution and
     // the commit parent.
     assert!(
-        recorded[2].url.ends_with(&format!("?ref={}", base_sha())),
+        recorded[3]
+            .url
+            .ends_with(&format!("?ref={}", main_tip_sha())),
         "CAS should target the created tip, got {}",
-        recorded[2].url,
+        recorded[3].url,
     );
     assert_eq!(
-        recorded[4].url,
-        format!("/repos/owner/repo/git/commits/{}", base_sha())
+        recorded[5].url,
+        format!("/repos/owner/repo/git/commits/{}", main_tip_sha())
     );
-    let commit_body: serde_json::Value = serde_json::from_str(&recorded[6].body).unwrap();
-    assert_eq!(commit_body["parents"][0], base_sha());
+    let commit_body: serde_json::Value = serde_json::from_str(&recorded[7].body).unwrap();
+    assert_eq!(commit_body["parents"][0], main_tip_sha());
+}
+
+#[test]
+fn persist_never_recreates_the_branch_while_it_still_exists() {
+    // Counterpart to the test above: resolving `main` is strictly a
+    // branch-creation step. An existing state branch must not be re-based on
+    // `main`, or the in-flight records already committed on it would be lost.
+    let fx = Fixture::start(happy_script());
+    let w = writer(fx.base_url());
+
+    w.persist(&valid_request(starting_record("attempt-1", None)))
+        .expect("persist succeeds on an existing branch");
+
+    let recorded = fx.recorded();
+    assert!(
+        !recorded
+            .iter()
+            .any(|r| r.url.ends_with("/git/refs/heads/main")),
+        "persist must not look up main when the state branch exists: {recorded:#?}"
+    );
+}
+
+#[test]
+fn persist_fails_when_the_base_branch_is_missing() {
+    // No `main`, nothing to branch from. Surfacing the 404 beats inventing a
+    // base: a silently wrong base is the bug this whole path exists to avoid.
+    let fx = Fixture::start(vec![Reply::empty(404), Reply::empty(404)]);
+    let w = writer(fx.base_url());
+
+    let err = w
+        .persist(&valid_request(starting_record("attempt-1", None)))
+        .unwrap_err();
+    match err {
+        PersistError::UpstreamStatus { status, op } => {
+            assert_eq!(status, 404);
+            assert_eq!(op, "GET refs/heads/main");
+        }
+        other => panic!("expected UpstreamStatus, got {other:?}"),
+    }
+    assert_eq!(
+        fx.recorded().len(),
+        2,
+        "the writer must stop before POSTing a ref"
+    );
 }
 
 #[test]
@@ -578,14 +656,16 @@ fn persist_adopts_the_winner_tip_when_branch_creation_races() {
     // loser's POST with 422 "Reference already exists"; the loser must adopt
     // the winner's tip instead of failing the persist.
     let mut script = vec![
-        // 0. GET ref → branch absent.
+        // 0. GET automation/verify → branch absent.
         Reply::empty(404),
-        // 1. POST git/refs → lost the race.
+        // 1. GET main → the base we would branch from.
+        main_ref_reply(),
+        // 2. POST git/refs → lost the race.
         Reply::json(
             422,
             serde_json::json!({ "message": "Reference already exists" }),
         ),
-        // 2. GET ref → the winner's tip.
+        // 3. GET automation/verify → the winner's tip.
         get_ref_reply(state_head_sha()),
     ];
     // From here the call is the ordinary happy path anchored on state_head.
@@ -599,21 +679,26 @@ fn persist_adopts_the_winner_tip_when_branch_creation_races() {
     assert_eq!(out.commit_sha, commit_sha());
 
     let recorded = fx.recorded();
-    assert_eq!(recorded.len(), 9, "expected 9 requests, got {recorded:#?}");
-    assert_eq!(recorded[2].method, "GET");
     assert_eq!(
-        recorded[2].url,
+        recorded.len(),
+        10,
+        "expected 10 requests, got {recorded:#?}"
+    );
+    assert_eq!(recorded[3].method, "GET");
+    assert_eq!(
+        recorded[3].url,
         "/repos/owner/repo/git/refs/heads/automation/verify"
     );
-    // Everything after the re-fetch anchors on the winner's tip.
+    // Everything after the re-fetch anchors on the winner's tip, not on the
+    // `main` tip we resolved before losing the race.
     assert!(
-        recorded[3]
+        recorded[4]
             .url
             .ends_with(&format!("?ref={}", state_head_sha())),
         "CAS should target the winner tip, got {}",
-        recorded[3].url,
+        recorded[4].url,
     );
-    let commit_body: serde_json::Value = serde_json::from_str(&recorded[7].body).unwrap();
+    let commit_body: serde_json::Value = serde_json::from_str(&recorded[8].body).unwrap();
     assert_eq!(commit_body["parents"][0], state_head_sha());
 }
 
@@ -1676,13 +1761,16 @@ fn check_persist_reads_but_never_mutates() {
 
 /// A missing state branch is the normal post-merge state. The dry run must
 /// still not create it — that alone would be a write — and instead reads the
-/// CAS anchor from the commit the real persist would have branched from.
+/// CAS anchor from `main`'s tip, the commit the real persist would have
+/// branched from.
 #[test]
 fn check_persist_does_not_create_a_missing_state_branch() {
     let fx = Fixture::start(vec![
-        // 0. GET ref → branch absent.
+        // 0. GET automation/verify → branch absent.
         Reply::empty(404),
-        // 1. CAS GET against `base_sha` → no record there either.
+        // 1. GET main → current tip.
+        main_ref_reply(),
+        // 2. CAS GET against main's tip → no record there either.
         Reply::empty(404),
     ]);
     let w = writer(fx.base_url());
@@ -1691,15 +1779,17 @@ fn check_persist_does_not_create_a_missing_state_branch() {
         .expect("dry run tolerates an absent state branch");
 
     let recorded = fx.recorded();
-    assert_eq!(recorded.len(), 2, "got {recorded:#?}");
+    assert_eq!(recorded.len(), 3, "got {recorded:#?}");
     assert!(
         recorded.iter().all(|r| r.method == "GET"),
         "dry run must not POST git/refs to recreate the branch: {recorded:#?}"
     );
     assert!(
-        recorded[1].url.ends_with(&format!("?ref={}", base_sha())),
-        "CAS must anchor on base_sha when the branch is absent, got {}",
-        recorded[1].url
+        recorded[2]
+            .url
+            .ends_with(&format!("?ref={}", main_tip_sha())),
+        "CAS must anchor on main's tip when the branch is absent, got {}",
+        recorded[2].url
     );
 }
 
