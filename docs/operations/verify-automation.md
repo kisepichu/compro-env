@@ -520,6 +520,12 @@ routine sweep; leaving them in place is harmless.
   wiring bug, not an operational one: `verify-prepare` should have
   answered `fresh`. Check `prepare`'s `action` output against the
   record on `automation/verify`.
+- `couldn't find remote ref automation/verify` in the `resume` job means
+  `prepare` read an in-flight record out of `main` rather than the state
+  branch. `main` should only ever hold terminal records — auto-merge is
+  gated on them — so this points at an automation PR that was merged by
+  hand while still draft. Restore the correct terminal record on `main`
+  (or delete the stale one) and the next tick recovers.
 - Non-`Trackable` `verify-start` outcomes (`Unavailable` /
   `AcceptanceUnknown` / `ConfirmedNotAccepted` / `InfrastructureError`)
   are still captured: `submit` emits their `VerificationRecord` to

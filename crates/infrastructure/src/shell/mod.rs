@@ -470,8 +470,14 @@ pub fn run() -> Result<()> {
                     );
                 }
                 for id in &summary.replan_candidates {
+                    // Spec §8.2 item 2 allows discarding such an attempt, but
+                    // nothing in the pipeline removes a record, so say so
+                    // plainly instead of implying it self-heals. Unreachable
+                    // today: the only OJ with a recovery adapter
+                    // (LibraryChecker, `RecoveryMode::BestEffort`) never
+                    // returns `ConfirmedNotAccepted`.
                     eprintln!(
-                        "verify-resume: {id} was confirmed never accepted by the OJ; it can be re-planned"
+                        "verify-resume: the OJ confirmed {id} was never accepted; an operator must clear the record before it can be re-planned"
                     );
                 }
                 use std::io::Write as _;
