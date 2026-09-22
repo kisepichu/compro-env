@@ -159,7 +159,7 @@ cargo run --bin ce -- solution add librarychecker-aplusb aplusb rust --lang rust
 ```
 
 詳細: `docs/commands/solution.md`。コンテストが未初期化だと
-`contest 'X' is not initialized. Run 'ce init X' first.` で止まる。
+`contest '<contest_id>' is not initialized.` で止まる (3.1 を先に実行する)。
 
 ### 3.3 `ce.toml` を書く
 
