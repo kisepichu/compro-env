@@ -60,6 +60,12 @@ jobs:
       - name: hooks/tests/run.sh (rust bundler regression tests)
         run: bash hooks/tests/run.sh
 
+      # `--language rust` only: the cpp / lean check commands need clang++ and
+      # lake, which this job does not install. A filtered check does not gate
+      # publication (docs/commands/check.md).
+      - name: ce check --language rust (library unit tests)
+        run: cargo run --bin ce -- check --language rust
+
   site:
     name: Static site build (root + /compro-env/)
     runs-on: ubuntu-latest
