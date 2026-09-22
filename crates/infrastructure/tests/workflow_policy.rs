@@ -756,7 +756,9 @@ fn ci_node_setup_uses_node_version_and_cache() {
 }
 
 /// #061.6: The cargo cache step lists the full spec §12.14 paths so restore
-/// hits both crate metadata and target artifacts.
+/// hits both crate metadata and target artifacts. Only the cargo cache is
+/// in scope — ci.yml also caches the prepared/built analyzer trees, which
+/// are keyed on the adapter manifest instead of `Cargo.lock`.
 #[test]
 fn ci_cargo_cache_paths_are_complete() {
     let doc = load_ci();
@@ -778,10 +780,13 @@ fn ci_cargo_cache_paths_are_complete() {
                 .and_then(Value::as_mapping)
                 .expect("cache step needs `with:`");
             let path = get(with, "path").and_then(Value::as_str).unwrap_or("");
-            for needle in ["~/.cargo/registry", "~/.cargo/git", "target"] {
+            if !path.contains("~/.cargo/registry") {
+                continue;
+            }
+            for needle in ["~/.cargo/git", "target"] {
                 assert!(
                     path.contains(needle),
-                    "cache path must contain {needle:?}, got {path:?}"
+                    "cargo cache path must contain {needle:?}, got {path:?}"
                 );
             }
             let key = get(with, "key").and_then(Value::as_str).unwrap_or("");
@@ -795,25 +800,51 @@ fn ci_cargo_cache_paths_are_complete() {
     assert!(ok, "ci.yml must configure a cargo cache");
 }
 
-/// #061.7: The site job invokes `npm ci` (lockfile-only install per §12.15)
-/// and `npm run site:build` exactly once (§12.14's single-entry contract).
-/// Nothing may invoke `npx --yes` (banned package fetch per §12.15).
+/// #061.7: Every site build in ci.yml goes through the single `npm run
+/// site:build` entrypoint (§12.14) after a lockfile-only `npm ci` (§12.15),
+/// and nothing invokes `npx --yes` (banned package fetch per §12.15).
+///
+/// The two invocations are not interchangeable and issue #125 requires both
+/// to exist:
+///
+///  * the bare call pins the Web pipeline against
+///    `web/tests/fixtures/site-data.json`, which is the renderer's
+///    input-boundary regression fixture;
+///  * the `--fixture=target/ce-site-data/site-data.json` call consumes the
+///    site-data `ce site-data generate` just produced from the committed
+///    libraries and solutions, so content mistakes fail in PR CI instead of
+///    on the post-merge Pages deploy.
+///
+/// Collapsing them into one would silently drop whichever coverage the
+/// survivor does not provide.
 #[test]
-fn ci_site_job_uses_npm_ci_and_single_site_build() {
+fn ci_site_builds_cover_both_the_fixture_and_the_real_tree() {
     let doc = load_ci();
     let runs = all_run_steps(&doc);
     let mut npm_ci = 0usize;
-    let mut site_build = 0usize;
+    let mut fixture_builds = Vec::new();
+    let mut real_content_builds = Vec::new();
+    let mut generates = Vec::new();
     let mut banned_npx_yes = Vec::new();
     for (job, run) in &runs {
         if run.contains("npm ci") {
             npm_ci += 1;
         }
-        // Match `npm run site:build` — bare or with -- args.
         for line in run.lines() {
             let l = line.trim();
-            if l.starts_with("npm run site:build") {
-                site_build += 1;
+            if l.contains("site-data generate") {
+                generates.push((job.clone(), l.to_string()));
+            }
+            // Match `npm run site:build` — bare or with -- args.
+            if !l.starts_with("npm run site:build") {
+                continue;
+            }
+            if l.contains("--fixture=target/ce-site-data/site-data.json") {
+                real_content_builds.push(job.clone());
+            } else if !l.contains("--fixture") {
+                fixture_builds.push(job.clone());
+            } else {
+                panic!("ci.yml: unexpected site:build fixture in {job}: {l:?}");
             }
         }
         if run.contains("npx --yes") || run.contains("npx -y ") {
@@ -822,8 +853,29 @@ fn ci_site_job_uses_npm_ci_and_single_site_build() {
     }
     assert!(npm_ci >= 1, "ci.yml must run `npm ci`");
     assert_eq!(
-        site_build, 1,
-        "ci.yml must invoke `npm run site:build` exactly once (got {site_build})"
+        fixture_builds.len(),
+        1,
+        "ci.yml must keep exactly one fixture-backed `npm run site:build` (got {fixture_builds:?})"
+    );
+    assert_eq!(
+        real_content_builds.len(),
+        1,
+        "ci.yml must build the site once from generated site-data (got {real_content_builds:?})"
+    );
+    assert_eq!(
+        generates.len(),
+        1,
+        "ci.yml must run `ce site-data generate` exactly once (got {generates:?})"
+    );
+    let (generate_job, generate_cmd) = &generates[0];
+    assert_eq!(
+        generate_job, &real_content_builds[0],
+        "the real-content site build must consume site-data generated in the same job"
+    );
+    assert!(
+        generate_cmd.contains("--mode preview"),
+        "PR CI has no clean-tree / full `[library.site]` guarantee, so the generator must run \
+         in preview mode like pages.yml does (got {generate_cmd:?})"
     );
     assert!(
         banned_npx_yes.is_empty(),

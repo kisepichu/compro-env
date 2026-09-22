@@ -18,15 +18,20 @@
 2. コミットメッセージは `type(scope): 日本語の要約`。PR タイトル・本文も日本語。
 3. 1 PR = 1 論点。ライブラリ追加と解法追加は分けてよいが、
    **ライブラリの move / rename は参照更新と同じ PR に入れる** (設計文書 §4.1)。
-4. CI が緑になってからマージする。コンテンツ PR に出る check は `.github/workflows/ci.yml` の 2 job:
+4. CI が緑になってからマージする。コンテンツ PR に出る check は `.github/workflows/ci.yml` の 3 job:
    - `CI / Cargo test + clippy + fmt` — `cargo test --all` / `clippy -D warnings` / `fmt --check` /
      `hooks/tests/run.sh` / `ce check` (3 言語のライブラリ検査)
    - `CI / Static site build (root + /compro-env/)` — schema 検証、link チェック、CSP、
      `/` と `/compro-env/` 両 base の build、サイズ summary。
      **入力は fixture (`web/tests/fixtures/site-data.json`) で、リポジトリの実ライブラリではない**
-     (`web/scripts/site-build.mjs` の `--fixture` 既定値)。
+     (`web/scripts/site-build.mjs` の `--fixture` 既定値)。renderer の入力境界を固定するための job なので、
+     実データには切り替えない。
+   - `CI / Real-content site-data build` — **リポジトリの実ライブラリ / 実解法**に対して
+     `ce site-data generate --mode preview` を走らせ、生成された site-data で
+     `npm run site:build` する。merge 後の `pages.yml` と同じ生成・build の組。
+     何を検出するかは 2.5 を参照。
 
-   `push` と `pull_request` の両トリガで起動するため、PR 画面には同名の check が 2 件ずつ (計 4 件) 並ぶ。
+   `push` と `pull_request` の両トリガで起動するため、PR 画面には同名の check が 2 件ずつ (計 6 件) 並ぶ。
    `verify-result-integrity` は head が `automation/verify` の PR 限定なので、コンテンツ PR には出ない。
 
 ## 2. ライブラリを 1 本追加する
@@ -48,7 +53,10 @@ libraries/rust/algebra/monoid.rs
 - **ライブラリ ID = リポジトリ相対パス** (設計文書 §2 / §4.1)。
   後から move / rename すると別 ID になり、旧 URL は 404 になる。redirect は生成しない。
 - 1 ファイル = 1 ページ。単独でコンパイルできる必要はなく、1 ファイルに複数宣言があってもよい。
-- 生 source が 256 KiB を超えると build warning、2 MiB を超えると production build error (設計文書 §12.11)。
+- 生 source が 256 KiB を超えると build warning (設計文書 §12.11)。2 MiB の hard limit は
+  `build.mode` が `production` のときしか効かず、`pages.yml` も CI も `--mode preview` で
+  生成しているため **現状は発火しない**
+  ([issue #131](https://github.com/kisepichu/compro-env/issues/131))。
 
 ### 2.2 単体テストを同じファイルに書く (rust)
 
@@ -95,8 +103,10 @@ reason = "macro-generated dependency"
 - `publish` 既定 `true`。`false` にすると Web ページを作らない (解析対象には残る)。
 - frontmatter なしも可。sidecar 自体なしでもソースページは生成される。
 - 対応するソースがない orphan sidecar は build error。
-- **Markdown 本文に `h1` を書くと build error。** 見出しは `h2` から始め、level を 2 以上飛ばさない
-  (page title が唯一の `h1`。設計文書 §12)。
+- **Markdown 本文に `h1` を書いてはいけない。** 見出しは `h2` から始め、level を 2 以上飛ばさない
+  (page title が唯一の `h1`。設計文書 §12)。renderer 側には拒否の実装があるが、
+  現状 sidecar 本文は site-data に載らないため **この規約はどこでも検査されていない**
+  ([issue #131](https://github.com/kisepichu/compro-env/issues/131))。破っても CI は緑のまま通る。
 - ディレクトリ / 言語 root の説明は `_index.md` に置き、`title` だけを書ける。
 
 ### 2.4 ローカルで確認する (任意)
@@ -125,14 +135,29 @@ CI が自動でやること:
 - `CI / Cargo test + clippy + fmt` の `ce check` → 3 言語すべてのライブラリを検査
   (rust は 2.2 の unit test を実行、cpp は syntax check、lean は elaboration)。
   cpp の `clang++` は runner image 同梱、lean は pin 済み toolchain を install する step がある。
+- `CI / Real-content site-data build` → 実リポジトリに対して
+  `ce site-data generate --mode preview` → `npm run site:build` を走らせる。
+  merge 後の `pages.yml` と同じ組なので、**ここが緑なら pages build も通る**。
 
-CI が **やらないこと**: `CI / Static site build` は fixture に対して web パイプラインを検証するだけで、
-追加したライブラリの frontmatter・`h1` 禁止・サイズ境界は検査しない。
-これらが実データで検査されるのは merge 後の `pages.yml` (`ce site-data generate` →
-`npm run site:build --fixture=target/ce-site-data/site-data.json`) なので、
-frontmatter を壊すと **merge 後に pages build が失敗する**。
-事前に確認したい場合は 5 章「つまずきやすい点」のローカルプレビュー手順を踏む。
-追跡: [issue #125](https://github.com/kisepichu/compro-env/issues/125)。
+`Real-content site-data build` が落とすもの (いずれも generate の discovery 段で exit 1):
+
+| 不正 | エラーメッセージの例 |
+| --- | --- |
+| frontmatter の未知キー | ``unknown field `author`, expected one of `title`, `publish`, `relations`, `dependency_overrides` `` |
+| frontmatter の malformed TOML | `malformed frontmatter in ...: TOML parse error at line 1, column 16` |
+| 空の `title` | ``` `title` must not be empty (omit the key to inherit the default) ``` |
+| orphan sidecar | ``discovery rejected 1 problem(s): [orphan_sidecar] sidecar ... has no corresponding source file`` |
+| `[verify].libraries` が非公開 / 不在のライブラリを指す | ``solution ... verifies library `...` which is not a public discovered library`` |
+| 新規ライブラリが未コミット | `no git history recorded for published library ...` |
+
+CI が **まだ検出しないもの** (実測で確認済み。merge 後の `pages.yml` でも落ちない):
+
+- **sidecar Markdown 本文の `h1` / 見出し level 飛ばし** — 本文が site-data に載らないため
+  renderer が検査する機会がない (2.3)。
+- **source の 2 MiB hard limit** — `--mode preview` では発火しない (2.1)。
+
+どちらも [issue #131](https://github.com/kisepichu/compro-env/issues/131) で追跡している。
+規約自体は生きているので 2.1 / 2.3 に従うこと。CI は守ってくれない。
 
 ### 2.6 cpp / lean の注意
 
@@ -313,8 +338,9 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
   運用者が overlay record を消す必要がある (`docs/operations/verify-automation.md`)。
 - **cpp のヘッダは self-contained でないと `ce check` が落ちる。lean は兄弟ライブラリを `import` できない**
   (2.6 参照)。
-- **ローカルでサイトをプレビューする**のは、frontmatter や `h1` の違反を merge 前に検出する唯一の方法
-  (CI は fixture しか見ない。2.5 参照)。analyzer バイナリが必要:
+- **ローカルのサイトプレビューは必須ではなくなった。** frontmatter と config error は
+  `CI / Real-content site-data build` が同じコマンドで検査する (2.5)。
+  手元で先に潰したいときや、実際の描画を目で見たいときだけ踏む。analyzer バイナリが必要:
 
   ```bash
   ./tools/library-analyzers/prepare && ./tools/library-analyzers/build
@@ -322,8 +348,9 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
   npm run site:build -- --fixture=target/ce-site-data/site-data.json
   ```
 
-  cold run で LLVM (~700MB) と Lean (~500MB) を落とす。sidecar を足さない・単純な追加だけなら
-  省いてよい。
+  cold run で LLVM (~700MB) と Lean (~500MB) を落とす。CI 側は
+  `pages.yml` / `verify.yml` と共有の analyzer cache に当たるのでこの download は通常発生しない。
+  なお **このプレビューでも `h1` とサイズ上限は落ちない** (2.3 / 2.1、issue #131)。
 
 ## 関連
 

@@ -168,6 +168,7 @@ impl LibraryDiscovery {
 
         // Detect orphan sidecars: `.md` files whose source is missing.
         detect_orphan_sidecars(repository_root, config, &libraries, &mut diagnostics)?;
+        reject_error_diagnostics(&diagnostics)?;
 
         let published_library_ids: std::collections::BTreeSet<LibraryId> = libraries
             .iter()
@@ -429,6 +430,29 @@ fn index_md_path(language_root: &str, absolute_root: &Path) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Turn `Error`-severity discovery diagnostics into a hard failure.
+///
+/// `DiscoveryManifest::diagnostics` is an advisory channel: no consumer
+/// inspects severity, so an `Error` left in the manifest would travel all
+/// the way to the published site unnoticed. Spec §5.1 classifies an orphan
+/// sidecar as a build error, so discovery refuses here and the manifest is
+/// left carrying advisory (`Warning`) entries only.
+fn reject_error_diagnostics(diagnostics: &[DiscoveryDiagnostic]) -> anyhow::Result<()> {
+    let detail: Vec<String> = diagnostics
+        .iter()
+        .filter(|d| matches!(d.severity, DiscoverySeverity::Error))
+        .map(|d| format!("  [{}] {}", d.code, d.message))
+        .collect();
+    if detail.is_empty() {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "discovery rejected {} problem(s):\n{}",
+        detail.len(),
+        detail.join("\n")
+    ))
 }
 
 fn detect_orphan_sidecars(

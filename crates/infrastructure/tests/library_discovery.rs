@@ -102,22 +102,20 @@ fn empty_language_produces_warning_diagnostic() {
 }
 
 #[test]
-fn orphan_sidecar_is_reported_as_error_diagnostic() {
+fn orphan_sidecar_is_rejected() {
     let tmp = copy_fixture_tree();
     // Add a sidecar without a sibling source.
     let orphan = tmp.path().join("libraries/rust/ghost.rs.md");
     std::fs::write(&orphan, "+++\ntitle = \"Ghost\"\n+++\n").unwrap();
 
     let config = ProjectLibraryConfigLoader::load(tmp.path()).unwrap();
-    let manifest = LibraryDiscovery::discover(tmp.path(), &config).unwrap();
+    let err = LibraryDiscovery::discover(tmp.path(), &config).unwrap_err();
 
+    let rendered = format!("{err:#}");
+    assert!(rendered.contains("orphan_sidecar"), "{rendered}");
     assert!(
-        manifest
-            .diagnostics
-            .iter()
-            .any(|d| d.code == "orphan_sidecar" && matches!(d.severity, DiscoverySeverity::Error)),
-        "diagnostics: {:?}",
-        manifest.diagnostics
+        rendered.contains("libraries/rust/ghost.rs.md"),
+        "{rendered}"
     );
 }
 

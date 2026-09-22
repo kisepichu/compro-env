@@ -150,3 +150,118 @@ jobs:
               fi
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+  content:
+    # Closes the gap issue #125 describes: the `site` job above pins the Web
+    # pipeline against `web/tests/fixtures/site-data.json`, so nothing in PR
+    # CI ever looked at the libraries and solutions actually committed to
+    # this repository. That job stays fixture-bound on purpose (it is the
+    # renderer's input-boundary regression test); this one runs the same
+    # generator/build pair `pages.yml` runs after merge, against the real
+    # tree, so content mistakes fail here instead of on the deploy.
+    name: Real-content site-data build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # `ce site-data generate` resolves `library.updated_at` from
+          # `git log` per source path and fails when a published library has
+          # no recorded history, so a shallow clone is not enough.
+          fetch-depth: 0
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable @ 2026-08
+        with:
+          toolchain: 1.92.0
+
+      - name: Install Node (pinned via .node-version)
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6.5.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          # `target/debug`, not `target`: the extracted LLVM and Lean
+          # installs live under `target/library-analyzers` and have their
+          # own caches below. A bare `target` entry swallows them — an
+          # earlier revision measured a 6.2GB upload against a 10GB
+          # repository budget. A `!target/library-analyzers` exclusion does
+          # not help: the glob already resolved `target` to a directory, so
+          # tar packs it whole. Every binary this job runs (`ce`,
+          # `library-adapter-prepare`, `library-adapter-build`) is a debug
+          # build, so nothing else under `target` is worth carrying.
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+          key: ${{ runner.os }}-cargo-content-${{ hashFiles('**/Cargo.lock') }}
+          # No `${{ runner.os }}-cargo-` fallback to the `rust` job's cache:
+          # a restore key only matches entries saved under the same `path`
+          # list, and that job caches all of `target`. Measured on run
+          # 35749767850 — "Cache not found for input keys: ...,
+          # Linux-cargo-" while `Linux-cargo-<same hash>` existed on main.
+          restore-keys: |
+            ${{ runner.os }}-cargo-content-
+
+      - name: Cache prepared adapter dependencies
+        # Same key as pages.yml / verify.yml / verify-worker.yml. Those run
+        # on `main`, and default-branch caches are visible to every PR, so
+        # this job normally restores instead of re-downloading ~1.2GB.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: target/library-analyzers/prepared
+          key: ${{ runner.os }}-analyzers-prepared-${{ hashFiles('tools/library-analyzers/dependencies.toml') }}
+
+      - name: Cache built analyzer binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            target/library-analyzers/builds
+            target/library-analyzers/bin
+          key: ${{ runner.os }}-analyzers-builds-${{ hashFiles('tools/library-analyzers/**', 'crates/library-adapter-protocol/**', 'crates/domain/src/adapter_build.rs', 'crates/domain/src/adapter_prepare.rs', 'crates/infrastructure/src/library_adapter/**', 'Cargo.lock', 'rust-toolchain.toml') }}
+
+      - name: Install dependencies (lockfile-only)
+        run: npm ci
+
+      - name: Install analyzer build dependencies
+        # `library-adapter-build` compiles cpp-analyzer with cmake + ninja;
+        # ubuntu-latest ships neither. Unconditional so a cache miss on the
+        # builds key never lands on a runner without them.
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build
+
+      - name: Prepare library analyzer dependencies
+        run: ./tools/library-analyzers/prepare
+
+      - name: Build library analyzer executables
+        # Mirrors pages.yml: `--check` returns 0 even when nothing is built
+        # yet, so test the `bin` symlink first to tell "warm cache" apart
+        # from "never built".
+        run: |
+          set -euo pipefail
+          if [ -L target/library-analyzers/bin ] && ./tools/library-analyzers/build --check; then
+            echo "Warm cache: analyzer build already finalized."
+            exit 0
+          fi
+          ./tools/library-analyzers/build
+
+      - name: Generate site-data from the committed libraries and solutions
+        # This is where content mistakes surface: discovery rejects malformed
+        # or unknown sidecar frontmatter keys, empty titles, orphan sidecars,
+        # and `[verify].libraries` entries that name a non-public library,
+        # all before the analyzers are even invoked.
+        run: cargo run --bin ce -- site-data generate --mode preview
+
+      - name: Build the site from the real site-data
+        # `--mode preview` matches pages.yml. Running the Web pipeline over
+        # real site-data costs a few seconds on top of the generator and
+        # catches schema / renderer failures that only real IDs, real
+        # dependency graphs, and real verification state can produce.
+        run: npm run site:build -- --fixture=target/ce-site-data/site-data.json
