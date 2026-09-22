@@ -33,6 +33,13 @@ invoked. Downstream tools consume the JSON directly.
 
 ## Behaviour
 
+- Discovery runs before the analyzers, so sidecar and `ce.toml` problems
+  fail fast: malformed or unknown frontmatter keys, an empty `title`, an
+  orphan sidecar (a `.md` with no sibling source), and a
+  `[verify].libraries` entry that does not name a public discovered
+  library all abort with exit code 1. Advisory findings (`empty_language`)
+  stay in `DiscoveryManifest::diagnostics`; anything at `Error` severity
+  aborts instead (spec §5.1).
 - The projection function is deterministic: given identical inputs it
   produces byte-identical `SiteData`. The CLI's `site-data.json` will
   differ across runs by the `build.generated_at` timestamp (`Utc::now()`
