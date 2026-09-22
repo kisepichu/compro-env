@@ -22,7 +22,9 @@
    - `CI / Cargo test + clippy + fmt` — `cargo test --all` / `clippy -D warnings` / `fmt --check` /
      `hooks/tests/run.sh` / `ce check --language rust`
    - `CI / Static site build (root + /compro-env/)` — schema 検証、link チェック、CSP、
-     `/` と `/compro-env/` 両 base の build、サイズ summary
+     `/` と `/compro-env/` 両 base の build、サイズ summary。
+     **入力は fixture (`web/tests/fixtures/site-data.json`) で、リポジトリの実ライブラリではない**
+     (`web/scripts/site-build.mjs` の `--fixture` 既定値)。
 
    `push` と `pull_request` の両トリガで起動するため、PR 画面には同名の check が 2 件ずつ (計 4 件) 並ぶ。
    `verify-result-integrity` は head が `automation/verify` の PR 限定なので、コンテンツ PR には出ない。
@@ -117,7 +119,13 @@ cargo run --bin ce -- check --language rust
 CI が自動でやること:
 
 - `CI / Cargo test + clippy + fmt` の `ce check --language rust` → 2.2 の unit test を実行
-- `CI / Static site build` → frontmatter schema、内部リンク、`h1` 禁止、サイズ境界の検査
+
+CI が **やらないこと**: `CI / Static site build` は fixture に対して web パイプラインを検証するだけで、
+追加したライブラリの frontmatter・`h1` 禁止・サイズ境界は検査しない。
+これらが実データで検査されるのは merge 後の `pages.yml` (`ce site-data generate` →
+`npm run site:build --fixture=target/ce-site-data/site-data.json`) なので、
+frontmatter を壊すと **merge 後に pages build が失敗する**。
+事前に確認したい場合は 5 章「ローカルでサイトをプレビューする」の手順を踏む。
 
 ### 2.6 cpp / lean の注意
 
@@ -289,11 +297,17 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
 - **`Unavailable` は永久 dead-letter。** fingerprint drift では復活しないので、
   運用者が overlay record を消す必要がある (`docs/operations/verify-automation.md`)。
 - **cpp / lean のライブラリは `ce check` で検査されない** ([issue #122](https://github.com/kisepichu/compro-env/issues/122))。
-- **ローカルでサイトをプレビューするには analyzer バイナリが必要。**
-  `ce site-data generate` は `target/library-analyzers/prepared` を要求するので、事前に
-  `./tools/library-analyzers/prepare && ./tools/library-analyzers/build` を実行する。
-  cold run で LLVM (~700MB) と Lean (~500MB) を落とすため、通常は CI の
-  `Static site build` に任せるほうが早い。
+- **ローカルでサイトをプレビューする**のは、frontmatter や `h1` の違反を merge 前に検出する唯一の方法
+  (CI は fixture しか見ない。2.5 参照)。analyzer バイナリが必要:
+
+  ```bash
+  ./tools/library-analyzers/prepare && ./tools/library-analyzers/build
+  cargo run --bin ce -- site-data generate --mode preview
+  npm run site:build -- --fixture=target/ce-site-data/site-data.json
+  ```
+
+  cold run で LLVM (~700MB) と Lean (~500MB) を落とす。sidecar を足さない・単純な追加だけなら
+  省いてよい。
 
 ## 関連
 
