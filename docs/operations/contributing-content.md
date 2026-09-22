@@ -27,7 +27,7 @@
      (`web/scripts/site-build.mjs` の `--fixture` 既定値)。renderer の入力境界を固定するための job なので、
      実データには切り替えない。
    - `CI / Real-content site-data build` — **リポジトリの実ライブラリ / 実解法**に対して
-     `ce site-data generate --mode preview` を走らせ、生成された site-data で
+     `ce site-data generate --mode production` を走らせ、生成された site-data で
      `npm run site:build` する。merge 後の `pages.yml` と同じ生成・build の組。
      何を検出するかは 2.5 を参照。
 
@@ -53,10 +53,9 @@ libraries/rust/algebra/monoid.rs
 - **ライブラリ ID = リポジトリ相対パス** (設計文書 §2 / §4.1)。
   後から move / rename すると別 ID になり、旧 URL は 404 になる。redirect は生成しない。
 - 1 ファイル = 1 ページ。単独でコンパイルできる必要はなく、1 ファイルに複数宣言があってもよい。
-- 生 source が 256 KiB を超えると build warning (設計文書 §12.11)。2 MiB の hard limit は
-  `build.mode` が `production` のときしか効かず、`pages.yml` も CI も `--mode preview` で
-  生成しているため **現状は発火しない**
-  ([issue #133](https://github.com/kisepichu/compro-env/issues/133))。
+- 生 source が 256 KiB を超えると build warning、2 MiB を超えると build error
+  (設計文書 §12.11)。`pages.yml` も `CI / Real-content site-data build` も
+  `--mode production` で生成するので、hard limit は PR CI の時点で発火する。
 
 ### 2.2 単体テストを同じファイルに書く (rust)
 
@@ -144,7 +143,7 @@ CI が自動でやること:
   (rust は 2.2 の unit test を実行、cpp は syntax check、lean は elaboration)。
   cpp の `clang++` は runner image 同梱、lean は pin 済み toolchain を install する step がある。
 - `CI / Real-content site-data build` → 実リポジトリに対して
-  `ce site-data generate --mode preview` → `npm run site:build` を走らせる。
+  `ce site-data generate --mode production` → `npm run site:build` を走らせる。
   merge 後の `pages.yml` と同じ組なので、**ここが緑なら pages build も通る**。
 
 `Real-content site-data build` が落とすもの:
@@ -159,13 +158,10 @@ CI が自動でやること:
 | `[[relations]]` が不在ライブラリ / 自分自身を指す、同じ `kind` / target の重複 | generate (入力収集) | ``libraries/rust/algebra/monoid.rs.md: relation `port` points at `...`, which is not a managed library (spec §5.1)`` |
 | `[[dependency_overrides]]` が `remove` / `resolve` / `external`、または別言語を `add` | generate (入力収集) | ``... dependency override `action = "remove"` is not supported by site-data generation yet; only `add` is applied`` |
 | 新規ライブラリが未コミット | generate (projection) | `no git history recorded for published library ...` |
+| 生 source が 2 MiB 超 | site:build (renderer) | `SourceRenderError: Source "algebra/huge.rs" is 2101382 bytes; the hard limit is 2097152 bytes.` |
 | sidecar 本文の `h1` / 見出し level 飛ばし | site:build (renderer) | `MarkdownRenderError: Documentation must not include a level-1 heading; the page owns the <h1>.` |
 
-CI が **まだ検出しないもの** (実測で確認済み。merge 後の `pages.yml` でも落ちない):
-
-- **source の 2 MiB hard limit** — `--mode preview` では発火しない (2.1)。
-  [issue #133](https://github.com/kisepichu/compro-env/issues/133) で追跡している。
-  規約自体は生きているので 2.1 に従うこと。CI は守ってくれない。
+CI が **まだ検出しないもの**: 現時点では既知の穴は無い。
 
 ### 2.6 cpp / lean の注意
 
@@ -358,8 +354,9 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
 
   cold run で LLVM (~700MB) と Lean (~500MB) を落とす。CI 側は
   `pages.yml` / `verify.yml` と共有の analyzer cache に当たるのでこの download は通常発生しない。
-  このプレビューは CI と同じ組なので `h1` も落ちるが、**サイズ上限だけは落ちない**
-  (2.1、[issue #133](https://github.com/kisepichu/compro-env/issues/133))。
+  ローカルは作業ツリーが汚れている前提なので `--mode preview` を使う。CI / pages は
+  `--mode production` なので、この手順では **サイズ上限だけは落ちない** (2.1)。
+  サイズ上限も手元で見たいときは、ツリーを commit 済みにして `--mode production` を渡す。
 
 ## 関連
 

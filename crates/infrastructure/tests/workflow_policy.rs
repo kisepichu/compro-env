@@ -873,9 +873,11 @@ fn ci_site_builds_cover_both_the_fixture_and_the_real_tree() {
         "the real-content site build must consume site-data generated in the same job"
     );
     assert!(
-        generate_cmd.contains("--mode preview"),
-        "PR CI has no clean-tree / full `[library.site]` guarantee, so the generator must run \
-         in preview mode like pages.yml does (got {generate_cmd:?})"
+        generate_cmd.contains("--mode production"),
+        "the mode is not cosmetic: `build.mode` in the emitted site-data is what \
+         arms the renderer's 2 MiB public-source hard limit (§12.11), so PR CI \
+         must gate exactly like the publish build or an oversized file merges \
+         and fails on the deploy instead (#133) (got {generate_cmd:?})"
     );
     assert!(
         banned_npx_yes.is_empty(),
@@ -1205,6 +1207,37 @@ fn pages_build_emits_source_sha_metadata() {
     assert!(
         source_sha.is_some_and(|s| s.contains("steps.") && s.contains("source_sha")),
         "outputs.source_sha must wire to a step output (got {source_sha:?})"
+    );
+}
+
+/// #133: the published build generates site-data in production mode. Only
+/// `build.mode == "production"` arms the renderer's 2 MiB hard limit on public
+/// source (§12.11) and the strict `[library.site]` metadata requirement
+/// (§12.14); under preview both are advisory, so the limits existed on paper
+/// and fired nowhere. The overlay step is compatible: the clean-tree check
+/// ignores `verification/results/**` (see `GitHistoryImpl::head_snapshot`).
+#[test]
+fn pages_generates_site_data_in_production_mode() {
+    let doc = load_pages();
+    let generates: Vec<String> = all_run_steps(&doc)
+        .iter()
+        .flat_map(|(_, run)| {
+            run.lines()
+                .map(str::trim)
+                .filter(|l| l.contains("site-data generate"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(
+        generates.len(),
+        1,
+        "pages.yml must run `ce site-data generate` exactly once (got {generates:?})"
+    );
+    assert!(
+        generates[0].contains("--mode production"),
+        "the publish build must generate in production mode (got {:?})",
+        generates[0]
     );
 }
 

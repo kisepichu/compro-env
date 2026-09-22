@@ -537,6 +537,17 @@ describe("Library detail (/libraries/{lang}/{source-path}/)", () => {
       doc.querySelector('meta[name="description"]')!.getAttribute("content"),
     ).toBe("Dijkstra — rust library in compro-env fixture.");
   });
+
+  it("carries build.mode into the public-source size gate", async () => {
+    // #133: the detail pages used to hardcode `mode: "preview"`, so the
+    // 2 MiB hard limit could never fire no matter how site-data was built.
+    const data = buildFixtureSiteData();
+    data.build.mode = "production";
+    data.libraries[0].source = "y".repeat(2 * 1024 * 1024 + 1);
+    await expect(
+      renderLibraryDetailPage(rootConfig, data, data.libraries[0]),
+    ).rejects.toThrow(/hard limit/);
+  });
 });
 
 // ---- Solutions root, contest, problem, detail ----
@@ -715,6 +726,16 @@ describe("Solution browse and detail", () => {
     expect(doc.getElementById("verification")).toBeNull();
     const status = doc.querySelector("article header .status-badge")!;
     expect(status.getAttribute("data-status")).toBe("not_configured");
+  });
+
+  it("solution detail carries build.mode into the public-source size gate", async () => {
+    // Same #133 plumbing bug as the library detail page, separate call site.
+    const data = buildFixtureSiteData();
+    data.build.mode = "production";
+    data.solutions[0].source = "y".repeat(2 * 1024 * 1024 + 1);
+    await expect(
+      renderSolutionDetailPage(rootConfig, data, data.solutions[0]),
+    ).rejects.toThrow(/hard limit/);
   });
 });
 

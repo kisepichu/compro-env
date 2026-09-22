@@ -281,6 +281,17 @@ export async function renderSource(
 }
 
 /**
+ * Forward render warnings (size soft limit, highlighter fallbacks) to the
+ * build log. `renderSource` returns them instead of printing so the renderer
+ * stays pure; a caller that drops them drops the only channel they have.
+ */
+export function reportSourceWarnings(warnings: readonly string[]): void {
+  for (const w of warnings) {
+    console.warn(`[source] ${w}`);
+  }
+}
+
+/**
  * Alias for {@link renderSource}. Kept for symmetry with the plan's
  * `renderSourceBlock` name; both return the full `<section id="source">`.
  */

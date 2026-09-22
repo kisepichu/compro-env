@@ -15,6 +15,13 @@ pub struct RepositorySnapshot {
     pub commit_sha: String,
     pub short_sha: String,
     pub committed_at: DateTime<FixedOffset>,
+    /// Whether the working tree carries changes to *source or config*.
+    ///
+    /// Verification records (`verification/results/**`) are excluded: the
+    /// publish workflow overlays them from the `automation/verify` state
+    /// branch before generating site-data, so they are build input that by
+    /// design does not belong to the source commit. Counting them would make
+    /// `--mode production` unusable for the only build that publishes.
     pub uncommitted_changes: bool,
 }
 

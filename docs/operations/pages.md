@@ -21,11 +21,16 @@ group with `cancel-in-progress: true`:
    record actually landed on `automation/verify`.
 2. **`build`** — read-only, gated on `needs.gate.outputs.should_build`.
    Checkout pinned to `ref: main` with full history, Node pinned via
-   `.node-version`, `npm ci`, `ce site-data generate`, then `npm run
-   site:build`. Writes `web/dist/build-source.json` with the source commit
-   SHA and site schema version, and uploads `web/dist` as a temporary Pages
-   artifact. The source SHA comes from `git rev-parse HEAD` (the
-   checked-out `main` tip), not from `github.sha`.
+   `.node-version`, `npm ci`, `ce site-data generate --mode production`,
+   then `npm run site:build`. Writes `web/dist/build-source.json` with the
+   source commit SHA and site schema version, and uploads `web/dist` as a
+   temporary Pages artifact. The source SHA comes from `git rev-parse HEAD`
+   (the checked-out `main` tip), not from `github.sha`.
+
+   Production mode is what arms the strict `[library.site]` requirement and
+   the 2 MiB hard limit on public source (spec §12.11, §12.14). It coexists
+   with the overlay step because the clean-tree check skips
+   `verification/results/**` — see `docs/commands/site-data.md`.
 3. **`deploy`** — the only place with `pages: write` / `id-token: write`.
    Bound to the `github-pages` environment. Before invoking
    `actions/deploy-pages`, it resolves the current `main` HEAD through the
