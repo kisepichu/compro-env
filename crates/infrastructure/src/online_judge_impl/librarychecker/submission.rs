@@ -307,6 +307,24 @@ impl SubmissionPoller for LibraryCheckerPoller {
     }
 }
 
+/// Whether an overall submission status means the judge is done with the
+/// attempt.
+///
+/// Terminal statuses are an explicit allowlist. Anything else — `WJ`, the
+/// bare `-` Library Checker reports before a submission is picked up, and
+/// any status added by a future judge release — is treated as still
+/// pending so an unjudged submission can never be persisted as a terminal
+/// verdict. The caller keeps polling within its budget and resumes on the
+/// next tick via `BudgetExhausted`.
+fn is_terminal_status(status: &str) -> bool {
+    matches!(status, "AC" | "WA" | "TLE" | "MLE" | "RE" | "CE" | "IE")
+}
+
+/// Maps a status string to a verdict.
+///
+/// Used for both the overall status (already narrowed to
+/// [`is_terminal_status`]) and per-testcase statuses, where an unjudged
+/// case legitimately reports `-`; those keep the `Other` fallback.
 fn map_verdict(status: &str) -> JudgeVerdict {
     match status {
         "AC" => JudgeVerdict::Accepted,
@@ -340,12 +358,14 @@ fn map_memory_kib(memory: i64) -> Option<u32> {
 fn map_observation(
     info: schema::SubmissionInfoResponse,
 ) -> Result<PollObservation, PollSubmissionError> {
-    match info.overview.status.as_str() {
-        "WJ" => return Ok(PollObservation::Queued),
-        "Judging" | "J" => return Ok(PollObservation::Judging),
-        _ => {}
+    let status = info.overview.status.as_str();
+    if matches!(status, "Judging" | "J") {
+        return Ok(PollObservation::Judging);
     }
-    let verdict = map_verdict(&info.overview.status);
+    if !is_terminal_status(status) {
+        return Ok(PollObservation::Queued);
+    }
+    let verdict = map_verdict(status);
     let testcases = info
         .case_results
         .unwrap_or_default()
@@ -662,5 +682,82 @@ mod tests {
         assert!(locator.starts_with("aplusb:cpp:sha256:"));
         // sha256 hex is 64 chars.
         assert_eq!(locator.len(), "aplusb:cpp:sha256:".len() + 64);
+    }
+
+    /// Builds a `GET /submissions/{id}` payload with the given overall
+    /// status and a single unjudged case, mirroring what Library Checker
+    /// serves for a submission it has not finished judging.
+    fn info_with_status(status: &str) -> schema::SubmissionInfoResponse {
+        let json = format!(
+            r#"{{"overview":{{"id":395075,"problem_name":"aplusb","lang":"rust",
+               "is_latest":true,"status":"{status}","time":-1.0,"memory":-1}},
+               "source":"fn main() {{}}","can_rejudge":false,
+               "case_results":[{{"case":"example_00","status":"-","time":-1.0,"memory":-1}}]}}"#
+        );
+        serde_json::from_str(&json).expect("fixture parses")
+    }
+
+    /// Regression (submission 395075): Library Checker answers `-` while the
+    /// submission is still waiting for a worker. Treating it as terminal
+    /// persisted a `Completed{Other("-")}` record with every testcase blank.
+    #[test]
+    fn bare_dash_status_is_pending_not_completed() {
+        assert_eq!(
+            map_observation(info_with_status("-")).expect("maps"),
+            PollObservation::Queued
+        );
+    }
+
+    #[test]
+    fn unknown_status_is_pending() {
+        for status in ["SOMETHING_NEW", ""] {
+            assert_eq!(
+                map_observation(info_with_status(status)).expect("maps"),
+                PollObservation::Queued,
+                "status {status:?} must not be terminal"
+            );
+        }
+    }
+
+    #[test]
+    fn wj_is_queued_and_judging_variants_are_judging() {
+        assert_eq!(
+            map_observation(info_with_status("WJ")).expect("maps"),
+            PollObservation::Queued
+        );
+        for status in ["Judging", "J"] {
+            assert_eq!(
+                map_observation(info_with_status(status)).expect("maps"),
+                PollObservation::Judging,
+                "status {status:?} must report Judging"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_statuses_complete_with_their_verdict() {
+        let cases = [
+            ("AC", JudgeVerdict::Accepted),
+            ("WA", JudgeVerdict::WrongAnswer),
+            ("TLE", JudgeVerdict::TimeLimitExceeded),
+            ("MLE", JudgeVerdict::MemoryLimitExceeded),
+            ("RE", JudgeVerdict::RuntimeError),
+            ("CE", JudgeVerdict::CompilationError),
+            ("IE", JudgeVerdict::InternalError),
+        ];
+        for (status, expected) in cases {
+            match map_observation(info_with_status(status)).expect("maps") {
+                PollObservation::Completed(result) => {
+                    assert_eq!(result.verdict, expected, "status {status:?}");
+                    // The `Other` fallback still applies per testcase: an
+                    // unjudged case reports `-` even on a terminal verdict.
+                    assert_eq!(
+                        result.testcases[0].verdict,
+                        JudgeVerdict::Other("-".to_string())
+                    );
+                }
+                other => panic!("status {status:?} must be Completed, got {other:?}"),
+            }
+        }
     }
 }
