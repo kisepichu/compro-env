@@ -134,12 +134,15 @@ long-lived pull request from `automation/verify` → `main`:
 area that holds in-flight records only; once the PR merges, `main` owns
 them (§15.1). The repository has **Settings → General → Automatically
 delete head branches** enabled, so merging the automation PR deletes
-`automation/verify` and the next `persist_starting` recreates it from the
-current `main` tip. `ce internal pick-candidate` therefore reads the
-records merged into `main` as its base and overlays the branch's records
-on top (per solution, the overlay wins because it is the newer
-observation). A tick that runs while the branch does not exist still sees
-every merged record, so nothing already verified gets resubmitted.
+`automation/verify`. The next `persist_starting` gets a 404 from `GET
+/git/refs/heads/automation/verify` and recreates the branch from its
+immutable `main@base_sha` plan anchor via `POST /git/refs`, so the CAS
+then reads exactly the record that merge landed on `main`.
+`ce internal pick-candidate` likewise reads the records merged into
+`main` as its base and overlays the branch's records on top (per
+solution the overlay wins, because it is the newer observation). A tick
+that runs while the branch does not exist still sees every merged
+record, so nothing already verified gets resubmitted.
 
 Why the deletion matters: the first automation PR to merge left
 `automation/verify` in place, so its merge base stayed pinned at the
@@ -198,16 +201,11 @@ Complete every step below before flipping `VERIFY_ACTIVATED` to
    - Environment secret: `LIBRARYCHECKER_REFRESH_TOKEN` = the Firebase
      refresh token captured by running `ce login` against Library
      Checker manually.
-6. Bootstrap the `automation/verify` state branch from the current
-   `main` tip: `git push origin main:automation/verify`. Every
-   `persist_*` job's CAS assumes this ref already exists; without it
-   the first `persist_starting` fails opaquely with
-   `PATCH refs/heads/automation/verify → 404`.
-7. Under **Settings → Actions → Variables** (repository scope), add
+6. Under **Settings → Actions → Variables** (repository scope), add
    `VERIFY_ACTIVATED = true`. This is the master activation switch;
    setting it back to `false` disables the workflow without needing
    to delete the environments or rotate secrets.
-8. Decide whether unattended ticks may submit to the OJ. Leave
+7. Decide whether unattended ticks may submit to the OJ. Leave
    `VERIFY_LIVE` unset for a dry-run-only pipeline (`push` and
    `schedule` exercise `prepare` + `persist_starting` only); add
    `VERIFY_LIVE = true` under the same **Settings → Actions →
@@ -218,20 +216,24 @@ Complete every step below before flipping `VERIFY_ACTIVATED` to
    without touching `VERIFY_ACTIVATED`. Rate limiting does not depend
    on this switch — the picker submits at most one solution per tick
    and retries follow the backoff ladder below.
-9. Enable branch protection on `main` with these required status
+8. Enable branch protection on `main` with these required status
    checks: `CI / Cargo test + clippy + fmt`, `CI / Web build`, and any
    `verify-result-integrity` check that surfaces on the automation
    PRs.
-10. Enable **Settings → General → Allow auto-merge** so the bot's
-    terminal-verdict PRs can auto-merge once all required checks pass.
-11. Enable **Settings → General → Automatically delete head branches**
+9. Enable **Settings → General → Allow auto-merge** so the bot's
+   terminal-verdict PRs can auto-merge once all required checks pass.
+10. Enable **Settings → General → Automatically delete head branches**
     (`gh api -X PATCH repos/<owner>/<repo> -f
     delete_branch_on_merge=true`). Merging the automation PR must delete
     `automation/verify`; leaving the branch alive pins its merge base and
     makes every later result push conflict with `main` forever. See
     "Record ownership and branch lifecycle" above.
-12. Record the completion date, the App ID, and the PEM fingerprint in
+11. Record the completion date, the App ID, and the PEM fingerprint in
     your operator log. Never commit the PEM itself.
+
+The `automation/verify` state branch needs no manual bootstrap:
+`persist_starting` creates it from `main@base_sha` whenever the ref is
+absent, which is also how it comes back after each merge.
 
 Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
 
