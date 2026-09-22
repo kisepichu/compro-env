@@ -144,6 +144,12 @@ pub enum InternalSubcommand {
     /// writer. Reads a plan-hash file and a candidate-record JSON. Never
     /// contacts an online judge; the plan-hash gate lives on this
     /// (secret-bearing) side of the automation split (spec §15.1, §15.4).
+    ///
+    /// There is no base-commit flag: when `automation/verify` is absent the
+    /// writer recreates it from `main`'s tip as observed at that moment
+    /// (spec §15.1). A commit frozen at plan time would already be stale by
+    /// the time this job runs and would open a conflicting automation PR
+    /// (issue #130 problem 2).
     #[command(hide = true)]
     VerifyPersist {
         /// Path to the immutable plan hash file produced by the secretless
@@ -157,9 +163,6 @@ pub enum InternalSubcommand {
         /// `owner/repo` slug of the target repository.
         #[arg(long)]
         repository: String,
-        /// Main branch commit SHA the plan was built against (40 lowercase hex).
-        #[arg(long)]
-        base_sha: String,
         /// Name of the env var carrying the App installation token. Its value
         /// is never echoed or logged.
         #[arg(long, default_value = "GITHUB_TOKEN")]

@@ -31,8 +31,9 @@ group (§15.3):
 
 **Worker — `verify-worker.yml`**
 
-`workflow_call`-only, with inputs `after` (immutable plan base SHA),
-`mode`, and `solution` (empty means no work this run). The dispatcher
+`workflow_call`-only, with inputs `mode` and `solution` (empty means no
+work this run). There is no base-commit input — see "Which commit the
+state branch is recreated from" below. The dispatcher
 resolves `mode` as
 `inputs.mode || (vars.VERIFY_LIVE == 'true' && 'live' || 'dry-run')`:
 an explicit `workflow_dispatch` `mode` always wins, otherwise the
@@ -56,9 +57,10 @@ below):
 
 The fresh chain:
 
-1. **`prepare`** — secretless. Checks out `main@base_sha`, then
-   overlays `verification/results/**` from the `automation/verify`
-   state branch so `verify-prepare` can read the current record. That
+1. **`prepare`** — secretless. Checks out the commit that triggered the
+   tick, then overlays `verification/results/**` from the
+   `automation/verify` state branch so `verify-prepare` can read the
+   current record. That
    record decides the run's `action`: in-flight means `resume` and
    nothing is frozen; otherwise the attempt id becomes the plan's
    `previous_attempt_id` (the CAS token consumed by
@@ -77,8 +79,8 @@ The fresh chain:
    symlinks), plus `plan.json` / `starting.json` on the fresh path
    only, and uploads the `verify-plan` (fresh only), `verify-ce`, and
    `verify-analyzers` artifacts. Emits `has_work`, `action`,
-   `solution_id`, `plan_sha`, `ce_sha`, `analyzers_sha`, and `base_sha`
-   outputs consumed by the rest of the chain. All analyzer
+   `solution_id`, `plan_sha`, `ce_sha`, and `analyzers_sha` outputs
+   consumed by the rest of the chain. All analyzer
    prepare/build steps (and the supporting apt install) are gated on
    `inputs.solution != ''`, so a scheduled tick with no candidate skips
    the entire prelude. The adapter caches key on
@@ -94,7 +96,7 @@ The fresh chain:
    ${{ secrets.VERIFY_APP_PRIVATE_KEY }}`), and runs
    `./ce internal verify-persist --plan-hash-in plan.sha256
    --candidate-in starting.json --repository ${{ github.repository }}
-   --base-sha $BASE_SHA --token-env GH_APP_TOKEN`. The token is passed
+   --token-env GH_APP_TOKEN`. The token is passed
    through the environment only, never on the command line. On
    `dry-run` the same command gets `--dry-run` appended, which runs
    every guard and the compare-and-swap read and then stops before the
@@ -196,8 +198,10 @@ intended trade against a duplicate submission.
 worker is not `live`, and skips the PR update entirely. The dry run
 still mints the App token, resolves the repository, runs every guard
 clause, and performs the compare-and-swap read; it stops before the
-first mutating API call. A missing `automation/verify` branch is read
-through `base_sha` rather than created.
+first mutating API call. When `automation/verify` is absent the dry run
+reads the CAS anchor from `main`'s tip — the same commit the real
+persist would have branched from — and still does not create the
+branch.
 
 This exists because the previous behaviour guaranteed an orphan: a
 dry-run tick wrote `Starting` and then skipped every downstream job, so
@@ -242,10 +246,10 @@ long-lived pull request from `automation/verify` → `main`:
 area that holds in-flight records only; once the PR merges, `main` owns
 them (§15.1). The repository has **Settings → General → Automatically
 delete head branches** enabled, so merging the automation PR deletes
-`automation/verify`. The next `persist_starting` gets a 404 from `GET
-/git/refs/heads/automation/verify` and recreates the branch from its
-immutable `main@base_sha` plan anchor via `POST /git/refs`, so the CAS
-then reads exactly the record that merge landed on `main`.
+`automation/verify`. The next `persist_*` gets a 404 from `GET
+/git/refs/heads/automation/verify` and recreates the branch from
+`main`'s current tip via `POST /git/refs`, so the CAS then reads
+exactly the record that merge landed on `main`.
 `ce internal pick-candidate` likewise reads the records merged into
 `main` as its base and overlays the branch's records on top (per
 solution the overlay wins, because it is the newer observation). A tick
@@ -260,6 +264,65 @@ one file independently — a permanent add/add conflict (PR #118) that
 re-running the worker could not clear. Deleting the branch on merge
 resets the merge base each cycle, which is exactly why the merged
 records have to be readable from `main`.
+
+**Which commit the state branch is recreated from.** The base is
+`main`'s tip *as resolved by the persist job itself*, one HTTP request
+before `POST /git/refs`. It is deliberately not the commit the run
+planned against, and no workflow input carries a base commit.
+
+A run freezes its plan in `prepare` and reaches the App-only
+`persist_*` jobs minutes later. Merging an automation PR **always**
+rewrites `verification/results/**`. So if a merge lands inside that
+window, a branch recreated from the run's frozen commit has a merge
+base that predates the merge, and `main` and the branch both carry an
+independent edit of the same record file: the automation PR is
+`CONFLICTING` the moment it opens, auto-merge never fires, and a human
+has to resolve it. That is exactly what happened to PR #129 on
+2026-09-22 (issue #130 problem 2). Run 35744285107 was triggered by the
+PR #127 merge and pinned `after=8f00074`. While it was still building,
+PR #128 (15:00:30) and PR #118 (15:01:27) merged; #118 rewrote
+`verification/results/librarychecker-aplusb/aplusb/rust.json` and its
+merge deleted `automation/verify`, leaving `main` at `f6534b1`. At
+15:12:49 that run's `persist_starting` recreated the branch at
+`8f00074`, two merges stale, and PR #129 opened at 15:12:58 already
+`CONFLICTING`.
+
+Nothing is lost by using a newer base. The record content comes from
+the run; the CAS token (`replaces_attempt_id`) is compared against
+whatever the anchor commit actually holds, so a newer base is checked
+against fresher truth, not weaker truth. Plan immutability is a
+separate mechanism: `prepare` publishes `plan.sha256` and every
+secret-bearing job re-validates the artifact digest before running, so
+the plan cannot change regardless of which commit the branch starts
+from. That gate must stay; `plan artifact digest mismatch` is a real
+failure, never something to relax.
+
+The submit / poll / resume jobs check out `automation/verify` for its
+project tree, which is therefore whatever `main` commit the branch was
+last recreated from — not necessarily the plan's. That is fine:
+`verify-start` submits the frozen `plan.json` bytes and uses the
+checkout only to boot `find_project_root`, the config loader, and
+`build_analysis`. The one visible consequence is that deleting a
+solution from `main` mid-flight makes the in-flight attempt fail loudly
+instead of submitting a solution that no longer exists.
+
+**Residual race.** `main` can still advance between the tip lookup and
+`POST /git/refs`. The window is one HTTP round trip instead of the
+ten-plus minutes it used to be, and it is left unguarded on purpose:
+
+- If the POST loses a creation race against a concurrent run, GitHub
+  answers 422 "Reference already exists" and the writer adopts the
+  winner's tip, re-runs the CAS against it, and commits on top. No
+  write is lost and the persist does not fail.
+- If `main` moves right after the branch is created, the branch is one
+  merge behind. The automation PR may conflict, exactly as before, but
+  only for that cycle: merging (or closing) it deletes the branch, and
+  the next run recreates it from a fresh tip. No state is stranded,
+  because merged records are read from `main` by both the picker and
+  the CAS.
+- An existing `automation/verify` is never re-based on `main`. Only
+  creation resolves a base; re-basing would drop the in-flight records
+  already committed to the branch.
 
 A `verify` run whose `persist_terminal` job succeeded triggers
 `pages.yml` through `workflow_run`, so a new record is published
@@ -341,7 +404,7 @@ Complete every step below before flipping `VERIFY_ACTIVATED` to
     your operator log. Never commit the PEM itself.
 
 The `automation/verify` state branch needs no manual bootstrap: a `live`
-`persist_starting` creates it from `main@base_sha` whenever the ref is
+`persist_starting` creates it from `main`'s tip whenever the ref is
 absent, which is also how it comes back after each merge. A `dry-run`
 `persist_starting` deliberately does not create it.
 
