@@ -249,9 +249,10 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
 
 **基本的に何もしなくてよい。**
 
-1. 5 分ごとの cron (`.github/workflows/verify.yml` の `schedule`) が `ce internal pick-candidate` で
-   候補を 1 件選ぶ。新規解法は「record が存在しない」ので対象になる。
-   ライブラリだけを変えた場合も、依存する解法の fingerprint がずれるので対象になる。
+1. マージの `main` push で dispatcher が起動し、変更分類が `source-or-config` なら
+   `ce internal pick-candidate` が候補を 1 件選ぶ。5 分ごとの cron でも同じ picker が回る
+   (`.github/workflows/verify.yml`)。新規解法は「record が存在しない」ので対象になり、
+   ライブラリだけを変えた場合も依存する解法の fingerprint がずれるので対象になる。
 2. repository variable `VERIFY_LIVE` が `true` なら、そのまま OJ 提出まで自動で進む。
    未設定 (既定) の場合は dry-run で `persist_starting` まで進んで止まるので、
    そのときだけ 1 回手で叩く:
@@ -279,7 +280,7 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
   `src/libs.rs` に集約しているのは、この基準を 1 箇所に固定して `main.rs` を短く保つため。
 - **ライブラリを変えると依存解法が Stale になる。** fingerprint 入力に closure のソースが入るため。
   ページには `Source or dependencies changed since the last submission.` が出る。
-  次の tick で picker が再検証を拾うので、待てば消える。
+  live 提出が有効なら次以降の tick で picker が再検証を拾うので待てば消える。dry-run のままだと消えない。
 - **fingerprint は preprocess 前の生ソースから計算される** (PR #120)。
   preprocess 後のバイト列は `submitted_source_hash` として別に記録される。
   source を書き換える preprocess hook を足しても fingerprint はずれない。
