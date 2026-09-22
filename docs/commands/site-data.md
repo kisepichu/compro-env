@@ -26,7 +26,16 @@ defined by the `site-schema` crate. The DTO round-trips against
   populated `[library.site]` block **and** a clean working tree; `preview`
   allows the entire `[library.site]` block to be omitted (individual
   fields are still all-or-nothing) and does not gate on uncommitted
-  changes.
+  changes. `build.mode` is carried into the emitted JSON, where the Web
+  renderer uses it to decide whether the 2 MiB public-source limit is a
+  hard error or a warning (spec §12.11), so the published build and PR CI
+  both run `production`.
+
+  The clean-tree check ignores `verification/results/**`. `pages.yml`
+  overlays that tree from the `automation/verify` state branch before
+  generating, so those records are build input that deliberately does not
+  belong to the source commit; everything else (source, sidecars,
+  `config.toml`, solution `ce.toml`) still has to be committed.
 
 The command runs entirely offline: no Node, Astro, or Pagefind binary is
 invoked. Downstream tools consume the JSON directly.

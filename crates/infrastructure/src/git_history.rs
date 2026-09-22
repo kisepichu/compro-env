@@ -57,7 +57,22 @@ impl GitHistory for GitHistoryImpl {
         let committed_at = DateTime::parse_from_rfc3339(&iso)
             .with_context(|| format!("could not parse git commit timestamp {iso:?}"))?;
 
-        let status = self.run(&["status", "--porcelain"])?;
+        // `verification/results/**` is excluded on purpose: `pages.yml`
+        // overlays that tree from the `automation/verify` state branch right
+        // before generating site-data, so a record that is newer than the
+        // merged copy shows up as a working-tree modification on every
+        // publish. Those records are build input, not source, and the
+        // repository already classifies them apart from source/config (see
+        // `git_change_classifier::ChangeClass::ResultOnly`). `:/` anchors both
+        // pathspecs at the repository root so the result does not depend on
+        // the process working directory.
+        let status = self.run(&[
+            "status",
+            "--porcelain",
+            "--",
+            ":/",
+            ":(exclude,top)verification/results",
+        ])?;
         let uncommitted_changes = !status.stdout.is_empty();
 
         Ok(RepositorySnapshot {

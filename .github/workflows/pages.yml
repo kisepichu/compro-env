@@ -195,7 +195,15 @@ jobs:
           fi
 
       - name: Generate site-data
-        run: ./target/release/ce site-data generate --mode preview
+        # `--mode production` is the mode the design doc (§12.14) assigns to
+        # the published build: it enforces the full `[library.site]` metadata
+        # block and, through `build.mode` in the emitted JSON, arms the
+        # renderer's 2 MiB hard limit on public source (§12.11). Running
+        # `--mode preview` here left that limit permanently disarmed (#133).
+        # The overlay step above does not fight the clean-tree requirement:
+        # `verification/results/**` is excluded from it on purpose (see
+        # `GitHistoryImpl::head_snapshot`).
+        run: ./target/release/ce site-data generate --mode production
 
       - name: Build site (production pipeline)
         env:

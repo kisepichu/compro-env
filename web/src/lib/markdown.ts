@@ -21,7 +21,7 @@
  */
 
 import type { Root as HastRoot } from "hast";
-import type { Root as MdastRoot } from "mdast";
+import type { Nodes as MdastNodes, Root as MdastRoot } from "mdast";
 
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
@@ -215,4 +215,84 @@ export function renderDocumentation(description: string): string {
   // Pagefind: descriptions are mid-weight (spec §13) — above source, below
   // titles / symbol names.
   return `<div id="documentation" class="documentation" data-pagefind-weight="5">${html}</div>`;
+}
+
+// ---- Meta description ----
+
+/**
+ * Upper bound of a generated `<meta name="description">`, in Unicode scalar
+ * values. Spec §12.10: "description Markdown がある detail は、rendered plain
+ * text の空白を畳み、先頭 160 Unicode scalar value までを description 候補に
+ * する".
+ */
+export const META_DESCRIPTION_MAX_SCALARS = 160;
+
+/**
+ * Node types whose children are block-level. Their children are joined with a
+ * space so text that renders on separate lines is not glued together: plain
+ * concatenation turns a `## Overview` heading followed by a paragraph into
+ * `OverviewComputes ...`, and two list items into `firstsecond`.
+ */
+const BLOCK_CONTAINER_TYPES: Record<string, true> = {
+  root: true,
+  blockquote: true,
+  list: true,
+  listItem: true,
+  table: true,
+  tableRow: true,
+  footnoteDefinition: true,
+};
+
+/** Text content of one mdast node, with block boundaries turned into spaces. */
+function mdastPlainText(node: MdastNodes): string {
+  switch (node.type) {
+    case "text":
+    case "inlineCode":
+    case "code":
+      return node.value;
+    case "break":
+      return " ";
+    default:
+      break;
+  }
+  if (!("children" in node)) return "";
+  const separator = BLOCK_CONTAINER_TYPES[node.type] === true ? " " : "";
+  return node.children.map(mdastPlainText).join(separator);
+}
+
+/**
+ * Parser-only pipeline. `renderMarkdown` cannot be reused here: it runs the
+ * structural validation and sanitization plugins and returns HTML, while a
+ * meta description needs the text before any of that. GFM stays on so table
+ * cells and strikethrough contribute their text instead of their syntax.
+ */
+const META_DESCRIPTION_PARSER = unified().use(remarkParse).use(remarkGfm).freeze();
+
+/**
+ * Build a `<meta name="description">` candidate out of documentation Markdown.
+ *
+ * Markdown syntax never reaches the tag: the mdast text content is used, so
+ * heading markers, backticks, emphasis markers, link destinations and table
+ * pipes are dropped. Whitespace — including the blank lines between blocks —
+ * collapses to single spaces, and the result is cut to the first
+ * `META_DESCRIPTION_MAX_SCALARS` Unicode scalar values.
+ *
+ * Returns `""` when the Markdown carries no text, so callers fall back to a
+ * synthesized description. Never throws: the structural contract is enforced
+ * by `renderMarkdown` when the same body is rendered into the page.
+ */
+export function markdownToMetaDescription(markdown: string): string {
+  const tree = META_DESCRIPTION_PARSER.parse(markdown);
+  const collapsed = mdastPlainText(tree).replace(/\s+/g, " ").trim();
+  // A UTF-16 length within the budget bounds the scalar count too, so the
+  // common case never walks the string a second time.
+  if (collapsed.length <= META_DESCRIPTION_MAX_SCALARS) return collapsed;
+  let end = 0;
+  let scalars = 0;
+  for (const ch of collapsed) {
+    if (scalars === META_DESCRIPTION_MAX_SCALARS) break;
+    end += ch.length;
+    scalars += 1;
+  }
+  return collapsed.slice(0, end).trimEnd();
 }

@@ -18,9 +18,9 @@ import type {
   SymbolAnalysisPublic,
   VerificationEvidence,
 } from "../site-data-types.ts";
-import { renderDocumentation } from "../markdown.ts";
+import { markdownToMetaDescription, renderDocumentation } from "../markdown.ts";
 import { sanitizeExternalUrl } from "../safe-url.ts";
-import { renderSource } from "../source.ts";
+import { renderSource, reportSourceWarnings } from "../source.ts";
 import {
   homePath,
   librariesRootPath,
@@ -657,8 +657,12 @@ async function renderLibraryDetailArticleInner(
     sourcePath: lib.source_path,
     repositoryUrl: siteData.site.repository_url ?? null,
     commitSha: siteData.build.source_commit_short_sha,
-    mode: "preview",
+    // The size boundary (spec §12.11) is mode-dependent: over 2 MiB is a hard
+    // error for a published build and a warning for a local preview. A
+    // hardcoded "preview" disarmed it for every build there is (#133).
+    mode: siteData.build.mode,
   });
+  reportSourceWarnings(sourceResult.warnings);
   const sourceSection = sourceResult.html;
   return (
     `<header class="page-header">` +
@@ -770,9 +774,12 @@ export async function renderLibraryDetailPage(
     lib.language,
     ...splitSourcePath(lib.source_path),
   ];
+  // The sidecar body is Markdown; `<meta>` needs collapsed plain text, not
+  // the raw source with its heading markers, backticks and newlines.
+  const summary = markdownToMetaDescription(lib.description ?? "");
   const description =
-    lib.description && lib.description.trim().length > 0
-      ? lib.description
+    summary.length > 0
+      ? summary
       : `${lib.title} — ${lib.language} library in ${siteData.site.title}.`;
   const mainInnerHtml = await renderLibraryDetailMainInner(config, siteData, lib);
   return renderDocument({

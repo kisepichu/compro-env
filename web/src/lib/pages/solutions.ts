@@ -14,7 +14,7 @@ import type {
   SolutionPageData,
 } from "../site-data-types.ts";
 import { sanitizeExternalUrl } from "../safe-url.ts";
-import { renderSource } from "../source.ts";
+import { renderSource, reportSourceWarnings } from "../source.ts";
 import {
   libraryPath,
   solutionsRootPath,
@@ -399,9 +399,12 @@ async function renderSolutionDetailArticleInner(
     sourcePath: sol.source_path,
     repositoryUrl: siteData.site.repository_url ?? null,
     commitSha: siteData.build.source_commit_short_sha,
-    mode: "preview",
+    // Same size boundary as library sources (spec §12.11); the mode has to
+    // come from the build that produced this site-data (#133).
+    mode: siteData.build.mode,
     notesHtml: preprocessNote,
   });
+  reportSourceWarnings(sourceResult.warnings);
   const sourceSection = sourceResult.html;
   const privateDepNote = sol.has_private_dependencies
     ? `<p class="private-dependencies-note">This solution also depends on private libraries.</p>`
