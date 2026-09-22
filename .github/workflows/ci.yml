@@ -256,12 +256,16 @@ jobs:
         # This is where content mistakes surface: discovery rejects malformed
         # or unknown sidecar frontmatter keys, empty titles, orphan sidecars,
         # and `[verify].libraries` entries that name a non-public library,
-        # all before the analyzers are even invoked.
+        # all before the analyzers are even invoked. Input collection then
+        # rejects relations pointing at unknown libraries and dependency
+        # override actions the projection cannot apply.
         run: cargo run --bin ce -- site-data generate --mode preview
 
       - name: Build the site from the real site-data
         # `--mode preview` matches pages.yml. Running the Web pipeline over
         # real site-data costs a few seconds on top of the generator and
         # catches schema / renderer failures that only real IDs, real
-        # dependency graphs, and real verification state can produce.
+        # dependency graphs, and real verification state can produce —
+        # including the sidecar heading contract (`h1` is a build error),
+        # which the renderer can only check now that bodies reach site-data.
         run: npm run site:build -- --fixture=target/ce-site-data/site-data.json

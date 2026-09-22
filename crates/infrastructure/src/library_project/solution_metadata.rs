@@ -41,6 +41,9 @@ pub struct VerifyBlock {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContestCeToml {
     pub display_title: Option<String>,
+    /// `online_judge` written by `ce init`. Used to label solution pages
+    /// whose contest has no completed verification record yet.
+    pub online_judge: Option<String>,
 }
 
 // ─── Entry points ────────────────────────────────────────────────────────────
@@ -71,6 +74,10 @@ fn parse_contest_ce_toml_from_str(contents: &str, source: &Path) -> anyhow::Resu
         .with_context(|| format!("failed to parse {}", source.display()))?;
     Ok(ContestCeToml {
         display_title: raw.library.and_then(|l| l.title),
+        online_judge: raw
+            .online_judge
+            .map(|oj| oj.trim().to_string())
+            .filter(|oj| !oj.is_empty()),
     })
 }
 
@@ -101,6 +108,7 @@ struct RawVerifyBlock {
 #[derive(Debug, Default, Deserialize)]
 struct RawContestCeToml {
     library: Option<RawContestLibrarySection>,
+    online_judge: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

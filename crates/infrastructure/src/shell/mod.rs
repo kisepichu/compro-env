@@ -347,11 +347,18 @@ pub fn run() -> Result<()> {
                     output,
                     mode: parsed_mode,
                 };
-                let empty_oj = std::collections::BTreeMap::new();
-                let empty_rel = std::collections::BTreeMap::new();
-                let empty_manual = std::collections::BTreeMap::new();
-                let empty_preprocess = std::collections::BTreeMap::new();
-                let empty_desc = std::collections::BTreeMap::new();
+                let submit_preprocess = ConfigImpl::new(root.clone()).submit_preprocess();
+                let inputs = match crate::library_project::site_inputs::SiteDataInputs::collect(
+                    &root,
+                    &manifest,
+                    submit_preprocess.as_deref(),
+                ) {
+                    Ok(inputs) => inputs,
+                    Err(e) => {
+                        eprintln!("{e:#}");
+                        std::process::exit(1);
+                    }
+                };
                 match controller.site_data_generate(
                     &input,
                     &root,
@@ -361,11 +368,11 @@ pub fn run() -> Result<()> {
                     &verifications,
                     &git,
                     &site_data_repo,
-                    &empty_oj,
-                    &empty_rel,
-                    &empty_manual,
-                    &empty_preprocess,
-                    &empty_desc,
+                    &inputs.oj_by_contest,
+                    &inputs.relations,
+                    &inputs.manual_dependency_edges,
+                    &inputs.solution_has_preprocess,
+                    &inputs.library_descriptions,
                 ) {
                     Ok(dir) => {
                         println!("wrote {}", dir.display());
