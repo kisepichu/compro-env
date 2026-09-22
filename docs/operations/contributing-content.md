@@ -15,6 +15,7 @@
 
 1. `main` へ直接コミットしない。ブランチ名は `<type>/<短い要約>`。実運用の type は
    `feat/` `fix/` `refactor/` `docs/` `chore/` (`git log --oneline --merges` 参照)。
+   merge するとリモートブランチは自動削除される (`delete_branch_on_merge`)。
 2. コミットメッセージは `type(scope): 日本語の要約`。PR タイトル・本文も日本語。
 3. 1 PR = 1 論点。ライブラリ追加と解法追加は分けてよいが、
    **ライブラリの move / rename は参照更新と同じ PR に入れる** (設計文書 §4.1)。
@@ -307,9 +308,12 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
    `ce internal pick-candidate` が候補を 1 件選ぶ。5 分ごとの cron でも同じ picker が回る
    (`.github/workflows/verify.yml`)。新規解法は「record が存在しない」ので対象になり、
    ライブラリだけを変えた場合も依存する解法の fingerprint がずれるので対象になる。
+   picker は in-flight record を持つ解法も返すので、前回の tick が途中で終わっていれば
+   worker が resume する (`docs/operations/verify-automation.md` の
+   "Resume: how a stuck attempt gets unstuck")。
 2. repository variable `VERIFY_LIVE` が `true` なら、そのまま OJ 提出まで自動で進む。
-   未設定 (既定) の場合は dry-run で `persist_starting` まで進んで止まるので、
-   そのときだけ 1 回手で叩く:
+   未設定 (既定) の場合、tick は走るが OJ に触れず **record も書かない** ので、
+   検証を進めたいときだけ 1 回手で叩く:
 
    ```bash
    gh workflow run verify.yml -f mode=live -f solution=librarychecker-aplusb/aplusb/rust
@@ -319,9 +323,12 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
    `docs/operations/verify-automation.md` の G2 手順 8)。
 3. terminal record が `automation/verify` に入ると、`pages.yml` が `workflow_run` トリガで
    自動的に再ビルド・再デプロイする。**`gh workflow run pages.yml` を手で叩く必要はない。**
-4. 確認先:
-   - `automation/verify` ブランチの
-     `verification/results/<contest_id>/<problem_code>/<solution_name>.json`
+4. "Automation: verification results" PR が自動で作られ、terminal verdict で ready + auto-merge
+   になる。merge されると record が `main` に入り、`automation/verify` は自動削除される。
+   次の tick が必要になった時点で main の tip から作り直される。
+5. 確認先:
+   - `main` の `verification/results/<contest_id>/<problem_code>/<solution_name>.json`
+     (merge 済みの正本。`automation/verify` は in-flight 中だけ存在する作業ブランチ)
    - 自動生成される "Automation: verification results" PR
    - 公開サイトの該当ライブラリ / 解法ページ
 
@@ -339,7 +346,8 @@ cargo run --bin ce -- test librarychecker-aplusb aplusb rust
   preprocess 後のバイト列は `submitted_source_hash` として別に記録される。
   source を書き換える preprocess hook を足しても fingerprint はずれない。
 - **`Unavailable` は永久 dead-letter。** fingerprint drift では復活しないので、
-  運用者が overlay record を消す必要がある (`docs/operations/verify-automation.md`)。
+  運用者が record を消す必要がある (`docs/operations/verify-automation.md`)。
+  record は merge 済みなら `main`、in-flight 中なら `automation/verify` にある。
 - **cpp のヘッダは self-contained でないと `ce check` が落ちる。lean は兄弟ライブラリを `import` できない**
   (2.6 参照)。
 - **ローカルのサイトプレビューは必須ではなくなった。** frontmatter と config error は
