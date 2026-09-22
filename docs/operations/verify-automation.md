@@ -44,34 +44,45 @@ the input cannot submit. `VERIFY_LIVE` is independent of
 `VERIFY_ACTIVATED`: the latter decides whether the pipeline runs at
 all, the former only whether it contacts the OJ.
 All jobs live in the `verify-heavy` concurrency group with
-`cancel-in-progress: false`. The six jobs form a strict `needs:`
-chain:
+`cancel-in-progress: false`.
+
+`prepare` decides which of two chains runs by writing `fresh` or `resume`
+to its `action` output (see "Resume: how a stuck attempt gets unstuck"
+below):
+
+- **fresh** — `prepare → persist_starting → submit → persist_handle →
+  poll → persist_terminal`, a strict `needs:` chain.
+- **resume** — `prepare → resume → persist_resume`.
+
+The fresh chain:
 
 1. **`prepare`** — secretless. Checks out `main@base_sha`, then
    overlays `verification/results/**` from the `automation/verify`
-   state branch so `verify-prepare` can read the current terminal
-   record's attempt id and stamp it as the plan's
+   state branch so `verify-prepare` can read the current record. That
+   record decides the run's `action`: in-flight means `resume` and
+   nothing is frozen; otherwise the attempt id becomes the plan's
    `previous_attempt_id` (the CAS token consumed by
-   `persist_starting`). Builds `ce`, then runs
+   `persist_starting`) and a plan is frozen. Builds `ce`, then runs
    `tools/library-analyzers/prepare` + `tools/library-analyzers/build`
    to materialize the pinned adapter executables under
    `target/library-analyzers/bin/*-analyzer`. Only after those exist
    does it invoke `ce internal verify-prepare --plan-out plan.json
-   --starting-out starting.json` — `build_analysis` fans out over every
-   language declared in `config.toml`, and a missing adapter surfaces
-   as `adapter executable for language ... not found`. `prepare` then
-   computes SHA256 for `plan.json`, the `ce` binary, and the
-   `analyzers.tar` bundle (`tar --dereference` of `bin/` plus the
-   accumulated `builds/`, so downstream jobs receive plain files
-   instead of the `bin/*-analyzer -> builds/<build-id>/...`
-   symlinks), and uploads the `verify-plan`, `verify-ce`, and
-   `verify-analyzers` artifacts. Emits `has_work`, `plan_sha`,
-   `ce_sha`, `analyzers_sha`, and `base_sha` outputs consumed by the
-   rest of the chain. All analyzer prepare/build steps (and the
-   supporting apt install) are gated on `inputs.solution != ''`, so a
-   scheduled tick with no candidate skips the entire prelude. The
-   adapter caches key on `hashFiles(dependencies.toml)` (prepared
-   archives) and
+   --starting-out starting.json --action-out action` —
+   `build_analysis` fans out over every language declared in
+   `config.toml`, and a missing adapter surfaces as `adapter executable
+   for language ... not found`. `prepare` then computes SHA256 for the
+   `ce` binary and the `analyzers.tar` bundle (`tar --dereference` of
+   `bin/` plus the accumulated `builds/`, so downstream jobs receive
+   plain files instead of the `bin/*-analyzer -> builds/<build-id>/...`
+   symlinks), plus `plan.json` / `starting.json` on the fresh path
+   only, and uploads the `verify-plan` (fresh only), `verify-ce`, and
+   `verify-analyzers` artifacts. Emits `has_work`, `action`,
+   `solution_id`, `plan_sha`, `ce_sha`, `analyzers_sha`, and `base_sha`
+   outputs consumed by the rest of the chain. All analyzer
+   prepare/build steps (and the supporting apt install) are gated on
+   `inputs.solution != ''`, so a scheduled tick with no candidate skips
+   the entire prelude. The adapter caches key on
+   `hashFiles(dependencies.toml)` (prepared archives) and
    `hashFiles(tools/library-analyzers/**, crates/library-adapter-protocol/**, crates/domain/src/adapter_build.rs, crates/domain/src/adapter_prepare.rs, crates/infrastructure/src/library_adapter/**, Cargo.lock, rust-toolchain.toml)`
    (built binaries), so a cold run downloading LLVM 22.1 (~700MB) and
    Lean 4.30 (~500MB) only happens when those inputs change.
@@ -84,7 +95,10 @@ chain:
    `./ce internal verify-persist --plan-hash-in plan.sha256
    --candidate-in starting.json --repository ${{ github.repository }}
    --base-sha $BASE_SHA --token-env GH_APP_TOKEN`. The token is passed
-   through the environment only, never on the command line.
+   through the environment only, never on the command line. On
+   `dry-run` the same command gets `--dry-run` appended, which runs
+   every guard and the compare-and-swap read and then stops before the
+   first mutating call — see "Dry run writes nothing" below.
 3. **`submit`** — `oj-library-checker` environment,
    `permissions: contents: read`. Skipped unless `inputs.mode ==
    'live'`. Downloads the `verify-plan`, `verify-ce`, and
@@ -106,6 +120,97 @@ chain:
    terminal record and releases the automation PR to ready-for-review
    when the verdict is terminal.
 
+The resume chain replaces jobs 2–6 when `action == 'resume'`:
+
+1. **`prepare`** — as above, but freezes no plan and emits no
+   `verify-plan` artifact.
+2. **`resume`** — `oj-library-checker` environment. Checks out
+   `automation/verify`, downloads the same digest-pinned `verify-ce` +
+   `verify-analyzers` artifacts, and runs
+   `./ce internal verify-resume --solution <id>`. That command drives
+   the *stored* attempt forward — OJ recovery for `Starting` /
+   `AcceptanceUnknown`, `poll_handle` for anything holding a handle —
+   and never calls the starter, so it cannot double-submit. Uploads the
+   post-resume record as the `verify-resumed` artifact.
+3. **`persist_resume`** — `verify-state` environment. Persists that
+   record and updates the automation PR, exactly like
+   `persist_terminal`. It passes no `--plan-hash-in`: a resume freezes
+   no plan, so there is no plan artifact to pin. The record still
+   arrives through the same digest-validated artifact channel.
+
+### Resume: how a stuck attempt gets unstuck
+
+Spec §15.1 step 7 says a timeout or transient failure leaves the record
+in place and "the next worker resumes it". Reaching that from CI takes
+two cooperating pieces:
+
+1. **The picker offers in-flight solutions.** `ce internal
+   pick-candidate` returns a solution whose latest record is `Starting`,
+   `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging`, or a retryable
+   `InfrastructureFailure`. Without this the dispatcher sets
+   `run_worker=false` and no worker ever sees the record again — that
+   was issue #130: one dangling record permanently removed a solution
+   from verification.
+2. **The worker resumes instead of re-planning.** `verify-prepare` reads
+   the record itself (not a flag the dispatcher computed) and answers
+   `resume`, so the `resume` / `persist_resume` pair runs and the whole
+   fresh chain is skipped.
+
+Deciding in the worker, from the record it re-reads at the head of its
+own run, is deliberate: minutes can pass between the dispatcher tick and
+the worker start, and an automation PR merging in between changes the
+answer.
+
+What `verify-resume` does per state (spec §8.2, §8.3):
+
+| stored state | action |
+| --- | --- |
+| `Starting`, `AcceptanceUnknown` | OJ recovery. A uniquely identified submission is adopted as a handle and polled; anything ambiguous stays `AcceptanceUnknown` and waits for an operator. |
+| `Submitted`, `Queued`, `Judging` | Poll the stored handle to terminal. |
+| `InfrastructureFailure` **with** a handle | Poll the stored handle. Never re-start: the OJ already accepted this attempt. |
+| `InfrastructureFailure` **without** a handle | Not a resume — `RetryReady`, so the fresh chain re-plans with a new attempt id. |
+
+The safety invariant is one-directional: every state that could
+correspond to a submission the OJ already holds resumes. Only states
+that provably never reached the OJ are re-planned. `verify-resume` never
+calls the starter at all, so a wrong answer here cannot double-submit —
+the worst case is a wasted recovery lookup.
+
+Picker priority, highest first, mirroring
+`submission_lifecycle::resume_pending` so `ce verify` and CI converge on
+the same target: `Starting` → `AcceptanceUnknown` → handle present →
+`InfrastructureFailure` retry-ready → never-verified / drifted.
+
+Resume needs the OJ, so it only runs when the worker is `live`. On
+`dry-run` ticks an in-flight record simply waits.
+
+An `AcceptanceUnknown` that recovery cannot resolve is re-attempted on
+every live tick and keeps the automation PR draft. That is spec §8.2's
+"do not auto-resubmit, wait for recovery or a human" — it also means one
+such record holds up the queue until an operator clears it, which is the
+intended trade against a duplicate submission.
+
+### Dry run writes nothing
+
+`persist_starting` appends `--dry-run` to `verify-persist` whenever the
+worker is not `live`, and skips the PR update entirely. The dry run
+still mints the App token, resolves the repository, runs every guard
+clause, and performs the compare-and-swap read; it stops before the
+first mutating API call. A missing `automation/verify` branch is read
+through `base_sha` rather than created.
+
+This exists because the previous behaviour guaranteed an orphan: a
+dry-run tick wrote `Starting` and then skipped every downstream job, so
+no submission ever matched the record. Spec §15.1 orders the pipeline as
+"push the record, *then* POST to the OJ" — a run that never POSTs must
+never push. Run 35744300231 stranded exactly such a record on
+2026-09-22 and the solution stopped being verified until the branch was
+deleted by hand.
+
+Key rotation still verifies through `mode: dry-run`: an invalid App key
+fails the token mint or the authenticated `GET`, so the rehearsal is
+just as diagnostic as before.
+
 ### Automation PR
 
 Every `persist_*` job appends a `ce internal verify-pr-set-state` step
@@ -119,7 +224,8 @@ long-lived pull request from `automation/verify` → `main`:
   idempotent).
 - `persist_starting` and `persist_handle` keep the PR draft — the
   attempt is still mid-flight.
-- `persist_terminal` inspects the persisted record and flips the PR to
+- `persist_terminal` and `persist_resume` inspect the persisted record
+  and flip the PR to
   **ready-for-review + auto-merge** when the state is:
   - `Completed{Accepted | WrongAnswer | TimeLimitExceeded |
     MemoryLimitExceeded | RuntimeError | CompileError |
@@ -129,6 +235,8 @@ long-lived pull request from `automation/verify` → `main`:
   (`Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging`,
   `InfrastructureFailure`) leave the PR draft — the outcome is either
   indeterminate or still in flight, so a human decides.
+- `dry-run` skips the PR step altogether: it persisted nothing, so
+  opening a pull request for it would be as wrong as pushing the record.
 
 **Record ownership and branch lifecycle.** `automation/verify` is a work
 area that holds in-flight records only; once the PR merges, `main` owns
@@ -207,7 +315,8 @@ Complete every step below before flipping `VERIFY_ACTIVATED` to
    to delete the environments or rotate secrets.
 7. Decide whether unattended ticks may submit to the OJ. Leave
    `VERIFY_LIVE` unset for a dry-run-only pipeline (`push` and
-   `schedule` exercise `prepare` + `persist_starting` only); add
+   `schedule` rehearse `prepare` + `persist_starting` and write
+   nothing); add
    `VERIFY_LIVE = true` under the same **Settings → Actions →
    Variables** page to let the 5-minute scheduler and `main` pushes
    take the OJ path. `gh variable set VERIFY_LIVE -b true -R
@@ -231,9 +340,10 @@ Complete every step below before flipping `VERIFY_ACTIVATED` to
 11. Record the completion date, the App ID, and the PEM fingerprint in
     your operator log. Never commit the PEM itself.
 
-The `automation/verify` state branch needs no manual bootstrap:
+The `automation/verify` state branch needs no manual bootstrap: a `live`
 `persist_starting` creates it from `main@base_sha` whenever the ref is
-absent, which is also how it comes back after each merge.
+absent, which is also how it comes back after each merge. A `dry-run`
+`persist_starting` deliberately does not create it.
 
 Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
 
@@ -257,15 +367,18 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
   input.
 - **`VERIFY_LIVE` decides what an unattended tick does.** Unset (or
   anything but `true`): the picked candidate runs in `dry-run`, which
-  stops after `persist_starting` and never contacts the OJ. `true`:
-  the same tick runs `live` and submits. Flipping the variable takes
-  effect on the next tick — no workflow edit, no re-dispatch. This is
+  stops after `persist_starting`, never contacts the OJ, and writes
+  nothing to `automation/verify`. `true`:
+  the same tick runs `live` and submits (or resumes). Flipping the
+  variable takes effect on the next tick — no workflow edit, no
+  re-dispatch. This is
   also the narrow emergency stop: setting it to `false` halts OJ
   contact while leaving classification, the picker, and the state
   branch running.
 - **Manual dispatch** via `workflow_dispatch`: supply a `solution` (e.g.
   `librarychecker-aplusb/aplusb/rust`) plus `mode: dry-run` for a
-  no-OJ pass that exercises `prepare` and `persist_starting` only, or
+  no-OJ pass that exercises `prepare` and `persist_starting` without
+  writing anything, or
   `mode: live` for a real Library Checker submission. The dispatched
   `mode` overrides `VERIFY_LIVE` in both directions. An explicit
   `solution:` always wins over the picker; leave it blank to let the
@@ -303,16 +416,23 @@ winning per solution — a solution is eligible when its latest record
 is:
 
 - absent (no verification has ever run), OR
+- in-flight (`Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`,
+  `Judging`): the worker resumes it, see "Resume: how a stuck attempt
+  gets unstuck", OR
 - `InfrastructureFailure { retryable: true }` whose `next_retry_at`
-  has elapsed or is `None`, OR
+  has elapsed or is `None` — with a handle it resumes by polling,
+  without one it re-plans, OR
 - `Completed` whose stored `fingerprint` disagrees with the
   freshly-recomputed fingerprint from the working tree (input drift).
 
-Every other state is excluded. The five in-flight variants
-(`Starting`, `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging`)
-never advance out of the picker — the worker's CAS is the sole
-race guard, and the picker just avoids wasted OJ hits.
-`InfrastructureFailure { retryable: false }` is excluded permanently.
+Two states are excluded, both because they need a human:
+`InfrastructureFailure { retryable: false }` (including the
+`HandleNotFound` defensive path, which carries a handle but must not be
+touched automatically) and terminal `Unavailable`.
+
+In-flight records are deliberately **not** fingerprint-gated: spec §8.2
+says neither a `main` update nor a fingerprint change may bypass the
+recovery procedure.
 
 ### `Unavailable` is a permanent dead-letter
 
@@ -330,12 +450,18 @@ pick it up as a fresh candidate.
 
 ### Determinism and concurrency
 
-The picker orders eligible candidates by `(retry_ready first,
-next_retry_at ascending, SolutionId bytes ascending)`, so parallel
+The picker orders eligible candidates by `(bucket, next_retry_at
+ascending, SolutionId bytes ascending)` where bucket is `Starting` <
+`AcceptanceUnknown` < handle-present < retry-ready < fresh, so parallel
 ticks that collide on the `verify-heavy` concurrency group compute
 the same target. That determinism plus the worker's per-`(solution,
 attempt)` CAS keeps `automation/verify` linearizable even when a
 schedule tick and a push tick fire back-to-back.
+
+Resume buckets sort first because spec §8.3 requires an outstanding
+handle to be tracked before any new submission starts, and because the
+MVP allows only one in-flight attempt per OJ — a new start would be
+refused by the worker's own guard anyway.
 
 ### Records for solutions that have been unpublished
 
@@ -382,17 +508,35 @@ routine sweep; leaving them in place is harmless.
   `persist_terminal` still runs on this path via `!cancelled()` so the
   emitted record lands on `automation/verify`; the workflow just
   surfaces a warning so operators know a follow-up tick is expected.
+- `::warning::verify-resume ended in a non-terminal state` is the
+  resume-chain equivalent. `persist_resume` still commits the emitted
+  record. If the record came back `AcceptanceUnknown`, `verify-resume`
+  also logs `operator action required` to stderr: recovery could not
+  prove whether the submission exists, so the next tick will retry the
+  lookup and the PR stays draft until a human associates a submission
+  id or confirms non-submission. This never auto-resubmits (spec §8.2).
+- `record for <id> is not resumable` from `verify-resume` means the
+  worker was pointed at a terminal or handle-less record. That is a
+  wiring bug, not an operational one: `verify-prepare` should have
+  answered `fresh`. Check `prepare`'s `action` output against the
+  record on `automation/verify`.
 - Non-`Trackable` `verify-start` outcomes (`Unavailable` /
   `AcceptanceUnknown` / `ConfirmedNotAccepted` / `InfrastructureError`)
   are still captured: `submit` emits their `VerificationRecord` to
   `handle.json`, `persist_handle` commits it to `automation/verify`,
   and the downstream `poll` bails on the non-handle state so
   `persist_terminal` skips. The state on `automation/verify` accurately
-  reflects the observed outcome. Retryable outcomes come back
-  automatically through the picker on the next scheduler tick;
-  non-retryable outcomes stay put until an operator re-runs
-  `workflow_dispatch` with an explicit `solution` argument, whose
-  `persist_starting` CAS-replaces the failed record.
+  reflects the observed outcome. The picker then hands the record back
+  on the next tick — in-flight and handle-bearing states through the
+  resume chain, handle-less retryable failures through a fresh plan.
+  Non-retryable outcomes stay put until an operator clears them.
+- **A solution has stopped being verified entirely.** Check
+  `automation/verify` for a record in an in-flight state. Before the
+  resume chain existed (issue #130) that was terminal: the picker
+  skipped the solution forever. It should now be picked every tick;
+  if it is not, check whether the record is
+  `InfrastructureFailure { retryable: false }` or `Unavailable`, both
+  of which are deliberately operator-gated.
 - Secret leakage in a failed job: nothing to remediate inside the
   workflow. Invalidate the affected token (App key or Library Checker
   refresh token) and follow the rotation steps below.
@@ -439,7 +583,9 @@ your operator log. Do **not** commit the PEM or the refresh token.
 4. Verify: manually dispatch `verify` with `mode: dry-run` and any
    valid `solution`. `prepare` + `persist_starting` must complete
    green. If `persist_starting` fails with an App-auth error, the
-   secret update did not take — re-run step 3.
+   secret update did not take — re-run step 3. The dry run
+   authenticates and reads but writes nothing, so it is safe to repeat
+   and leaves no record behind.
 5. Only after step 4 succeeds, revoke the old key on the App's
    settings page. GitHub keeps the previous key active until you
    delete it explicitly; leaving both keys live indefinitely defeats

@@ -11,15 +11,25 @@
 //! Eligibility rules — see the caller contract on
 //! [`select_next_candidate`] for the details — are:
 //! * no record for the solution yet;
+//! * the latest record is one of the five in-flight variants (`Starting`,
+//!   `AcceptanceUnknown`, `Submitted`, `Queued`, `Judging`). The worker
+//!   resumes those instead of planning a new attempt, which is how spec
+//!   §15.1 step 7 ("timeout や一時的障害では draft のまま残し、次回 worker が
+//!   resume する") reaches CI at all;
 //! * the latest record is an `InfrastructureFailure` whose retry deadline has
 //!   elapsed (including the `None` "unscheduled" case that persisters emit
 //!   today);
 //! * the latest record is `Completed` but its `fingerprint` disagrees with
 //!   the recomputed fingerprint (input drift).
 //!
-//! All other states — the five in-flight variants and terminal `Unavailable`
-//! — are excluded. Non-retryable `InfrastructureFailure` records are also
-//! excluded permanently.
+//! Terminal `Unavailable` and non-retryable `InfrastructureFailure` records
+//! are excluded permanently — both need an operator.
+//!
+//! This module only answers *which* solution runs. *How* it runs — fresh plan
+//! versus resume — is [`verify_action`], which the worker evaluates against
+//! the record it re-reads at the head of its own run. Keeping the two in one
+//! module means the picker can never offer a candidate the worker would
+//! answer with a double submission.
 
 use std::collections::BTreeMap;
 
@@ -62,14 +72,72 @@ pub fn select_next_candidate(
         .filter_map(|sol| eligibility(&sol.id, records, fingerprints, now))
         .collect();
 
-    // Order: retry-ready records with the earliest deadline first (with
-    // `None` deadline sorting ahead of any scheduled retry), then all other
-    // eligible candidates. Within a bucket, tie-break by the raw
+    // Order: resume buckets first so an attempt that may already exist on
+    // the OJ is driven to terminal before any new submission (spec §8.3
+    // "未完了 handle が存在する場合は、その追跡を新規提出より先に行う",
+    // §15.1 "worker は新規提出前に既存 draft PR を探し、保存済み pending
+    // handle の追跡を優先する"). Then retry-ready records with the earliest
+    // deadline first (with `None` deadline sorting ahead of any scheduled
+    // retry), then everything else. Within a bucket, tie-break by the raw
     // `SolutionId` bytes so scheduling stays deterministic even when the
     // discovery layer returns solutions in a different order.
     eligible.sort();
 
     eligible.into_iter().next().map(|c| c.id.clone())
+}
+
+/// What the worker must do with the solution it was handed.
+///
+/// [`select_next_candidate`] decides *which* solution runs; this decides
+/// *how*, from that solution's latest record alone. The worker re-reads the
+/// record at the head of its run rather than trusting a flag computed by the
+/// dispatcher, so a record that moved in between (an automation PR merging,
+/// a concurrent operator dispatch) is answered from the fresh observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyAction {
+    /// Freeze a new immutable plan and run the full start → poll chain.
+    Fresh,
+    /// Drive the stored attempt forward without planning anything: OJ
+    /// recovery for `Starting` / `AcceptanceUnknown`, `poll_handle` for every
+    /// state that carries a handle. Never calls the starter, so it cannot
+    /// double-submit (spec §8.2, §8.3).
+    Resume,
+}
+
+/// Classify a solution's latest record into the action the worker must take
+/// (spec §8.2, §8.3, §15.1 step 7).
+///
+/// The safety invariant is one-directional: every state that may correspond
+/// to a submission the OJ already accepted maps to [`VerifyAction::Resume`].
+/// Only states that provably never reached the OJ — terminal results and a
+/// start-stage `InfrastructureFailure` that never obtained a handle — may be
+/// re-planned.
+pub fn verify_action(state: &VerificationState) -> VerifyAction {
+    match state {
+        // A `Starting` record means the start request may have been sent
+        // (spec §8.2: "`Starting` は、提出要求を送った可能性がある attempt を
+        // 表す。直接再送してはならない"). `AcceptanceUnknown` is the same
+        // uncertainty after a torn connection. Both go through the OJ's
+        // recovery adapter, never through the starter.
+        VerificationState::Starting(_)
+        | VerificationState::AcceptanceUnknown(_)
+        // Handle present: poll it to terminal.
+        | VerificationState::Submitted(_)
+        | VerificationState::Queued(_)
+        | VerificationState::Judging(_) => VerifyAction::Resume,
+        // Spec §8.3: "handle 取得後の failure では attempt ID と handle を
+        // 維持し、start を呼ばず poll だけを再開する". A failure without a
+        // handle either never sent the request or the OJ confirmed
+        // non-acceptance, so re-planning is the documented recovery.
+        VerificationState::InfrastructureFailure(f) => {
+            if f.handle.is_some() {
+                VerifyAction::Resume
+            } else {
+                VerifyAction::Fresh
+            }
+        }
+        VerificationState::Completed(_) | VerificationState::Unavailable(_) => VerifyAction::Fresh,
+    }
 }
 
 // ─── Internal ────────────────────────────────────────────────────────────────
@@ -101,8 +169,19 @@ impl PartialOrd for Candidate<'_> {
     }
 }
 
+/// Scheduling priority, highest first. Mirrors the resume order
+/// [`crate::submission_lifecycle::resume_pending`] applies locally so the CI
+/// dispatcher and `ce verify` converge on the same target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Bucket {
+    /// `Starting`: the start request may be in flight at the OJ.
+    ResumeStarting,
+    /// `AcceptanceUnknown`: a torn start whose acceptance is unproven.
+    ResumeAcceptanceUnknown,
+    /// A handle exists (`Submitted` / `Queued` / `Judging`, or an
+    /// `InfrastructureFailure` that carries one): poll it to terminal.
+    ResumePoll,
+    /// Retryable `InfrastructureFailure` with no handle, past its deadline.
     RetryReady,
     Fresh,
 }
@@ -125,20 +204,29 @@ fn eligibility<'a>(
         VerificationState::InfrastructureFailure(InfrastructureFailure {
             retryable: true,
             next_retry_at,
+            handle,
             ..
-        }) => match next_retry_at {
-            Some(deadline) if *deadline > now => None,
-            Some(deadline) => Some(Candidate {
-                bucket: Bucket::RetryReady,
-                deadline: *deadline,
+        }) => {
+            if let Some(deadline) = next_retry_at
+                && *deadline > now
+            {
+                return None;
+            }
+            // A failure that already carries a handle must resume polling.
+            // Routing it to `RetryReady` would make the worker freeze a new
+            // plan and submit again for an attempt the OJ already accepted
+            // (spec §8.3).
+            let bucket = if handle.is_some() {
+                Bucket::ResumePoll
+            } else {
+                Bucket::RetryReady
+            };
+            Some(Candidate {
+                bucket,
+                deadline: next_retry_at.unwrap_or_else(min_datetime),
                 id,
-            }),
-            None => Some(Candidate {
-                bucket: Bucket::RetryReady,
-                deadline: min_datetime(),
-                id,
-            }),
-        },
+            })
+        }
         VerificationState::InfrastructureFailure(InfrastructureFailure {
             retryable: false,
             ..
@@ -159,17 +247,29 @@ fn eligibility<'a>(
                 })
             }
         }
-        // Terminal `Unavailable` and the five in-flight variants (Starting,
-        // AcceptanceUnknown, Submitted, Queued, Judging) all fall through
-        // here. Fail closed: any future non-terminal, non-`InfrastructureFailure`
-        // variant introduced by later plans stays excluded until this arm
-        // is updated.
-        VerificationState::Unavailable(_)
-        | VerificationState::Starting(_)
-        | VerificationState::AcceptanceUnknown(_)
-        | VerificationState::Submitted(_)
+        // The five in-flight variants are candidates so the worker can
+        // resume them (spec §15.1 step 7). They carry no retry deadline, so
+        // the bucket alone orders them.
+        VerificationState::Starting(_) => Some(Candidate {
+            bucket: Bucket::ResumeStarting,
+            deadline: min_datetime(),
+            id,
+        }),
+        VerificationState::AcceptanceUnknown(_) => Some(Candidate {
+            bucket: Bucket::ResumeAcceptanceUnknown,
+            deadline: min_datetime(),
+            id,
+        }),
+        VerificationState::Submitted(_)
         | VerificationState::Queued(_)
-        | VerificationState::Judging(_) => None,
+        | VerificationState::Judging(_) => Some(Candidate {
+            bucket: Bucket::ResumePoll,
+            deadline: min_datetime(),
+            id,
+        }),
+        // Terminal: never re-enters the picker (see the module docs on
+        // `Unavailable` as a dead letter).
+        VerificationState::Unavailable(_) => None,
     }
 }
 
@@ -321,6 +421,33 @@ mod tests {
         })
     }
 
+    /// Retryable poll-stage failure that already holds a handle — spec §8.3
+    /// forbids re-starting this attempt.
+    fn retryable_failure_with_handle(
+        next_retry_at: Option<DateTime<FixedOffset>>,
+    ) -> VerificationState {
+        VerificationState::InfrastructureFailure(InfrastructureFailure {
+            handle: Some(submission_handle()),
+            ..match retryable_failure(next_retry_at) {
+                VerificationState::InfrastructureFailure(f) => f,
+                _ => unreachable!("retryable_failure builds an InfrastructureFailure"),
+            }
+        })
+    }
+
+    /// The `HandleLost` shape from `poll_handle`: a handle is present but the
+    /// failure is non-retryable, so an operator must confirm before anything
+    /// automated touches it again.
+    fn non_retryable_failure_with_handle() -> VerificationState {
+        VerificationState::InfrastructureFailure(InfrastructureFailure {
+            handle: Some(submission_handle()),
+            ..match non_retryable_failure() {
+                VerificationState::InfrastructureFailure(f) => f,
+                _ => unreachable!("non_retryable_failure builds an InfrastructureFailure"),
+            }
+        })
+    }
+
     fn completed() -> VerificationState {
         VerificationState::Completed(CompletedState {
             verdict: Verdict {
@@ -448,8 +575,11 @@ mod tests {
         );
     }
 
+    /// The liveness contract (issue #130): a solution whose latest record is
+    /// in-flight must stay a candidate, otherwise nothing ever hands it to a
+    /// worker and it is never verified again.
     #[test]
-    fn in_flight_variants_are_all_excluded() {
+    fn in_flight_variants_stay_candidates_so_the_worker_can_resume() {
         let states: [(&str, VerificationState); 5] = [
             ("starting", starting()),
             ("acceptance_unknown", acceptance_unknown()),
@@ -462,10 +592,176 @@ mod tests {
             let mut records = BTreeMap::new();
             records.insert(sol.id.clone(), record(&sol.id, fingerprint(0xaa), state));
             let fingerprints = BTreeMap::new();
-            let picked = select_next_candidate(now(), &[sol], &records, &fingerprints);
+            let picked =
+                select_next_candidate(now(), std::slice::from_ref(&sol), &records, &fingerprints);
             assert_eq!(
-                picked, None,
-                "in-flight variant `{label}` must not be picked"
+                picked,
+                Some(sol.id.clone()),
+                "in-flight variant `{label}` must remain a candidate to resume"
+            );
+        }
+    }
+
+    /// Spec §8.3 / §15.1: an attempt that may already exist at the OJ is
+    /// tracked before any new submission starts.
+    #[test]
+    fn resume_buckets_outrank_retry_ready_and_fresh() {
+        let starting_sol = solution("abc999/d/main");
+        let au_sol = solution("abc999/c/main");
+        let handle_sol = solution("abc999/b/main");
+        let retry_sol = solution("abc999/a/main");
+        let fresh_sol = solution("abc999/e/main");
+
+        let mut records = BTreeMap::new();
+        records.insert(
+            starting_sol.id.clone(),
+            record(&starting_sol.id, fingerprint(0xaa), starting()),
+        );
+        records.insert(
+            au_sol.id.clone(),
+            record(&au_sol.id, fingerprint(0xaa), acceptance_unknown()),
+        );
+        records.insert(
+            handle_sol.id.clone(),
+            record(&handle_sol.id, fingerprint(0xaa), queued()),
+        );
+        records.insert(
+            retry_sol.id.clone(),
+            record(&retry_sol.id, fingerprint(0xaa), retryable_failure(None)),
+        );
+        let fingerprints = BTreeMap::new();
+
+        // Solution ids are deliberately reversed relative to the intended
+        // priority, so an id-only ordering would fail this.
+        let mut published = vec![
+            retry_sol.clone(),
+            handle_sol.clone(),
+            au_sol.clone(),
+            starting_sol.clone(),
+            fresh_sol,
+        ];
+
+        for expected in [
+            starting_sol.id.clone(),
+            au_sol.id.clone(),
+            handle_sol.id.clone(),
+            retry_sol.id.clone(),
+        ] {
+            assert_eq!(
+                select_next_candidate(now(), &published, &records, &fingerprints),
+                Some(expected.clone()),
+                "expected {expected} to be picked next",
+            );
+            // Drain the winner and re-run: the next bucket must surface.
+            published.retain(|s| s.id != expected);
+            records.remove(&expected);
+        }
+    }
+
+    /// Spec §8.3: once a handle exists the attempt resumes by polling. If it
+    /// landed in `RetryReady` the worker would freeze a fresh plan and submit
+    /// the same source twice.
+    #[test]
+    fn poll_stage_failure_with_a_handle_resumes_instead_of_replanning() {
+        let sol = solution("abc999/a/main");
+        let state = retryable_failure_with_handle(None);
+        assert_eq!(verify_action(&state), VerifyAction::Resume);
+
+        let mut records = BTreeMap::new();
+        records.insert(sol.id.clone(), record(&sol.id, fingerprint(0xaa), state));
+        let fingerprints = BTreeMap::new();
+        assert_eq!(
+            select_next_candidate(now(), std::slice::from_ref(&sol), &records, &fingerprints),
+            Some(sol.id.clone()),
+        );
+
+        // And it must outrank a handle-less retry-ready record.
+        let other = solution("abc999/b/main");
+        records.insert(
+            other.id.clone(),
+            record(&other.id, fingerprint(0xaa), retryable_failure(None)),
+        );
+        assert_eq!(
+            select_next_candidate(now(), &[other, sol.clone()], &records, &fingerprints),
+            Some(sol.id),
+        );
+    }
+
+    /// A handle-bearing failure still honours its retry deadline (spec §8.3:
+    /// "retryable failure は `next_retry_at` より前に OJ へ接続しない").
+    #[test]
+    fn handle_bearing_failure_before_its_deadline_is_excluded() {
+        let sol = solution("abc999/a/main");
+        let future = utc(2026, 8, 14, 14, 0);
+        let mut records = BTreeMap::new();
+        records.insert(
+            sol.id.clone(),
+            record(
+                &sol.id,
+                fingerprint(0xaa),
+                retryable_failure_with_handle(Some(future)),
+            ),
+        );
+        let fingerprints = BTreeMap::new();
+        assert_eq!(
+            select_next_candidate(now(), &[sol], &records, &fingerprints),
+            None,
+        );
+    }
+
+    /// `HandleLost` is the spec §8.3 defensive path: non-retryable even
+    /// though a handle exists, so it waits for an operator.
+    #[test]
+    fn non_retryable_failure_with_a_handle_is_excluded() {
+        let sol = solution("abc999/a/main");
+        let mut records = BTreeMap::new();
+        records.insert(
+            sol.id.clone(),
+            record(
+                &sol.id,
+                fingerprint(0xaa),
+                non_retryable_failure_with_handle(),
+            ),
+        );
+        let fingerprints = BTreeMap::new();
+        assert_eq!(
+            select_next_candidate(now(), &[sol], &records, &fingerprints),
+            None,
+        );
+    }
+
+    /// The double-submission guard. Every state that could correspond to a
+    /// submission the OJ already holds must resume, never re-plan.
+    #[test]
+    fn verify_action_never_replans_a_state_that_may_have_reached_the_oj() {
+        for (label, state) in [
+            ("starting", starting()),
+            ("acceptance_unknown", acceptance_unknown()),
+            ("submitted", submitted()),
+            ("queued", queued()),
+            ("judging", judging()),
+            (
+                "poll_failure_with_handle",
+                retryable_failure_with_handle(None),
+            ),
+            ("handle_lost", non_retryable_failure_with_handle()),
+        ] {
+            assert_eq!(
+                verify_action(&state),
+                VerifyAction::Resume,
+                "state `{label}` must resume, not re-plan"
+            );
+        }
+        for (label, state) in [
+            ("start_failure_without_handle", retryable_failure(None)),
+            ("non_retryable_without_handle", non_retryable_failure()),
+            ("completed", completed()),
+            ("unavailable", unavailable()),
+        ] {
+            assert_eq!(
+                verify_action(&state),
+                VerifyAction::Fresh,
+                "state `{label}` provably never reached the OJ; it must re-plan"
             );
         }
     }

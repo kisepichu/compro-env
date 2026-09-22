@@ -2,8 +2,8 @@ use clap::{Parser, Subcommand};
 use domain::entity::{Language, OJKind};
 use interfaces::controller::input::{
     CheckInput, InitInput, InternalVerifyPollInput, InternalVerifyPrepareInput,
-    InternalVerifyStartInput, LoginInput, LogoutInput, NewInput, SiteDataBuildMode,
-    SiteDataGenerateInput, SubmitInput, TestInput, VerifyInput, WhoamiInput,
+    InternalVerifyResumeInput, InternalVerifyStartInput, LoginInput, LogoutInput, NewInput,
+    SiteDataBuildMode, SiteDataGenerateInput, SubmitInput, TestInput, VerifyInput, WhoamiInput,
 };
 use usecases::online_judge::Credentials;
 
@@ -96,9 +96,12 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum InternalSubcommand {
-    /// Freeze a submission plan JSON so a later `verify-start` can dispatch it.
-    /// Writes only the canonical plan bytes; the `Starting` record is persisted
-    /// by `verify-start` before it contacts the OJ.
+    /// Decide whether the solution needs a new attempt and, when it does,
+    /// freeze a submission plan JSON so a later `verify-start` can dispatch
+    /// it. Writes only the canonical plan bytes; the `Starting` record is
+    /// persisted by `verify-start` before it contacts the OJ. When the stored
+    /// record is still in-flight nothing is frozen — the caller must run
+    /// `verify-resume` instead (spec §8.2, §15.1 step 7).
     #[command(hide = true)]
     VerifyPrepare {
         #[arg(long)]
@@ -110,6 +113,10 @@ pub enum InternalSubcommand {
         /// without seeing the plan bytes (spec §15.4, dry-run path).
         #[arg(long = "starting-out")]
         starting_out: Option<String>,
+        /// Optional file receiving `fresh` or `resume`. The CI worker reads
+        /// it into a job output and gates the rest of the chain on it.
+        #[arg(long = "action-out")]
+        action_out: Option<String>,
     },
     /// Dispatch a previously-prepared plan via the OJ starter.
     #[command(hide = true)]
@@ -123,15 +130,27 @@ pub enum InternalSubcommand {
         #[arg(long)]
         solution: String,
     },
+    /// Drive a stored in-flight record forward without planning a new
+    /// attempt: OJ recovery for `Starting` / `AcceptanceUnknown`, polling for
+    /// every state that carries a handle (spec §8.2, §8.3, §15.1 step 7).
+    /// Prints the post-resume `VerificationRecord` JSON on stdout; exits 0
+    /// only when the record reached a terminal state.
+    #[command(hide = true)]
+    VerifyResume {
+        #[arg(long)]
+        solution: String,
+    },
     /// Persist a candidate `VerificationRecord` through the GitHub state
     /// writer. Reads a plan-hash file and a candidate-record JSON. Never
     /// contacts an online judge; the plan-hash gate lives on this
     /// (secret-bearing) side of the automation split (spec §15.1, §15.4).
     #[command(hide = true)]
     VerifyPersist {
-        /// Path to the immutable plan hash file produced by the secretless job.
+        /// Path to the immutable plan hash file produced by the secretless
+        /// job. Omitted on the resume path, where no plan is frozen at all
+        /// (spec §8.2: a resume never re-plans).
         #[arg(long)]
-        plan_hash_in: String,
+        plan_hash_in: Option<String>,
         /// Path to the serialized `VerificationRecord` JSON to persist.
         #[arg(long)]
         candidate_in: String,
@@ -145,6 +164,13 @@ pub enum InternalSubcommand {
         /// is never echoed or logged.
         #[arg(long, default_value = "GITHUB_TOKEN")]
         token_env: String,
+        /// Run every guard plus the compare-and-swap read, then stop before
+        /// the first mutating API call. The worker's `dry-run` mode uses this
+        /// so a rehearsal cannot leave an orphan in-flight record behind:
+        /// spec §15.1 step 3 only allows the OJ POST *after* the record push,
+        /// and a dry run never POSTs, so it must never push either.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
     },
     /// Find (or open) the single long-lived automation PR from
     /// `automation/verify` into `main` and set its state to `Draft` or
@@ -390,6 +416,7 @@ pub struct InternalVerifyPrepareCommand {
     pub solution: String,
     pub plan_out: String,
     pub starting_out: Option<String>,
+    pub action_out: Option<String>,
 }
 impl InternalVerifyPrepareInput for InternalVerifyPrepareCommand {
     fn solution(&self) -> String {
@@ -400,6 +427,18 @@ impl InternalVerifyPrepareInput for InternalVerifyPrepareCommand {
     }
     fn starting_out(&self) -> Option<String> {
         self.starting_out.clone()
+    }
+    fn action_out(&self) -> Option<String> {
+        self.action_out.clone()
+    }
+}
+
+pub struct InternalVerifyResumeCommand {
+    pub solution: String,
+}
+impl InternalVerifyResumeInput for InternalVerifyResumeCommand {
+    fn solution(&self) -> String {
+        self.solution.clone()
     }
 }
 

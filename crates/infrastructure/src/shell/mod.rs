@@ -406,16 +406,18 @@ pub fn run() -> Result<()> {
                 solution,
                 plan_out,
                 starting_out,
+                action_out,
             } => {
                 let root = find_project_root()?;
                 let config = ProjectLibraryConfigLoader::load(&root)?;
                 let (manifest, snapshot) = build_analysis(&root, &config)?;
                 let controller = build_verify_controller(&root)?;
-                let path = controller.internal_verify_prepare(
+                let outcome = controller.internal_verify_prepare(
                     &commands::InternalVerifyPrepareCommand {
                         solution: solution.clone(),
                         plan_out: plan_out.clone(),
                         starting_out: starting_out.clone(),
+                        action_out: action_out.clone(),
                     },
                     &root,
                     &config,
@@ -427,8 +429,65 @@ pub fn run() -> Result<()> {
                     &usecases::submission_lifecycle::NoRetryHint,
                     usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
                 )?;
-                println!("wrote {}", path.display());
+                match &outcome {
+                    interfaces::controller::PreparedOutcome::Fresh { plan_out } => {
+                        println!("wrote {}", plan_out.display());
+                    }
+                    interfaces::controller::PreparedOutcome::Resume { attempt_id } => {
+                        println!(
+                            "in-flight attempt {attempt_id} for {solution}: no plan frozen, resume instead"
+                        );
+                    }
+                }
                 Ok(())
+            }
+            commands::InternalSubcommand::VerifyResume { solution } => {
+                let root = find_project_root()?;
+                let config = ProjectLibraryConfigLoader::load(&root)?;
+                let (manifest, snapshot) = build_analysis(&root, &config)?;
+                let controller = build_verify_controller(&root)?;
+                let (record, summary) = controller.internal_verify_resume(
+                    &commands::InternalVerifyResumeCommand {
+                        solution: solution.clone(),
+                    },
+                    &root,
+                    &config,
+                    &manifest,
+                    &snapshot,
+                    &usecases::clock::SystemClock,
+                    &usecases::id_generator::MonotonicAttemptIdGenerator::new(),
+                    &usecases::submission_lifecycle::RealSleeper,
+                    &usecases::submission_lifecycle::NoRetryHint,
+                    usecases::submission_lifecycle::PollingPolicy::verify_defaults(),
+                )?;
+                // Operator-facing detail goes to stderr so stdout stays a
+                // single JSON document the persist job can pipe straight into
+                // `verify-persist --candidate-in`.
+                for action in &summary.operator_actions {
+                    eprintln!(
+                        "verify-resume: operator action required for {}: {}",
+                        action.solution_id, action.summary
+                    );
+                }
+                for id in &summary.replan_candidates {
+                    eprintln!(
+                        "verify-resume: {id} was confirmed never accepted by the OJ; it can be re-planned"
+                    );
+                }
+                use std::io::Write as _;
+                let json = serde_json::to_string(&record)
+                    .map_err(|e| anyhow::anyhow!("failed to serialize resumed record: {e}"))?;
+                println!("{json}");
+                // Same convention as `verify-poll`: a non-terminal outcome
+                // exits 1 so the CI job status reflects that another tick is
+                // needed, while the record still reaches the persist job.
+                let terminal = matches!(
+                    record.state,
+                    domain::verification::VerificationState::Completed(_)
+                        | domain::verification::VerificationState::Unavailable(_)
+                );
+                let _ = std::io::stdout().flush();
+                std::process::exit(if terminal { 0 } else { 1 });
             }
             commands::InternalSubcommand::VerifyStart { plan_in } => {
                 let root = find_project_root()?;
@@ -612,8 +671,11 @@ pub fn run() -> Result<()> {
                 repository,
                 base_sha,
                 token_env,
+                dry_run,
             } => {
-                validate_plan_hash_file(std::path::Path::new(&plan_hash_in))?;
+                if let Some(plan_hash_in) = &plan_hash_in {
+                    validate_plan_hash_file(std::path::Path::new(plan_hash_in))?;
+                }
                 let candidate_bytes = std::fs::read(&candidate_in).map_err(|e| {
                     anyhow::anyhow!("failed to read candidate file {candidate_in}: {e}")
                 })?;
@@ -635,6 +697,20 @@ pub fn run() -> Result<()> {
                     branch: "automation/verify".into(),
                     candidate,
                 };
+                if dry_run {
+                    return match writer.check_persist(&request) {
+                        Ok(()) => {
+                            println!(
+                                "dry-run: guards and compare-and-swap passed; nothing was written"
+                            );
+                            Ok(())
+                        }
+                        Err(e) => {
+                            eprintln!("verify-persist --dry-run failed: {e}");
+                            std::process::exit(1);
+                        }
+                    };
+                }
                 match writer.persist(&request) {
                     Ok(state) => {
                         println!("{}", state.commit_sha);

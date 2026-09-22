@@ -363,3 +363,58 @@ fn merged_completed_record_triggers_the_fingerprint_recompute() {
     let msg = format!("{err:#}");
     assert!(msg.contains("rust-analyzer"), "unexpected error: {msg}");
 }
+
+/// Write a `Starting` record — the exact shape the 2026-09-22 dry-run tick
+/// stranded on `automation/verify` (issue #130).
+fn write_starting_record(base: &Path, solution_id: &str) {
+    use domain::library::LanguageId;
+    use domain::verification::{ContentHash, LanguageBinding, StartingState};
+    let hash = |b: u8| {
+        let hex: String = std::iter::repeat_n(b, 32)
+            .map(|x| format!("{x:02x}"))
+            .collect();
+        ContentHash::parse(&format!("sha256:{hex}")).unwrap()
+    };
+    let record = VerificationRecord {
+        schema_version: 1,
+        solution_id: domain::library::SolutionId::parse(solution_id).unwrap(),
+        attempt_id: AttemptId::parse("orphan-attempt").unwrap(),
+        replaces_attempt_id: None,
+        fingerprint: fingerprint(),
+        state: VerificationState::Starting(StartingState {
+            plan_hash: hash(0x22),
+            submitted_source_hash: hash(0x33),
+            language: LanguageBinding {
+                language_id: LanguageId::parse("rust").unwrap(),
+                oj_language_id: "rust".into(),
+            },
+            started_at: now(),
+        }),
+        plan_context: None,
+    };
+    let results_dir = base.join("verification/results");
+    std::fs::create_dir_all(&results_dir).unwrap();
+    let path = results_dir.join(format!("{}.json", solution_id.replace('/', "__")));
+    std::fs::write(&path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+}
+
+/// Issue #130 end to end through the picker's real IO: while an in-flight
+/// record sat on `automation/verify`, `pick-candidate` printed nothing, the
+/// dispatcher set `run_worker=false`, and the solution was never verified
+/// again until a human deleted the branch. It must be picked so the worker
+/// can resume it.
+///
+/// The record is deliberately `Starting`, not `Completed`: a `Completed`
+/// record would force a fingerprint recompute (see
+/// `merged_completed_record_triggers_the_fingerprint_recompute`), and spec
+/// §8.2 says the fingerprint must not gate recovery anyway.
+#[test]
+fn in_flight_overlay_record_is_picked_so_the_worker_can_resume_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_repo(tmp.path());
+    let state = make_state_dir(tmp.path());
+    write_starting_record(&state, SOLUTION_ID);
+
+    let picked = pick_candidate_with_io(tmp.path(), &state, now()).unwrap();
+    assert_eq!(picked.as_ref().map(|id| id.as_str()), Some(SOLUTION_ID));
+}
