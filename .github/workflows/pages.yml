@@ -3,18 +3,90 @@ name: pages
 on:
   push:
     branches: [main]
+  # Follow `verify`: when its worker persists a terminal record to the
+  # `automation/verify` state branch, the site (which overlays those records)
+  # has to be republished. `workflow_run` runs take both `github.ref` and
+  # this workflow file from the default branch, so the `github-pages`
+  # environment keeps its `main`-only deployment branch policy.
+  #
+  # A `push:` trigger on `automation/verify` was rejected: a push-triggered
+  # run executes the workflow file *as it exists on the pushed ref*, so
+  # allowing that branch to deploy would let anything able to write the
+  # state branch replace this file and publish arbitrary content.
+  workflow_run:
+    workflows: [verify]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Unchanged from the single-trigger design: the newest publish wins. With the
+# `gate` job only letting terminal-record runs through, a verify attempt
+# produces at most one build, so cancellation now mostly covers back-to-back
+# `main` merges.
 concurrency:
   group: pages-publish
   cancel-in-progress: true
 
 jobs:
+  gate:
+    name: Decide whether to rebuild
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Reading the triggering run's job list needs `actions: read`; nothing
+      # here writes.
+      actions: read
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+    steps:
+      - name: Decide whether the triggering verify run published anything
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # `push` to main and manual dispatch always rebuild.
+          if [ "$EVENT_NAME" != "workflow_run" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$RUN_CONCLUSION" != "success" ]; then
+            echo "verify run $RUN_ID concluded '$RUN_CONCLUSION' — nothing published."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # `verify` wakes every 5 minutes and most ticks persist nothing, so
+          # the run conclusion alone is not a publish signal: an unconditional
+          # rebuild would start a ~13-minute site build every 5 minutes and the
+          # `pages-publish` group would just have them cancel each other. Only
+          # a run whose `persist_terminal` job succeeded wrote a terminal
+          # record. That job is reached through the reusable worker, so the
+          # API reports it as `Invoke verify worker / Persist terminal result
+          # (App-only)` — match the distinctive part of the name. One page is
+          # enough: the chain is six jobs plus the dispatcher.
+          persisted="$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" \
+            --jq '[.jobs[]
+                   | select(.name | contains("Persist terminal result"))
+                   | select(.conclusion == "success")]
+                  | length')"
+          if [ "$persisted" -gt 0 ]; then
+            echo "verify run $RUN_ID persisted a terminal record; rebuilding."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "verify run $RUN_ID persisted no terminal record; skipping rebuild."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: Build site from current main
+    needs: gate
+    if: needs.gate.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -25,6 +97,13 @@ jobs:
       - name: Checkout with full history
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
+          # Pin the source to `main` instead of relying on the event's ref.
+          # On `workflow_run` the default checkout would already be the
+          # default branch (the event carries no other ref), but the pin is
+          # what makes that a property of this file rather than of the
+          # trigger. Verification records come in through the overlay step
+          # below, never from the trigger ref's tree.
+          ref: main
           fetch-depth: 0
 
       - name: Configure Pages
@@ -127,10 +206,16 @@ jobs:
       - name: Record artifact source metadata
         id: record_sha
         env:
-          SOURCE_SHA: ${{ github.sha }}
           SITE_SCHEMA_VERSION: "1"
         run: |
           set -euo pipefail
+          # The checked-out HEAD, not `github.sha`. `github.sha` tracks the
+          # event, not the tree that was built: on `workflow_run` it is the
+          # default-branch tip recorded when the event fired, which can drift
+          # from what `ref: main` resolved a few minutes later. Reading the
+          # real HEAD keeps the deploy job's stale-rerun guard honest — it
+          # still rejects an artifact built off a superseded `main`.
+          SOURCE_SHA="$(git rev-parse HEAD)"
           mkdir -p web/dist
           jq -n \
             --arg sha "$SOURCE_SHA" \

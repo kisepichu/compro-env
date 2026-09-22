@@ -345,12 +345,19 @@ jobs:
     uses: ./.github/workflows/verify-worker.yml
     with:
       after: ${{ needs.dispatch.outputs.after }}
-      # Default to `dry-run` for `push` / `schedule` triggers so that when
-      # automatic candidate selection lands, unattended cron ticks and
-      # normal main pushes cannot hit LibraryChecker without an operator
-      # opting in. Only an explicit `workflow_dispatch` with `mode: live`
-      # takes the OJ path.
-      mode: ${{ inputs.mode || 'dry-run' }}
+      # Mode precedence: an explicit `workflow_dispatch` `mode` always wins.
+      # Otherwise the repository variable `VERIFY_LIVE` decides whether
+      # unattended `push` / `schedule` ticks may hit the OJ; unset or
+      # anything other than `true` keeps them on the no-OJ path. The OJ
+      # contact rate is bounded independently by the candidate picker (one
+      # solution per tick) and the retry backoff ladder.
+      #
+      # `A && B || C` relies on Actions' truthiness: `inputs.mode` is null
+      # on non-dispatch events, and `'live'` / `'dry-run'` are non-empty
+      # strings, so neither branch can collapse to a falsy value.
+      # `VERIFY_ACTIVATED` is a separate switch — it decides whether the
+      # pipeline runs at all, `VERIFY_LIVE` only whether it submits.
+      mode: ${{ inputs.mode || (vars.VERIFY_LIVE == 'true' && 'live' || 'dry-run') }}
       # An explicit `workflow_dispatch` `solution:` wins over the automatic
       # picker. Otherwise the dispatcher hands the picker's output through
       # unchanged; if the picker declined the tick the `run_worker` gate
