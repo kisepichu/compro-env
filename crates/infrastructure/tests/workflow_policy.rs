@@ -911,12 +911,17 @@ fn ci_never_deploys_to_pages() {
 
 // ─── Plan 061 Task 3: Pages workflow policy (spec §15.5) ─────────────────────
 
-/// #061.10: `pages.yml` triggers on pushes to `main` (the site source) and
-/// to `automation/verify` (the verification records the build overlays),
-/// plus manual dispatch. PR and schedule triggers stay banned so a stray
-/// branch cannot spawn a deployment.
+/// #061.10: `pages.yml` triggers on pushes to `main`, on completion of the
+/// `verify` workflow (so records persisted to `automation/verify` get
+/// published), and on manual dispatch. `push` must stay `main`-only: a
+/// push-triggered run executes the workflow file from the pushed ref, so
+/// adding the App-writable state branch here would require widening the
+/// `github-pages` deployment branch policy and let that branch publish
+/// arbitrary content. `workflow_run` runs from the default branch instead.
+/// PR and schedule triggers stay banned so a stray branch cannot spawn a
+/// deployment.
 #[test]
-fn pages_triggers_are_source_and_record_push_and_manual_only() {
+fn pages_triggers_are_main_push_verify_run_and_manual_only() {
     let doc = load_pages();
     let root = as_map(&doc, "pages.yml");
     let on = get(root, "on").expect("pages.yml missing `on:`");
@@ -931,15 +936,30 @@ fn pages_triggers_are_source_and_record_push_and_manual_only() {
     let listed: Vec<&str> = branches.iter().filter_map(Value::as_str).collect();
     assert_eq!(
         listed,
-        vec!["main", "automation/verify"],
-        "pages.yml push branches must be exactly [main, automation/verify]"
+        vec!["main"],
+        "pages.yml push branches must be exactly [main] — deploying from a \
+         bot-writable branch would run that branch's copy of this workflow"
     );
 
-    // A `paths:` filter would apply to both branches, and `main` must
-    // republish on every push regardless of which files changed.
+    // `main` must republish on every push regardless of which files changed.
     assert!(
         get(push, "paths").is_none() && get(push, "paths-ignore").is_none(),
         "pages.yml push must not filter on paths — `main` always rebuilds"
+    );
+
+    let workflow_run = get(on_map, "workflow_run")
+        .and_then(Value::as_mapping)
+        .expect("pages.yml must follow the verify workflow via workflow_run");
+    let watched: Vec<&str> = get(workflow_run, "workflows")
+        .and_then(Value::as_sequence)
+        .expect("workflow_run.workflows must be a sequence")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert_eq!(
+        watched,
+        vec!["verify"],
+        "workflow_run must watch exactly the `verify` workflow"
     );
 
     assert!(
@@ -1136,12 +1156,12 @@ fn pages_build_emits_source_sha_metadata() {
     );
 }
 
-/// A record push arrives on `automation/verify`, so the build must pin its
-/// checkout to `main` — the trigger ref carries records only, never the
-/// site source — and take the artifact's source SHA from that checkout.
-/// `github.sha` on a record-triggered run is the record commit, which can
-/// never equal `main` HEAD, so the deploy job's stale-rerun guard would
-/// reject every record-triggered publish.
+/// The build must pin its checkout to `main` rather than inherit whatever
+/// ref the event happens to carry, and must take the artifact's source SHA
+/// from that checkout. `github.sha` follows the event, not the built tree —
+/// on `workflow_run` it is the default-branch tip captured when `verify`
+/// finished — so trusting it hands the deploy job's stale-rerun guard a SHA
+/// that need not match what was built.
 #[test]
 fn pages_build_pins_main_and_records_checked_out_head() {
     let doc = load_pages();
@@ -1185,7 +1205,68 @@ fn pages_build_pins_main_and_records_checked_out_head() {
     let dense: String = job_yaml.chars().filter(|c| !c.is_whitespace()).collect();
     assert!(
         !dense.contains("${{github.sha}}"),
-        "build job must not interpolate `github.sha` — on a record push that is the record commit"
+        "build job must not interpolate `github.sha` — it tracks the event, not the built tree"
+    );
+}
+
+/// `verify` wakes every five minutes and most ticks publish nothing, so the
+/// `workflow_run` trigger must be filtered: only a run whose
+/// `persist_terminal` job succeeded wrote a record worth republishing.
+/// Without this the site would rebuild every five minutes. The gate itself
+/// stays read-only — it only reads the triggering run's job list.
+#[test]
+fn pages_gate_filters_verify_runs_without_a_terminal_record() {
+    let doc = load_pages();
+    let jobs_map = jobs(&doc);
+    let gate = get(jobs_map, "gate").expect("pages.yml missing `gate` job");
+    let gate_map = as_map(gate, "gate job");
+
+    let perms = get(gate_map, "permissions")
+        .and_then(Value::as_mapping)
+        .expect("gate job must declare permissions");
+    assert_eq!(
+        get(perms, "actions").and_then(Value::as_str),
+        Some("read"),
+        "gate needs `actions: read` to list the triggering run's jobs"
+    );
+    for (key, value) in perms {
+        let key = key.as_str().unwrap_or_default();
+        assert_ne!(
+            value.as_str(),
+            Some("write"),
+            "gate.permissions.{key} must not be write — the gate only reads"
+        );
+    }
+
+    let gate_yaml = serde_yaml::to_string(gate).expect("gate job serializes");
+    for needle in [
+        "github.event.workflow_run.id",
+        "github.event.workflow_run.conclusion",
+        "Persist terminal result",
+    ] {
+        assert!(
+            gate_yaml.contains(needle),
+            "gate job must consult {needle:?} to decide whether anything was published"
+        );
+    }
+
+    let build = as_map(
+        get(jobs_map, "build").expect("missing build job"),
+        "build job",
+    );
+    let needs = get(build, "needs").expect("build must depend on the gate");
+    let depends_on_gate = match needs {
+        Value::String(s) => s == "gate",
+        Value::Sequence(seq) => seq.iter().any(|v| v.as_str() == Some("gate")),
+        _ => false,
+    };
+    assert!(depends_on_gate, "build.needs must include `gate`");
+    let if_expr = get(build, "if")
+        .and_then(Value::as_str)
+        .expect("build must be gated on the gate's decision");
+    assert!(
+        if_expr.contains("needs.gate.outputs.should_build == 'true'"),
+        "build `if:` must require `needs.gate.outputs.should_build == 'true'` (got {if_expr:?})"
     );
 }
 

@@ -127,16 +127,19 @@ long-lived pull request from `automation/verify` → `main`:
   `InfrastructureFailure`) leave the PR draft — the outcome is either
   indeterminate or still in flight, so a human decides.
 
-Every `persist_*` push to `automation/verify` triggers `pages.yml`
-directly — the site build checks out `main` and overlays
-`verification/results/**` from the state branch, so a new record is
-published without waiting for the automation PR to merge and without
-an operator running `gh workflow run pages.yml` by hand. A live verify
-pushes three times (`persist_starting`, `persist_handle`,
-`persist_terminal`); the `pages-publish` concurrency group cancels in
-progress, so only the terminal build runs to completion. When
-auto-merge later lands the PR, the resulting `main` push republishes
-from the merged tree. See `docs/operations/pages.md`.
+A `verify` run whose `persist_terminal` job succeeded triggers
+`pages.yml` through `workflow_run`, so a new record is published
+without waiting for the automation PR to merge and without an operator
+running `gh workflow run pages.yml` by hand. The site build checks out
+`main` and overlays `verification/results/**` from the state branch.
+`pages.yml` deliberately does *not* subscribe to pushes on
+`automation/verify`: a push-triggered run would execute that branch's
+copy of the workflow and would need the `github-pages` environment to
+allow deployments from it, which would let whoever can write the state
+branch publish arbitrary content. Runs that persisted nothing stop at
+`pages.yml`'s `gate` job. When auto-merge later lands the PR, the
+resulting `main` push republishes from the merged tree. See
+`docs/operations/pages.md`.
 
 Triggers allowed: `push` to `main`, `schedule` on the dispatcher, and
 `workflow_dispatch` on the dispatcher. The worker accepts only
@@ -239,7 +242,8 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
   worker and only `pages.yml` republishes the site. The picker never
   runs on this path because `decide` already gave `run_worker=false`.
   Record pushes to `automation/verify` do not reach the dispatcher at
-  all (it only runs on `main`), but they do trigger `pages.yml`.
+  all (it only runs on `main`); the site follows them via `pages.yml`'s
+  `workflow_run` trigger on this workflow instead.
 - **Retry backoff** target is `5 → 10 → 20 → 40 → 80` minutes, capped
   at 6 hours. Every retryable `InfrastructureFailure` is persisted with
   `next_retry_at = updated_at + retry_delay(retry_count)`
