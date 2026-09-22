@@ -1117,7 +1117,9 @@ check はローカルまたは CI 内で完結する処理である。
 テストや証明の意味を解釈しない。
 
 - `ce check` は全言語の `check_command` を言語 ID 順に 1 回ずつ実行する。
-- `ce check --language <id>` はローカル利用時だけ 1 言語へ限定する。
+- `ce check --language <id>` は 1 言語へ限定する。ローカル利用のほか、CI でも toolchain を
+  用意できている言語に限って filter を使ってよい。filter 付き check の成功だけを
+  repository 全体の公開可否には使わない。
 - `check_command` がない言語は明示的に `skipped` と表示し、失敗にはしない。
 - 通常の公開 solution の `test_command` は `ce check` から一括実行しない。
 - solution を個別に確認する既存の `ce test` の役割は変えない。
@@ -3345,7 +3347,8 @@ OJ capability に応じて `not_configured` または `unavailable` になる。
 - 公開 descendant または `_index.md` があれば directory page を生成する。
 - relation は公開 library 間なら cross-language を許可する。
 - `ce check` は全言語の `check_command` を安定順で実行し、通常 solution は一括 test しない。
-- ローカル用の `--language` filter は許可するが、CI と公開 build は全言語を check する。
+- `--language` filter はローカルと、toolchain を用意できている言語に限る CI で許可する。
+  公開 build は全言語を check し、filter 付き check の成功だけを公開可否には使わない。
 - `check_command` がない言語は `skipped` とし、check 結果は保存も Web 公開もしない。
 - check / test の timeout は既定 600 秒とし、それぞれ config で上書き可能にする。
 - timeout 時は command の process group 全体を終了し、通常の check failure として集約する。
