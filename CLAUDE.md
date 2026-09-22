@@ -14,6 +14,7 @@
 詳細仕様: `docs/spec.md`
 コマンドごとの詳細: `docs/commands/`
 開発計画: `docs/PLAN.md`
+コンテンツ追加 (ライブラリ / verify 解法): `docs/operations/contributing-content.md`
 
 > **コードを読む前に仕様を確認すること。** あるコマンドの実装を理解・変更する場合は、まず `docs/commands/<command>.md` を読む。全体仕様は `docs/spec.md`。
 

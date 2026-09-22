@@ -5,6 +5,9 @@ lives in `docs/superpowers/specs/2026-08-10-library-platform-design.md`
 §15.5. This file explains what an operator needs to do around the workflow
 and what to check when something goes wrong.
 
+Adding a library or a verify solution (author-facing procedure, Japanese):
+`docs/operations/contributing-content.md`.
+
 ## What the workflow does
 
 Three secretless jobs sitting behind a fixed `pages-publish` concurrency
