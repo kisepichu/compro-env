@@ -29,9 +29,18 @@ group (§15.3):
 **Worker — `verify-worker.yml`**
 
 `workflow_call`-only, with inputs `after` (immutable plan base SHA),
-`mode` (default `dry-run`; only an explicit `workflow_dispatch` with
-`mode: live` picks the OJ path), and `solution` (empty means no work
-this run). All jobs live in the `verify-heavy` concurrency group with
+`mode`, and `solution` (empty means no work this run). The dispatcher
+resolves `mode` as
+`inputs.mode || (vars.VERIFY_LIVE == 'true' && 'live' || 'dry-run')`:
+an explicit `workflow_dispatch` `mode` always wins, otherwise the
+repository variable `VERIFY_LIVE` decides whether unattended `push` /
+`schedule` ticks take the OJ path. `VERIFY_LIVE` unset (or anything
+other than `true`) keeps them on `dry-run`; the worker's own
+`workflow_call` default is `dry-run` as well, so a caller that forgets
+the input cannot submit. `VERIFY_LIVE` is independent of
+`VERIFY_ACTIVATED`: the latter decides whether the pipeline runs at
+all, the former only whether it contacts the OJ.
+All jobs live in the `verify-heavy` concurrency group with
 `cancel-in-progress: false`. The six jobs form a strict `needs:`
 chain:
 
@@ -118,8 +127,16 @@ long-lived pull request from `automation/verify` → `main`:
   `InfrastructureFailure`) leave the PR draft — the outcome is either
   indeterminate or still in flight, so a human decides.
 
-Once auto-merge fires the `main` push triggers `pages.yml` and the
-site rebuilds against the new record.
+Every `persist_*` push to `automation/verify` triggers `pages.yml`
+directly — the site build checks out `main` and overlays
+`verification/results/**` from the state branch, so a new record is
+published without waiting for the automation PR to merge and without
+an operator running `gh workflow run pages.yml` by hand. A live verify
+pushes three times (`persist_starting`, `persist_handle`,
+`persist_terminal`); the `pages-publish` concurrency group cancels in
+progress, so only the terminal build runs to completion. When
+auto-merge later lands the PR, the resulting `main` push republishes
+from the merged tree. See `docs/operations/pages.md`.
 
 Triggers allowed: `push` to `main`, `schedule` on the dispatcher, and
 `workflow_dispatch` on the dispatcher. The worker accepts only
@@ -164,13 +181,24 @@ Complete every step below before flipping `VERIFY_ACTIVATED` to
    `VERIFY_ACTIVATED = true`. This is the master activation switch;
    setting it back to `false` disables the workflow without needing
    to delete the environments or rotate secrets.
-8. Enable branch protection on `main` with these required status
+8. Decide whether unattended ticks may submit to the OJ. Leave
+   `VERIFY_LIVE` unset for a dry-run-only pipeline (`push` and
+   `schedule` exercise `prepare` + `persist_starting` only); add
+   `VERIFY_LIVE = true` under the same **Settings → Actions →
+   Variables** page to let the 5-minute scheduler and `main` pushes
+   take the OJ path. `gh variable set VERIFY_LIVE -b true -R
+   kisepichu/compro-env` does the same from the CLI; `gh variable
+   delete VERIFY_LIVE` (or setting it to `false`) reverts to dry-run
+   without touching `VERIFY_ACTIVATED`. Rate limiting does not depend
+   on this switch — the picker submits at most one solution per tick
+   and retries follow the backoff ladder below.
+9. Enable branch protection on `main` with these required status
    checks: `CI / Cargo test + clippy + fmt`, `CI / Web build`, and any
    `verify-result-integrity` check that surfaces on the automation
    PRs.
-9. Enable **Settings → General → Allow auto-merge** so the bot's
-   terminal-verdict PRs can auto-merge once all required checks pass.
-10. Record the completion date, the App ID, and the PEM fingerprint in
+10. Enable **Settings → General → Allow auto-merge** so the bot's
+    terminal-verdict PRs can auto-merge once all required checks pass.
+11. Record the completion date, the App ID, and the PEM fingerprint in
     your operator log. Never commit the PEM itself.
 
 Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
@@ -191,16 +219,27 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
   an empty line skips the tick, so retryable-failure and drifted
   `Completed` records converge one solution per tick without operator
   input.
+- **`VERIFY_LIVE` decides what an unattended tick does.** Unset (or
+  anything but `true`): the picked candidate runs in `dry-run`, which
+  stops after `persist_starting` and never contacts the OJ. `true`:
+  the same tick runs `live` and submits. Flipping the variable takes
+  effect on the next tick — no workflow edit, no re-dispatch. This is
+  also the narrow emergency stop: setting it to `false` halts OJ
+  contact while leaving classification, the picker, and the state
+  branch running.
 - **Manual dispatch** via `workflow_dispatch`: supply a `solution` (e.g.
   `librarychecker-aplusb/aplusb/rust`) plus `mode: dry-run` for a
   no-OJ pass that exercises `prepare` and `persist_starting` only, or
-  `mode: live` for a real Library Checker submission. An explicit
+  `mode: live` for a real Library Checker submission. The dispatched
+  `mode` overrides `VERIFY_LIVE` in both directions. An explicit
   `solution:` always wins over the picker; leave it blank to let the
   picker choose.
-- **Result-only pushes** (updates under `verification/results/**`)
-  are classified as `result-only`; the dispatcher skips the worker and
-  only `pages.yml` republishes the site. The picker never runs on
-  this path because `decide` already gave `run_worker=false`.
+- **Result-only pushes** (updates under `verification/results/**` on
+  `main`) are classified as `result-only`; the dispatcher skips the
+  worker and only `pages.yml` republishes the site. The picker never
+  runs on this path because `decide` already gave `run_worker=false`.
+  Record pushes to `automation/verify` do not reach the dispatcher at
+  all (it only runs on `main`), but they do trigger `pages.yml`.
 - **Retry backoff** target is `5 → 10 → 20 → 40 → 80` minutes, capped
   at 6 hours. Every retryable `InfrastructureFailure` is persisted with
   `next_retry_at = updated_at + retry_delay(retry_count)`
@@ -412,3 +451,8 @@ Set `VERIFY_ACTIVATED` to `false` (or delete the repo variable). No
 dispatcher or worker job will do OJ or App work until it is
 re-enabled. Environments and secrets remain in place, so re-activation
 is a single variable flip.
+
+To stop only the OJ submissions — keeping classification, the picker,
+and the state branch alive — set `VERIFY_LIVE` to `false` (or delete
+it) instead. Unattended ticks fall back to `dry-run` on the next tick;
+a `workflow_dispatch` with an explicit `mode: live` still submits.
