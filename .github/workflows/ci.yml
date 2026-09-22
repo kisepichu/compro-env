@@ -186,19 +186,27 @@ jobs:
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
-          # `target/library-analyzers` is excluded: it holds the extracted
-          # LLVM and Lean installs (multiple GB) and already has two
-          # dedicated caches below. Without the exclusion this entry would
-          # swallow them and blow the repository cache budget.
+          # `target/debug`, not `target`: the extracted LLVM and Lean
+          # installs live under `target/library-analyzers` and have their
+          # own caches below. A bare `target` entry swallows them — an
+          # earlier revision measured a 6.2GB upload against a 10GB
+          # repository budget. A `!target/library-analyzers` exclusion does
+          # not help: the glob already resolved `target` to a directory, so
+          # tar packs it whole. Every binary this job runs (`ce`,
+          # `library-adapter-prepare`, `library-adapter-build`) is a debug
+          # build, so nothing else under `target` is worth carrying.
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-            !target/library-analyzers
+            target/debug
           key: ${{ runner.os }}-cargo-content-${{ hashFiles('**/Cargo.lock') }}
+          # No `${{ runner.os }}-cargo-` fallback to the `rust` job's cache:
+          # a restore key only matches entries saved under the same `path`
+          # list, and that job caches all of `target`. Measured on run
+          # 35749767850 — "Cache not found for input keys: ...,
+          # Linux-cargo-" while `Linux-cargo-<same hash>` existed on main.
           restore-keys: |
             ${{ runner.os }}-cargo-content-
-            ${{ runner.os }}-cargo-
 
       - name: Cache prepared adapter dependencies
         # Same key as pages.yml / verify.yml / verify-worker.yml. Those run
