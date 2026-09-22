@@ -206,11 +206,12 @@ pub enum InternalSubcommand {
     /// Secretless: never contacts the OJ or GitHub App.
     #[command(hide = true)]
     PickCandidate {
-        /// Repository root containing `config.toml` and `solutions/`.
+        /// Repository root containing `config.toml`, `solutions/`, and the
+        /// `verification/results/**` records already merged into `main`.
         #[arg(long)]
         root: String,
-        /// Worktree / archive of `automation/verify` used as the overlay
-        /// source for `verification/results/**`.
+        /// Worktree / archive of `automation/verify` whose
+        /// `verification/results/**` overlays the merged records.
         #[arg(long)]
         state: String,
         /// RFC 3339 timestamp treated as "now" for retry-deadline eligibility.
