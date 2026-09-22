@@ -125,7 +125,7 @@ CI が **やらないこと**: `CI / Static site build` は fixture に対して
 これらが実データで検査されるのは merge 後の `pages.yml` (`ce site-data generate` →
 `npm run site:build --fixture=target/ce-site-data/site-data.json`) なので、
 frontmatter を壊すと **merge 後に pages build が失敗する**。
-事前に確認したい場合は 5 章「ローカルでサイトをプレビューする」の手順を踏む。
+事前に確認したい場合は 5 章「つまずきやすい点」のローカルプレビュー手順を踏む。
 
 ### 2.6 cpp / lean の注意
 
