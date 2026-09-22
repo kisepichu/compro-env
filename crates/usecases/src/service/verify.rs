@@ -642,7 +642,7 @@ pub fn prepare_solution(
 ///
 /// Reuses [`build_plan_context`] so the fingerprint stays byte-identical to
 /// what `verify-prepare` produces for the same tree. The `pick-candidate`
-/// dispatcher calls this for every `VerificationState::Completed` overlay
+/// dispatcher calls this for every resolved `VerificationState::Completed`
 /// record to detect input drift; other states never need a fingerprint.
 ///
 /// The target is read from `inputs.selection`, which must be

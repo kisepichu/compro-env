@@ -130,6 +130,29 @@ long-lived pull request from `automation/verify` → `main`:
   `InfrastructureFailure`) leave the PR draft — the outcome is either
   indeterminate or still in flight, so a human decides.
 
+**Record ownership and branch lifecycle.** `automation/verify` is a work
+area that holds in-flight records only; once the PR merges, `main` owns
+them (§15.1). The repository has **Settings → General → Automatically
+delete head branches** enabled, so merging the automation PR deletes
+`automation/verify`. The next `persist_starting` gets a 404 from `GET
+/git/refs/heads/automation/verify` and recreates the branch from its
+immutable `main@base_sha` plan anchor via `POST /git/refs`, so the CAS
+then reads exactly the record that merge landed on `main`.
+`ce internal pick-candidate` likewise reads the records merged into
+`main` as its base and overlays the branch's records on top (per
+solution the overlay wins, because it is the newer observation). A tick
+that runs while the branch does not exist still sees every merged
+record, so nothing already verified gets resubmitted.
+
+Why the deletion matters: the first automation PR to merge left
+`automation/verify` in place, so its merge base stayed pinned at the
+branch point while `main` gained the same `verification/results/**.json`
+through that merge. Every later push then looked like both sides editing
+one file independently — a permanent add/add conflict (PR #118) that
+re-running the worker could not clear. Deleting the branch on merge
+resets the merge base each cycle, which is exactly why the merged
+records have to be readable from `main`.
+
 A `verify` run whose `persist_terminal` job succeeded triggers
 `pages.yml` through `workflow_run`, so a new record is published
 without waiting for the automation PR to merge and without an operator
@@ -178,16 +201,11 @@ Complete every step below before flipping `VERIFY_ACTIVATED` to
    - Environment secret: `LIBRARYCHECKER_REFRESH_TOKEN` = the Firebase
      refresh token captured by running `ce login` against Library
      Checker manually.
-6. Bootstrap the `automation/verify` state branch from the current
-   `main` tip: `git push origin main:automation/verify`. Every
-   `persist_*` job's CAS assumes this ref already exists; without it
-   the first `persist_starting` fails opaquely with
-   `PATCH refs/heads/automation/verify → 404`.
-7. Under **Settings → Actions → Variables** (repository scope), add
+6. Under **Settings → Actions → Variables** (repository scope), add
    `VERIFY_ACTIVATED = true`. This is the master activation switch;
    setting it back to `false` disables the workflow without needing
    to delete the environments or rotate secrets.
-8. Decide whether unattended ticks may submit to the OJ. Leave
+7. Decide whether unattended ticks may submit to the OJ. Leave
    `VERIFY_LIVE` unset for a dry-run-only pipeline (`push` and
    `schedule` exercise `prepare` + `persist_starting` only); add
    `VERIFY_LIVE = true` under the same **Settings → Actions →
@@ -198,14 +216,24 @@ Complete every step below before flipping `VERIFY_ACTIVATED` to
    without touching `VERIFY_ACTIVATED`. Rate limiting does not depend
    on this switch — the picker submits at most one solution per tick
    and retries follow the backoff ladder below.
-9. Enable branch protection on `main` with these required status
+8. Enable branch protection on `main` with these required status
    checks: `CI / Cargo test + clippy + fmt`, `CI / Web build`, and any
    `verify-result-integrity` check that surfaces on the automation
    PRs.
-10. Enable **Settings → General → Allow auto-merge** so the bot's
-    terminal-verdict PRs can auto-merge once all required checks pass.
+9. Enable **Settings → General → Allow auto-merge** so the bot's
+   terminal-verdict PRs can auto-merge once all required checks pass.
+10. Enable **Settings → General → Automatically delete head branches**
+    (`gh api -X PATCH repos/<owner>/<repo> -f
+    delete_branch_on_merge=true`). Merging the automation PR must delete
+    `automation/verify`; leaving the branch alive pins its merge base and
+    makes every later result push conflict with `main` forever. See
+    "Record ownership and branch lifecycle" above.
 11. Record the completion date, the App ID, and the PEM fingerprint in
     your operator log. Never commit the PEM itself.
+
+The `automation/verify` state branch needs no manual bootstrap:
+`persist_starting` creates it from `main@base_sha` whenever the ref is
+absent, which is also how it comes back after each merge.
 
 Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
 
@@ -213,13 +241,15 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
 
 - **Every `main` push** runs the dispatcher. If classification returns
   `source-or-config`, the dispatcher also invokes the automatic picker
-  (`ce internal pick-candidate`) against the `automation/verify`
-  overlay and hands the chosen `SolutionId` to the worker as
-  `solution`. If the picker returns nothing eligible the dispatcher
-  flips `run_worker=false` and the worker is skipped for this push.
+  (`ce internal pick-candidate`) over the merged `main` records plus
+  the `automation/verify` overlay, and hands the chosen `SolutionId` to
+  the worker as `solution`. If the picker returns nothing eligible the
+  dispatcher flips `run_worker=false` and the worker is skipped for
+  this push.
 - **Every 5 minutes (schedule)** the dispatcher wakes, overlays the
-  current `automation/verify` state under `state/verification/`, and
-  runs the picker. The picker walks the current publication set,
+  current `automation/verify` state under `state/verification/` (absent
+  branch means an empty overlay, which is normal right after a merge),
+  and runs the picker. The picker walks the current publication set,
   applies the eligibility rules (see below), and prints exactly one
   `SolutionId` (or an empty line). Non-empty output feeds the worker;
   an empty line skips the tick, so retryable-failure and drifted
@@ -267,8 +297,10 @@ Do not enable `VERIFY_ACTIVATED` before every item is confirmed.
 `ce internal pick-candidate` runs in the same secretless dispatcher
 job as `classify-changes` and never touches App or OJ credentials.
 Given the current publication set (`config.toml` + published
-`solutions/**/ce.toml`) and the `automation/verify` overlay, a
-solution is eligible when its latest record is:
+`solutions/**/ce.toml`) and the resolved record set — the records
+merged into `main` as the base, with the `automation/verify` overlay
+winning per solution — a solution is eligible when its latest record
+is:
 
 - absent (no verification has ever run), OR
 - `InfrastructureFailure { retryable: true }` whose `next_retry_at`
@@ -305,15 +337,15 @@ the same target. That determinism plus the worker's per-`(solution,
 attempt)` CAS keeps `automation/verify` linearizable even when a
 schedule tick and a push tick fire back-to-back.
 
-### Overlay records for solutions that have been unpublished
+### Records for solutions that have been unpublished
 
 If a solution used to live at `librarychecker-…/foo/bar` and was
 later removed from the manifest, its `verification/results/<id>.json`
-stays on `automation/verify` until an operator removes it. The
-picker silently ignores such records — they simply do not appear in
-the publication set — so unpublished solutions cannot dominate the
-schedule. Clean them up in a routine sweep; leaving them in place is
-harmless.
+stays on `main` (and on `automation/verify` while an attempt is in
+flight) until an operator removes it. The picker silently ignores such
+records — they simply do not appear in the publication set — so
+unpublished solutions cannot dominate the schedule. Clean them up in a
+routine sweep; leaving them in place is harmless.
 
 ## Debugging failures
 

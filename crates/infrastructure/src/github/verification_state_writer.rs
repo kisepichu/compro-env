@@ -358,10 +358,14 @@ impl GitHubVerificationStateWriter {
     ///
     /// The call performs seven HTTP requests on the happy path:
     /// 0. `GET /repos/{owner}/{repo}/git/refs/heads/automation/verify` —
-    ///    resolve the state branch tip. Every subsequent read / write
-    ///    anchors on this SHA, NOT on `request.base_sha`. `base_sha` is a
-    ///    `main@base_sha` tamper-evidence anchor (spec §15.1) but does not
-    ///    point at a tree that carries `verification/results/**`.
+    ///    resolve the state branch tip. A 404 means the branch was deleted by
+    ///    the last bot-PR merge, so the writer recreates it from
+    ///    `request.base_sha` via `POST /git/refs` (spec §15.1) and anchors on
+    ///    that SHA. Every subsequent read / write anchors on the resolved
+    ///    SHA, NOT on `request.base_sha`. `base_sha` is a
+    ///    `main@base_sha` tamper-evidence anchor (spec §15.1) but on an
+    ///    existing branch does not point at a tree that carries
+    ///    `verification/results/**`.
     /// 1. `GET /repos/{owner}/{repo}/contents/{path}?ref={state_head}` — CAS.
     /// 2. `POST /repos/{owner}/{repo}/git/blobs` — write JSON blob.
     /// 3. `GET /repos/{owner}/{repo}/git/commits/{state_head}` — resolve the
@@ -417,7 +421,7 @@ impl GitHubVerificationStateWriter {
         // Step 6's retry path already does this on 422; doing it up front
         // keeps steps 1, 3, and 5 aligned with the same head so the initial
         // PATCH is a straight fast-forward on the happy path.
-        let state_head_sha = self.get_ref_sha(owner, repo)?;
+        let state_head_sha = self.resolve_or_create_state_head(owner, repo, &request.base_sha)?;
 
         // Step 1: CAS check via the contents API, anchored on the state
         // branch tip.
@@ -837,14 +841,85 @@ impl GitHubVerificationStateWriter {
         })
     }
 
-    /// Fetch the current tip SHA of `refs/heads/automation/verify`.
+    /// Resolve the state branch tip, creating `automation/verify` from
+    /// `base_sha` when the branch does not exist.
+    ///
+    /// Merging the bot PR deletes the head branch (repository setting
+    /// `delete_branch_on_merge`), which is what keeps the PR's merge base
+    /// moving with `main` instead of staying pinned at the branch point and
+    /// conflicting on every record file forever. The next attempt therefore
+    /// has to recreate the branch, which spec §15.1 explicitly allows
+    /// ("PR merge 後に branch を削除し、次回は同名 branch を main から
+    /// 作り直してよい").
+    ///
+    /// `base_sha` is the immutable `main@base_sha` plan anchor, so the
+    /// recreated branch mirrors the tree the plan was frozen against and the
+    /// CAS in step 1 reads whatever record the merge landed on `main`.
+    fn resolve_or_create_state_head(
+        &self,
+        owner: &str,
+        repo: &str,
+        base_sha: &str,
+    ) -> PersistResult<String> {
+        match self.get_ref_sha_opt(owner, repo)? {
+            Some(sha) => Ok(sha),
+            None => self.create_state_ref(owner, repo, base_sha),
+        }
+    }
+
+    /// `POST /git/refs` for `automation/verify`, returning the tip the branch
+    /// now has.
+    ///
+    /// Two attempts can both observe the missing branch; GitHub answers the
+    /// loser with 422 ("Reference already exists"), so adopt whatever tip the
+    /// winner created instead of failing the persist.
+    fn create_state_ref(&self, owner: &str, repo: &str, base_sha: &str) -> PersistResult<String> {
+        validate_base_sha(base_sha)?;
+        let url = format!("{}/repos/{owner}/{repo}/git/refs", self.base_url);
+        let body = json!({
+            "ref": format!("refs/heads/{REQUIRED_BRANCH}"),
+            "sha": base_sha,
+        });
+        let resp = self.authed(self.http.post(&url)).json(&body).send()?;
+        let status = resp.status();
+        if status.is_success() {
+            let _ = resp.text();
+            return Ok(base_sha.to_string());
+        }
+        if status == StatusCode::UNPROCESSABLE_ENTITY {
+            let _ = resp.text();
+            return self.get_ref_sha(owner, repo);
+        }
+        let _ = resp.text();
+        Err(PersistError::UpstreamStatus {
+            status: status.as_u16(),
+            op: "POST git/refs",
+        })
+    }
+
+    /// Fetch the current tip SHA of `refs/heads/automation/verify`. A missing
+    /// branch is an error here; only [`Self::resolve_or_create_state_head`]
+    /// tolerates it.
     fn get_ref_sha(&self, owner: &str, repo: &str) -> PersistResult<String> {
+        self.get_ref_sha_opt(owner, repo)?
+            .ok_or(PersistError::UpstreamStatus {
+                status: StatusCode::NOT_FOUND.as_u16(),
+                op: "GET refs/heads/automation/verify",
+            })
+    }
+
+    /// Same as [`Self::get_ref_sha`], but reports a missing branch as `None`.
+    fn get_ref_sha_opt(&self, owner: &str, repo: &str) -> PersistResult<Option<String>> {
         let url = format!(
             "{}/repos/{owner}/{repo}/git/refs/heads/{REQUIRED_BRANCH}",
             self.base_url
         );
         let resp = self.authed(self.http.get(&url)).send()?;
         let status = resp.status();
+        if status == StatusCode::NOT_FOUND {
+            let _ = resp.text();
+            return Ok(None);
+        }
         if !status.is_success() {
             let _ = resp.text();
             return Err(PersistError::UpstreamStatus {
@@ -861,7 +936,7 @@ impl GitHubVerificationStateWriter {
             object: RefObject,
         }
         let body: RefBody = resp.json().map_err(PersistError::from)?;
-        Ok(body.object.sha)
+        Ok(Some(body.object.sha))
     }
 
     /// Return a handle to the single long-lived bot PR from `head` into

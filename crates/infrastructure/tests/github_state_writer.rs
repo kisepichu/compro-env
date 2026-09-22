@@ -494,6 +494,129 @@ fn persist_fails_when_attempt_cas_mismatch() {
     );
 }
 
+#[test]
+fn persist_recreates_the_state_branch_from_base_sha_when_it_was_deleted() {
+    // Merging the bot PR deletes `automation/verify` (repository setting
+    // `delete_branch_on_merge`), which is what stops the PR's merge base from
+    // freezing at the branch point. The next attempt must recreate the branch
+    // from the `main@base_sha` plan anchor and anchor the whole call on it —
+    // including the CAS, which then reads the record the merge landed on
+    // `main`.
+    let merged = starting_record("attempt-merged", None);
+    let script = vec![
+        // 0. GET ref → branch absent.
+        Reply::empty(404),
+        // 1. POST git/refs → branch created at base_sha.
+        Reply::json(
+            201,
+            serde_json::json!({
+                "ref": "refs/heads/automation/verify",
+                "object": { "sha": base_sha() }
+            }),
+        ),
+        // 2. CAS GET → the record that came from main.
+        contents_response_for(&merged),
+        // 3. POST blob
+        Reply::json(201, serde_json::json!({ "sha": blob_sha() })),
+        // 4. GET commit → resolve base_sha's tree
+        Reply::json(
+            200,
+            serde_json::json!({
+                "sha": base_sha(),
+                "tree": { "sha": base_commit_tree_sha() }
+            }),
+        ),
+        // 5. POST tree
+        Reply::json(201, serde_json::json!({ "sha": tree_sha() })),
+        // 6. POST commit
+        Reply::json(201, serde_json::json!({ "sha": commit_sha() })),
+        // 7. PATCH ref
+        Reply::json(
+            200,
+            serde_json::json!({
+                "ref": "refs/heads/automation/verify",
+                "object": { "sha": commit_sha() }
+            }),
+        ),
+    ];
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let req = valid_request(starting_record("attempt-2", Some("attempt-merged")));
+    let out = w
+        .persist(&req)
+        .expect("persist succeeds on a recreated branch");
+    assert_eq!(out.commit_sha, commit_sha());
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 8, "expected 8 requests, got {recorded:#?}");
+
+    assert_eq!(recorded[1].method, "POST");
+    assert_eq!(recorded[1].url, "/repos/owner/repo/git/refs");
+    let create_body: serde_json::Value = serde_json::from_str(&recorded[1].body).unwrap();
+    assert_eq!(create_body["ref"], "refs/heads/automation/verify");
+    assert_eq!(create_body["sha"], base_sha());
+
+    // The created tip becomes the anchor for the CAS, the tree resolution and
+    // the commit parent.
+    assert!(
+        recorded[2].url.ends_with(&format!("?ref={}", base_sha())),
+        "CAS should target the created tip, got {}",
+        recorded[2].url,
+    );
+    assert_eq!(
+        recorded[4].url,
+        format!("/repos/owner/repo/git/commits/{}", base_sha())
+    );
+    let commit_body: serde_json::Value = serde_json::from_str(&recorded[6].body).unwrap();
+    assert_eq!(commit_body["parents"][0], base_sha());
+}
+
+#[test]
+fn persist_adopts_the_winner_tip_when_branch_creation_races() {
+    // Two attempts can both observe the deleted branch. GitHub answers the
+    // loser's POST with 422 "Reference already exists"; the loser must adopt
+    // the winner's tip instead of failing the persist.
+    let mut script = vec![
+        // 0. GET ref → branch absent.
+        Reply::empty(404),
+        // 1. POST git/refs → lost the race.
+        Reply::json(
+            422,
+            serde_json::json!({ "message": "Reference already exists" }),
+        ),
+        // 2. GET ref → the winner's tip.
+        get_ref_reply(state_head_sha()),
+    ];
+    // From here the call is the ordinary happy path anchored on state_head.
+    script.extend(happy_script().into_iter().skip(1));
+    let fx = Fixture::start(script);
+    let w = writer(fx.base_url());
+
+    let out = w
+        .persist(&valid_request(starting_record("attempt-1", None)))
+        .expect("persist succeeds after losing the creation race");
+    assert_eq!(out.commit_sha, commit_sha());
+
+    let recorded = fx.recorded();
+    assert_eq!(recorded.len(), 9, "expected 9 requests, got {recorded:#?}");
+    assert_eq!(recorded[2].method, "GET");
+    assert_eq!(
+        recorded[2].url,
+        "/repos/owner/repo/git/refs/heads/automation/verify"
+    );
+    // Everything after the re-fetch anchors on the winner's tip.
+    assert!(
+        recorded[3]
+            .url
+            .ends_with(&format!("?ref={}", state_head_sha())),
+        "CAS should target the winner tip, got {}",
+        recorded[3].url,
+    );
+    let commit_body: serde_json::Value = serde_json::from_str(&recorded[7].body).unwrap();
+    assert_eq!(commit_body["parents"][0], state_head_sha());
+}
+
 /// Helper: SHA of the branch head after a concurrent writer advanced it.
 fn new_head_sha() -> &'static str {
     "5555555555555555555555555555555555555555"

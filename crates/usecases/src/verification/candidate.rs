@@ -1,12 +1,12 @@
 //! Deterministic next-candidate selection for scheduled verify runs (spec §15).
 //!
 //! [`select_next_candidate`] is a pure function that consumes the current
-//! publication set, the persisted latest-record map from `automation/verify`,
-//! and the freshly-computed fingerprints of every currently-`Completed`
-//! solution. It returns at most one [`SolutionId`] per invocation so
-//! `verify.yml`'s dispatcher can hand it to the worker as the `solution`
-//! input. When no eligible solution exists the caller must translate the
-//! `None` into `run_worker=false`.
+//! publication set, the resolved latest-record map (`main` plus the in-flight
+//! `automation/verify` overlay), and the freshly-computed fingerprints of
+//! every currently-`Completed` solution. It returns at most one
+//! [`SolutionId`] per invocation so `verify.yml`'s dispatcher can hand it to
+//! the worker as the `solution` input. When no eligible solution exists the
+//! caller must translate the `None` into `run_worker=false`.
 //!
 //! Eligibility rules — see the caller contract on
 //! [`select_next_candidate`] for the details — are:
@@ -37,9 +37,10 @@ use domain::verification::{
 ///
 /// * `published` is the current publication set (post-discovery, post-verify
 ///   filter).
-/// * `records` maps every `SolutionId` for which the overlay branch
-///   (`automation/verify`) has a latest record. Solutions absent from the map
-///   are treated as "never verified" and are always eligible.
+/// * `records` maps every `SolutionId` that has a latest record, resolved by
+///   the caller from the records merged into `main` and the in-flight
+///   `automation/verify` overlay. Solutions absent from the map are treated
+///   as "never verified" and are always eligible.
 /// * `fingerprints` MUST contain an entry for every `SolutionId` whose latest
 ///   record in `records` is [`VerificationState::Completed`]. Solutions in any
 ///   other state — no record, in-flight, `InfrastructureFailure`,

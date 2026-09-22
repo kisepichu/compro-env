@@ -2,8 +2,9 @@
 //! (plan 063, spec §15).
 //!
 //! This module is the secretless bridge between the on-disk publication set
-//! (`config.toml` + `solutions/**/ce.toml`), the current
-//! `automation/verify` overlay (`verification/results/**`), and the pure
+//! (`config.toml` + `solutions/**/ce.toml`), the verification records
+//! (`verification/results/**`) merged into `main` plus the in-flight
+//! `automation/verify` overlay, and the pure
 //! [`usecases::verification::select_next_candidate`] rule that decides which
 //! solution the worker chain should verify next.
 //!
@@ -25,13 +26,14 @@ use domain::verification::{VerificationRecord, VerificationState, VerifyFingerpr
 use crate::library_project::config::ProjectLibraryConfigLoader;
 use crate::library_project::discovery::LibraryDiscovery;
 
-/// Load the current publication set, overlay the `automation/verify`
-/// verification records, recompute fingerprints for `Completed` records only,
-/// and return the picker's decision.
+/// Load the current publication set, resolve the verification records
+/// (`main` as the base, the `automation/verify` overlay on top), recompute
+/// fingerprints for `Completed` records only, and return the picker's
+/// decision.
 ///
 /// Returns `Ok(None)` when nothing is eligible; the dispatcher must translate
 /// that into `run_worker=false`. Errors bubble up for missing config,
-/// unreadable overlay JSON, and symlinked `state` targets.
+/// unreadable record JSON, and symlinked `state` targets.
 pub fn pick_candidate_with_io(
     root: &Path,
     state: &Path,
@@ -51,7 +53,16 @@ pub fn pick_candidate_with_io(
         .collect();
     let known_ids: BTreeSet<SolutionId> = published.iter().map(|s| s.id.clone()).collect();
 
-    let records = load_overlay_records(state, &known_ids)?;
+    // Records live in two trees. `--root` is the `main` checkout, which
+    // carries every record merged so far — spec §15.1 makes that the source
+    // of truth so the bot branch can be deleted on merge and recreated from
+    // `main`. `--state` is the in-flight `automation/verify` checkout, whose
+    // records are strictly newer for the solutions they mention. Reading
+    // only the overlay would make the first tick after a merge (or after any
+    // tick where the branch does not exist) see an empty record set and
+    // resubmit every published solution.
+    let mut records = load_records(root, RecordSource::Merged, &known_ids)?;
+    records.extend(load_records(state, RecordSource::Overlay, &known_ids)?);
 
     let fingerprints = compute_completed_fingerprints(root, &config, &records)?;
 
@@ -78,15 +89,37 @@ fn validate_state_dir(state: &Path) -> Result<()> {
     Ok(())
 }
 
-fn load_overlay_records(
-    state: &Path,
+/// Which checkout a `verification/results/**` tree was read from. Carried
+/// only for error messages, so an operator can tell a corrupt merged record
+/// from a corrupt in-flight one.
+#[derive(Clone, Copy)]
+enum RecordSource {
+    /// `--root`: records already merged into `main`.
+    Merged,
+    /// `--state`: the in-flight `automation/verify` checkout.
+    Overlay,
+}
+
+impl RecordSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Merged => "merged",
+            Self::Overlay => "overlay",
+        }
+    }
+}
+
+fn load_records(
+    dir: &Path,
+    source: RecordSource,
     known_ids: &BTreeSet<SolutionId>,
 ) -> Result<BTreeMap<SolutionId, VerificationRecord>> {
-    let results_dir = state.join("verification/results");
+    let label = source.label();
+    let results_dir = dir.join("verification/results");
     let mut records = BTreeMap::new();
     // `Path::exists` traverses symlinks, and `WalkDir::follow_links(false)`
     // only guards descendants — a symlinked `verification/results` at the
-    // overlay root would still let the walker enter whatever the symlink
+    // tree root would still let the walker enter whatever the symlink
     // targets. Reject that case explicitly; `validate_state_dir` already
     // covers the top-level `state/` directory.
     let meta = match std::fs::symlink_metadata(&results_dir) {
@@ -94,33 +127,33 @@ fn load_overlay_records(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(records),
         Err(err) => {
             return Err(anyhow!(
-                "failed to stat overlay results directory {}: {err}",
+                "failed to stat {label} results directory {}: {err}",
                 results_dir.display()
             ));
         }
     };
     if meta.file_type().is_symlink() {
         return Err(anyhow!(
-            "overlay results path {} is a symlink; symlinks are rejected (spec §6.1)",
+            "{label} results path {} is a symlink; symlinks are rejected (spec §6.1)",
             results_dir.display()
         ));
     }
     if !meta.is_dir() {
         return Err(anyhow!(
-            "overlay results path {} is not a directory",
+            "{label} results path {} is not a directory",
             results_dir.display()
         ));
     }
     for entry in walkdir::WalkDir::new(&results_dir).follow_links(false) {
         let entry = entry.with_context(|| {
             format!(
-                "failed to walk overlay results at {}",
+                "failed to walk {label} results at {}",
                 results_dir.display()
             )
         })?;
         let file_type = entry.file_type();
         if file_type.is_symlink() {
-            // Silently skip symlinks under the overlay; verify persist only
+            // Silently skip symlinks under either tree; verify persist only
             // ever writes plain regular files.
             continue;
         }
@@ -132,15 +165,15 @@ fn load_overlay_records(
             continue;
         }
         let bytes = std::fs::read(path)
-            .with_context(|| format!("failed to read overlay record {}", path.display()))?;
+            .with_context(|| format!("failed to read {label} record {}", path.display()))?;
         let record: VerificationRecord = serde_json::from_slice(&bytes).with_context(|| {
             format!(
-                "failed to deserialize overlay record {} as VerificationRecord",
+                "failed to deserialize {label} record {} as VerificationRecord",
                 path.display()
             )
         })?;
         if !known_ids.contains(&record.solution_id) {
-            // Overlay carries a record for a solution that has since been
+            // This tree carries a record for a solution that has since been
             // unpublished. The runbook documents that these files are left
             // in place until an operator cleans them up; the picker only
             // needs to ignore them for scheduling purposes.
