@@ -5,7 +5,7 @@
  * a repo devDependency yet. Install it plus a browser locally, build
  * the site with Pagefind, and unset SKIP_PLAYWRIGHT to run:
  *
- *   npm install --save-dev --save-exact @playwright/test@1.62.1
+ *   npm install --save-dev --save-exact @playwright/test@1.64.0
  *   npx playwright install --with-deps chromium
  *   SKIP_PLAYWRIGHT= npx playwright test --config web/playwright.config.ts
  *
