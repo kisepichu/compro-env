@@ -4,7 +4,7 @@
  * The tests in `web/e2e/` require both `@playwright/test` and a built
  * static site with Pagefind. Neither is installed by default: run
  *
- *   npm install --save-dev --save-exact @playwright/test@1.62.1
+ *   npm install --save-dev --save-exact @playwright/test@1.64.0
  *   npx playwright install --with-deps chromium
  *
  * and then execute the suite against a preview build:
